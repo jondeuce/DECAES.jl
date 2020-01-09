@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Command Line Interface · DECAES.jl</title><link href="https://fonts.googleapis.com/css?family=Lato|Roboto+Mono" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.11.1/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit">DECAES.jl</span></div><form class="docs-search" action="../search/"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li class="is-active"><a class="tocitem" href>Command Line Interface</a><ul class="internal"><li><a class="tocitem" href="#Using-the-CLI-1"><span>Using the CLI</span></a></li><li><a class="tocitem" href="#Multithreading-1"><span>Multithreading</span></a></li><li><a class="tocitem" href="#Input-files-1"><span>Input files</span></a></li><li><a class="tocitem" href="#Arguments-1"><span>Arguments</span></a></li><li><a class="tocitem" href="#Examples-1"><span>Examples</span></a></li><li><a class="tocitem" href="#Legacy-options-1"><span>Legacy options</span></a></li></ul></li><li><a class="tocitem" href="../ref/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Command Line Interface</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Command Line Interface</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/jondeuce/DECAES.jl/blob/master/docs/src/cli.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Command-Line-Interface-1"><a class="docs-heading-anchor" href="#Command-Line-Interface-1">Command Line Interface</a><a class="docs-heading-anchor-permalink" href="#Command-Line-Interface-1" title="Permalink"></a></h1><p>DECAES.jl provides a command line interface (CLI) for calling the main analysis functions <a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a> and <a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a>.</p><h2 id="Using-the-CLI-1"><a class="docs-heading-anchor" href="#Using-the-CLI-1">Using the CLI</a><a class="docs-heading-anchor-permalink" href="#Using-the-CLI-1" title="Permalink"></a></h2><p>Assuming you have <a href="../#installation-1">DECAES.jl installed</a>, there are two equivalent ways to use the CLI:</p><p><strong>1. Helper script:</strong> Create a simple Julia script which calls the entrypoint function <a href="../ref/#DECAES.main"><code>main</code></a> provided by this package. For example, save the following code in a Julia script called <code>decaes.jl</code>:</p><pre><code class="language-julia">using DECAES # load the package
+main() # call command line interface</code></pre><p>Run this script from the command line using <code>julia</code> as follows:</p><pre><code class="language-bash">$ julia decaes.jl image.nii &lt;COMMAND LINE ARGS&gt;</code></pre><p><strong>2. Julia <code>-e</code> flag:</strong> The contents of the above script can equivalently be passed directly to Julia using the <code>-e</code> flag (<code>-e</code> for &quot;evaluate&quot;):</p><pre><code class="language-bash">$ julia -e &#39;using DECAES; main()&#39; image.nii &lt;COMMAND LINE ARGS&gt;</code></pre><p>For the remainder of this section, we will make use <code>decaes.jl</code> from option 1.</p><h2 id="Multithreading-1"><a class="docs-heading-anchor" href="#Multithreading-1">Multithreading</a><a class="docs-heading-anchor-permalink" href="#Multithreading-1" title="Permalink"></a></h2><p>Multithreaded parallel processing can be enabled by setting the <code>JULIA_NUM_THREADS</code> environment variable as follows:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl image.nii &lt;COMMAND LINE ARGS&gt;</code></pre><p>This is highly recommended to speed up computation time, but is not strictly required.</p><div class="admonition is-info"><header class="admonition-header">Note</header><div class="admonition-body"><p>From the <a href="https://docs.julialang.org/en/v1/manual/parallel-computing/#Setup-1">Julia documentation</a>:</p><blockquote><p>[The keyword <code>export</code>] works on bourne shells on Linux and OSX. Note that if you&#39;re using a C shell on these platforms, you should use the keyword <code>set</code> instead of <code>export</code>. If you&#39;re on Windows, start up the command line in the location of <code>julia.exe</code> and use <code>set</code> instead of <code>export</code>.</p></blockquote></div></div><h2 id="Input-files-1"><a class="docs-heading-anchor" href="#Input-files-1">Input files</a><a class="docs-heading-anchor-permalink" href="#Input-files-1" title="Permalink"></a></h2><p>The input image (<code>image.nii</code> above) must be one of two file types:</p><ol><li><a href="https://nifti.nimh.nih.gov/">NIfTI file</a> with extension <code>.nii</code>, or <a href="https://www.gzip.org/">gzip</a> compressed NIfTI file with extension <code>.nii.gz</code>. See <a href="https://github.com/JuliaIO/NIfTI.jl">NIfTI.jl</a> for more information</li><li><a href="https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html">MATLAB file</a> with extension <code>.mat</code>. <strong>Note:</strong> <code>.mat</code> files saved in the oldest format <code>v4</code> are not supported, but all newer formats (<code>v6</code>, <code>v7</code>, and <code>v7.3</code>) are supported. Output <code>.mat</code> files are written in format <code>v7.3</code>. See <a href="https://github.com/JuliaIO/MAT.jl">MAT.jl</a> for more information</li></ol><p>The arguments <code>&lt;COMMAND LINE ARGS&gt;</code> are parsed by the entrypoint function <a href="../ref/#DECAES.main"><code>main</code></a>; available options are detailed in the <a href="#Arguments-1">Arguments</a> section.</p><h2 id="Arguments-1"><a class="docs-heading-anchor" href="#Arguments-1">Arguments</a><a class="docs-heading-anchor-permalink" href="#Arguments-1" title="Permalink"></a></h2><p>Available command line arguments are broken into three categories:</p><ol><li><strong>Positional arguments:</strong> these are the input files and/or folders. Input files/folders are typically placed at the beginning of <code>&lt;COMMAND LINE ARGS&gt;</code>.</li><li><strong>Optional arguments:</strong> settings governing the analysis pipeline. See below for details.</li><li><strong><a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a>/<a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a> arguments:</strong> settings for computing the <span>$T_2$</span>-distribution and subsequent <span>$T_2$</span>-part analysis. See below for the full parameter list; see <a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a> and <a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a> for parameter descriptions. Note: if no default is shown, the parameter is unused by default.</li></ol><pre><code class="language-none">usage: &lt;PROGRAM&gt; [-o OUTPUT] [--T2map] [--T2part] [--quiet] [--dry]
+                 [--legacy] [--Chi2Factor CHI2FACTOR]
+                 [--MinRefAngle MINREFANGLE] [--MPWin MPWIN MPWIN]
+                 [--nRefAngles NREFANGLES]
+                 [--nRefAnglesMin NREFANGLESMIN] [--nT2 NT2]
+                 [--RefConAngle REFCONANGLE] [--Reg REG]
+                 [--SaveNNLSBasis] [--SaveRegParam]
+                 [--SetFlipAngle SETFLIPANGLE] [--Sigmoid SIGMOID]
+                 [--Silent] [--SPWin SPWIN SPWIN] [--T1 T1]
+                 [--T2Range T2RANGE T2RANGE] [--TE TE]
+                 [--Threshold THRESHOLD] [--bet] [--betargs BETARGS]
+                 [--betpath BETPATH] input...
+
+positional arguments:
+  input                 one or more input filenames or directories. If
+                        directories are passed, they are scanned
+                        non-recursively for valid input files. Valid
+                        file extensions are limited to: .mat, .nii,
+                        and .nii.gz
+
+optional arguments:
+  -o, --output OUTPUT   output directory. If not specified, output
+                        file(s) will be stored in the same location as
+                        the corresponding input file(s). Outputs are
+                        stored with the same basename as inputs plus
+                        added suffixes; see --T2map and --T2part
+  --T2map               call T2mapSEcorr to compute T2 distributions
+                        from 4D multi spin-echo input images. T2
+                        distributions and T2 maps produced by
+                        T2mapSEcorr are saved as MAT files with
+                        extensions .t2dist.mat and .t2maps.mat
+  --T2part              call T2partSEcorr to analyze 4D T2
+                        distributions to produce parameter maps. If
+                        --T2map is also passed, input 4D arrays are
+                        interpreted as multi spin-echo images and T2
+                        distributions are first computed by
+                        T2mapSEcorr. If only --T2part is passed, input
+                        4D arrays are interpreted as T2 distributions
+                        and only T2partSEcorr is called. Output T2
+                        parts are saved as a MAT file with extension
+                        .t2parts.mat
+  --quiet               suppress printing to the terminal. Note: 1)
+                        errors are not silenced, and 2) this flag
+                        overrides the --Silent flag in T2mapSEcorr
+  --dry                 execute dry run of processing without saving
+                        any results
+  --legacy              use legacy settings and algorithms from the
+                        original MATLAB version. This ensures that the
+                        exact same T2-distributions and T2-parts will
+                        be produced as those from MATLAB (to machine
+                        precision). Note that execution time will be
+                        much slower.
+
+T2mapSEcorr/T2partSEcorr arguments:
+  --Chi2Factor CHI2FACTOR
+                        (default: 1.02)
+  --MinRefAngle MINREFANGLE
+                        (default: 50.0)
+  --MPWin MPWIN MPWIN    (default: [0.025, 0.2])
+  --nRefAngles NREFANGLES
+                        (default: 32)
+  --nRefAnglesMin NREFANGLESMIN
+                        (default: 5)
+  --nT2 NT2              (default: 40)
+  --RefConAngle REFCONANGLE
+                        (default: 180.0)
+  --Reg REG              (default: &quot;chi2&quot;)
+  --SaveNNLSBasis
+  --SaveRegParam
+  --SetFlipAngle SETFLIPANGLE
+
+  --Sigmoid SIGMOID
+  --Silent
+  --SPWin SPWIN SPWIN    (default: [0.01, 0.025])
+  --T1 T1                (default: 1.0)
+  --T2Range T2RANGE T2RANGE
+                        (default: [0.01, 2.0])
+  --TE TE                (default: 0.01)
+  --Threshold THRESHOLD
+                        (default: 200.0)
+
+BET arguments:
+  --bet                 use the BET brain extraction tool from the FSL
+                        library of analyis tools to automatically
+                        create a binary brain mask. Only voxels within
+                        the binary mask will be analyzed, greatly
+                        decreasing processing time.
+  --betargs BETARGS     BET optional arguments. Must be passed as a
+                        single string with arguments separated by
+                        spaces, e.g. &#39;-m -n&#39;. The flag &#39;-m&#39; creates
+                        the binary mask and will be added to the list
+                        of arguments if not provided. (default: &quot;-m -n
+                        -f 0.25 -R&quot;)
+  --betpath BETPATH     path to BET executable. (default: &quot;bet&quot;)</code></pre><div class="admonition is-info"><header class="admonition-header">Note</header><div class="admonition-body"><p>If desired, the <span>$T_2$</span>-distribution computation and the <span>$T_2$</span>-part analysis may be performed separately:</p><ul><li>When the <code>--T2map</code> flag is passed, or both <code>--T2map</code> and <code>--T2part</code> flags are passed, input arrays should be 4D with data as (row, column, slice, echo)</li><li>When only the <code>--T2part</code> flag is passed, input arrays should be 4D with data as (row, column, slice, <span>$T_2$</span> bin)</li></ul></div></div><h2 id="Examples-1"><a class="docs-heading-anchor" href="#Examples-1">Examples</a><a class="docs-heading-anchor-permalink" href="#Examples-1" title="Permalink"></a></h2><h3 id="Default-options-1"><a class="docs-heading-anchor" href="#Default-options-1">Default options</a><a class="docs-heading-anchor-permalink" href="#Default-options-1" title="Permalink"></a></h3><p>Suppose you have a multi spin-echo image file <code>image.nii</code> which you would like to perform <span>$T_2$</span> analysis on. We can call <a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a> and <a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a> on the file <code>image.nii</code>, with default options, using <code>decaes.jl</code> as follows:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl image.nii --T2map --T2part</code></pre><p>After a few seconds, the script should begin running with the following messages appearing as the script progresses (note that real images will take longer to process than this toy example):</p><pre><code class="language-none">[ Info: Starting with 1 threads
+
+[ Info: Loading input file: image.nii.gz ...
+[ Info: Done (0.73 seconds)
+
+[ Info: Running T2mapSEcorr on file: image.nii.gz ...
+┌ Info: T2-Distribution analysis settings:
+│     Chi2Factor    : 1.02
+│     MatrixSize    : (100, 100, 1)
+│     MinRefAngle   : 50.0
+│     nRefAngles    : 32
+│     nRefAnglesMin : 5
+│     nT2           : 40
+│     nTE           : 32
+│     RefConAngle   : 180.0
+│     Reg           : chi2
+│     SaveNNLSBasis : false
+│     SaveRegParam  : false
+│     SetFlipAngle  : nothing
+│     Silent        : false
+│     T1            : 1.0
+│     T2Range       : (0.01, 2.0)
+│     TE            : 0.01
+└     Threshold     : 200.0
+[ Info: [  0%] -- Elapsed Time: 00h:00m:04s -- Estimated Time Remaining: --h:--m:--s
+[ Info: [100%] -- Elapsed Time: 00h:00m:12s -- Estimated Time Remaining: 00h:00m:00s
+[ Info: Done (15.3 seconds)
+
+[ Info: Saving T2 distribution to file: image.t2dist.mat ...
+[ Info: Done (0.67 seconds)
+
+[ Info: Saving T2 parameter maps to file: image.t2maps.mat ...
+[ Info: Done (0.27 seconds)
+
+[ Info: Running T2partSEcorr ...
+┌ Info: T2-part analysis settings:
+│     MatrixSize : (100, 100, 1)
+│     MPWin      : (0.025, 0.2)
+│     nT2        : 40
+│     Sigmoid    : nothing
+│     Silent     : false
+│     SPWin      : (0.01, 0.025)
+└     T2Range    : (0.01, 2.0)
+[ Info: Done (0.63 seconds)
+
+[ Info: Saving T2 parts maps to file: image.t2parts.mat ...
+[ Info: Done (0.04 seconds)
+
+[ Info: Finished (17.72 seconds)</code></pre><p>The script will produce three files, each with the input filename (without suffix) used as a prefix:</p><ol><li><code>image.t2dist.mat</code>: MATLAB file containing the <span>$T_2$</span>-distributions</li><li><code>image.t2maps.mat</code>: MATLAB file containing <span>$T_2$</span>-distribution property maps and NNLS fit parameters; see <a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a></li><li><code>image.t2parts.mat</code>: MATLAB file containing <span>$T_2$</span>-part analysis results such as the MWF; see <a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a></li></ol><h3 id="multiinput-1"><a class="docs-heading-anchor" href="#multiinput-1">Multiple input files</a><a class="docs-heading-anchor-permalink" href="#multiinput-1" title="Permalink"></a></h3><p>Multiple input files (possibly of different file types) can be passed in the obvious way:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl image1.nii image2.mat image3.nii.gz --T2map --T2part</code></pre><p>Input folders can be automatically read, too:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl /path/to/input/folder/ --T2map --T2part</code></pre><p>Input files and folders can me mixed and matched:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl image1.nii /path/to/input/folder/ image2.mat --T2map --T2part</code></pre><div class="admonition is-info"><header class="admonition-header">Note</header><div class="admonition-body"><p>The rules for finding valid files within folders are deliberately simplistic:</p><ol><li>If a <code>.nii</code> or <code>.nii.gz</code> file is found, it is loaded and is assumed to be 4D. An error will occur of the image is not 4D.</li><li>If a <code>.mat</code> file is found, it is loaded and only the first 4D array which is found within the loaded file is used; multiple 4D arrays should not be stored in the same <code>.mat</code> file. An error will occur if no 4D image is found.</li></ol></div></div><h3 id="outfolder-1"><a class="docs-heading-anchor" href="#outfolder-1">Specify output folder</a><a class="docs-heading-anchor-permalink" href="#outfolder-1" title="Permalink"></a></h3><p>By default, output files are saved in the same location as the corresponding input file. If you&#39;d like to save them in a different folder, you can use the <code>-o</code> or <code>--output</code> flag:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl image.nii --T2map --T2part --ouput /path/to/output/folder/</code></pre><p>The requested output folder will be created if it does not already exist.</p><h3 id="nondefault-1"><a class="docs-heading-anchor" href="#nondefault-1">Non-default parameters</a><a class="docs-heading-anchor-permalink" href="#nondefault-1" title="Permalink"></a></h3><p>Parameter values can be set to non-default values at the command line. For example, we can set the echo time <code>TE</code> to 8ms, the number of <span>$T_2$</span> bins <code>nT2</code> to 60, and the <span>$T_2$</span> distribution range to [10ms, 1.5s] as follows:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl image.nii --T2map --T2part --TE 0.008 --nT2 60 --T2Range 0.010 1.5</code></pre><h3 id="Automatic-brain-masking-with-BET-1"><a class="docs-heading-anchor" href="#Automatic-brain-masking-with-BET-1">Automatic brain masking with BET</a><a class="docs-heading-anchor-permalink" href="#Automatic-brain-masking-with-BET-1" title="Permalink"></a></h3><p>The <a href="https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/BET/UserGuide">BET brain extraction tool</a> from the <a href="https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FSL">FSL library of analysis tools</a> can be used to automatically generate a brain mask prior to analysis. Only voxels within the generated brain mask will be processed, greatly reducing analysis time. To use BET, pass the <code>--bet</code> flag:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl image.nii --T2map --T2part --bet</code></pre><p>If <code>bet</code> is not on your system path, you can pass the path to the <code>bet</code> binary with the <code>--betpath</code> flag. Additionally, you can pass arguments to <code>bet</code> with the <code>--betargs</code> flag:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl image.nii --T2map --T2part --bet --betpath /path/to/bet --betargs &#39;-m -n&#39;</code></pre><p>Note that <code>bet</code> arguments must be passed as a single string to <code>--betargs</code>, separated by spaces, as shown above.</p><h3 id="Settings-files-1"><a class="docs-heading-anchor" href="#Settings-files-1">Settings files</a><a class="docs-heading-anchor-permalink" href="#Settings-files-1" title="Permalink"></a></h3><p>Parameter values can be read in from a settings file. For example, we can combine the examples from the <a href="#outfolder-1">Specify output folder</a> and <a href="#nondefault-1">Non-default parameters</a> sections by creating a <code>settings.txt</code> file with the following contents:</p><pre><code class="language-none">/path/to/image.nii
+--output
+/path/to/output/folder/
+--T2map
+--T2part
+--TE
+0.008
+--nT2
+60
+--T2Range
+0.010
+1.5</code></pre><p>If this file is located at <code>/path/to/settings.txt</code>, simply prefix the filepath with the <code>@</code> character to have the file contents read into the <a href="../ref/#DECAES.main"><code>main</code></a> function:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+$ julia decaes.jl @/path/to/settings.txt</code></pre><div class="admonition is-info"><header class="admonition-header">Note</header><div class="admonition-body"><ul><li>The use of settings files is highly recommended for both reproducibility and for self-documentation. The input settings file will be automatically copied into the output folder for each processed image, with the image filename prepended. In this case, for example, the copied settings file would be called <code>image.settings.txt</code></li><li>Only one flag or value is allowed per line within a settings file. Flags which require multiple inputs (e.g. <code>--T2Range</code> above) must use one line for each input</li><li>The extension of the settings file is ignored; <code>.txt</code> is arbitrary in this example</li><li>Though not strictly necessary, using full input- and output paths is recommended. This way, one doesn&#39;t rely on relative paths and can e.g. call <code>julia /path/to/decaes.jl @/path/to/settings.txt</code> from any directory</li></ul></div></div><h2 id="Legacy-options-1"><a class="docs-heading-anchor" href="#Legacy-options-1">Legacy options</a><a class="docs-heading-anchor-permalink" href="#Legacy-options-1" title="Permalink"></a></h2><p>During the MATLAB port to Julia, some algorithms were replaced with mathematically identical but computationally faster algorithms which may cause small differences in output parameter maps, and some default options were changed.</p><p>For example, the flip angle optimization procedure requires finding the root of a cubic spline. In MATLAB this was performed by evaluating the spline on a very fine mesh and choosing the value nearest zero. During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by a numerical rootfinding method from <a href="https://julianlsolvers.github.io/Optim.jl/stable/#user/minimization/#minimizing-a-univariate-function-on-a-bounded-interval">Optim.jl</a>.</p><p>The differences due to algorithmic changes like the one above are quite small. For example, most tests will pass when using a relative tolerance of <span>$10^{-3}$</span>, and almost all tests pass with a relative tolerance of <span>$10^{-2}$</span>. That is to say that nearly all outputs are identical to 3 or more significant digits, which includes T2-distributions, MWF maps, etc.</p><p>The <code>--legacy</code> flag is available if <em>exact</em> reproducibility is required compared to the MATLAB version. This will ensure that all outputs match to nearly machine precision (a relative tolerance of <span>$10^{-10}$</span> is used during testing). Note however that the <code>--legacy</code> flag may cause a significant slowdown in processing time due to less efficient internal algorithms being used, and is therefore not recommended unless absolutely necessary. Differences due to changes in default parameters can always be overridden by passing in the desired value explicitly (e.g. <code>--SPWin 0.014 0.040</code>) without the need for the <code>--legacy</code> flag.</p><p><strong>Default options with the <code>--legacy</code> flag</strong></p><pre><code class="language-none">usage: &lt;PROGRAM&gt; [-o OUTPUT] [--T2map] [--T2part] [--quiet] [--dry]
+                 [--legacy] [--Chi2Factor CHI2FACTOR]
+                 [--MinRefAngle MINREFANGLE] [--MPWin MPWIN MPWIN]
+                 [--nRefAngles NREFANGLES]
+                 [--nRefAnglesMin NREFANGLESMIN] [--nT2 NT2]
+                 [--RefConAngle REFCONANGLE] [--Reg REG]
+                 [--SaveNNLSBasis] [--SaveRegParam]
+                 [--SetFlipAngle SETFLIPANGLE] [--Sigmoid SIGMOID]
+                 [--Silent] [--SPWin SPWIN SPWIN] [--T1 T1]
+                 [--T2Range T2RANGE T2RANGE] [--TE TE]
+                 [--Threshold THRESHOLD] [--bet] [--betargs BETARGS]
+                 [--betpath BETPATH] input...
+
+positional arguments:
+  input                 one or more input filenames or directories. If
+                        directories are passed, they are scanned
+                        non-recursively for valid input files. Valid
+                        file extensions are limited to: .mat, .nii,
+                        and .nii.gz
+
+optional arguments:
+  -o, --output OUTPUT   output directory. If not specified, output
+                        file(s) will be stored in the same location as
+                        the corresponding input file(s). Outputs are
+                        stored with the same basename as inputs plus
+                        added suffixes; see --T2map and --T2part
+  --T2map               call T2mapSEcorr to compute T2 distributions
+                        from 4D multi spin-echo input images. T2
+                        distributions and T2 maps produced by
+                        T2mapSEcorr are saved as MAT files with
+                        extensions .t2dist.mat and .t2maps.mat
+  --T2part              call T2partSEcorr to analyze 4D T2
+                        distributions to produce parameter maps. If
+                        --T2map is also passed, input 4D arrays are
+                        interpreted as multi spin-echo images and T2
+                        distributions are first computed by
+                        T2mapSEcorr. If only --T2part is passed, input
+                        4D arrays are interpreted as T2 distributions
+                        and only T2partSEcorr is called. Output T2
+                        parts are saved as a MAT file with extension
+                        .t2parts.mat
+  --quiet               suppress printing to the terminal. Note: 1)
+                        errors are not silenced, and 2) this flag
+                        overrides the --Silent flag in T2mapSEcorr
+  --dry                 execute dry run of processing without saving
+                        any results
+  --legacy              use legacy settings and algorithms from the
+                        original MATLAB version. This ensures that the
+                        exact same T2-distributions and T2-parts will
+                        be produced as those from MATLAB (to machine
+                        precision). Note that execution time will be
+                        much slower.
+
+T2mapSEcorr/T2partSEcorr arguments:
+  --Chi2Factor CHI2FACTOR
+                        (default: 1.02)
+  --MinRefAngle MINREFANGLE
+                        (default: 50.0)
+  --MPWin MPWIN MPWIN    (default: [0.04, 0.2])
+  --nRefAngles NREFANGLES
+                        (default: 8)
+  --nRefAnglesMin NREFANGLESMIN
+                        (default: 8)
+  --nT2 NT2              (default: 40)
+  --RefConAngle REFCONANGLE
+                        (default: 180.0)
+  --Reg REG              (default: &quot;chi2&quot;)
+  --SaveNNLSBasis
+  --SaveRegParam
+  --SetFlipAngle SETFLIPANGLE
+
+  --Sigmoid SIGMOID
+  --Silent
+  --SPWin SPWIN SPWIN    (default: [0.014, 0.04])
+  --T1 T1                (default: 1.0)
+  --T2Range T2RANGE T2RANGE
+                        (default: [0.015, 2.0])
+  --TE TE                (default: 0.01)
+  --Threshold THRESHOLD
+                        (default: 200.0)
+
+BET arguments:
+  --bet                 use the BET brain extraction tool from the FSL
+                        library of analyis tools to automatically
+                        create a binary brain mask. Only voxels within
+                        the binary mask will be analyzed, greatly
+                        decreasing processing time.
+  --betargs BETARGS     BET optional arguments. Must be passed as a
+                        single string with arguments separated by
+                        spaces, e.g. &#39;-m -n&#39;. The flag &#39;-m&#39; creates
+                        the binary mask and will be added to the list
+                        of arguments if not provided. (default: &quot;-m -n
+                        -f 0.25 -R&quot;)
+  --betpath BETPATH     path to BET executable. (default: &quot;bet&quot;)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../ref/">API Reference »</a></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> on <span class="colophon-date" title="Thursday 9 January 2020 06:48">Thursday 9 January 2020</span>. Using Julia version 1.3.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
