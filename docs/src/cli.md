@@ -25,7 +25,7 @@ $ julia decaes.jl image.nii <COMMAND LINE ARGS>
 $ julia -e 'using DECAES; main()' image.nii <COMMAND LINE ARGS>
 ```
 
-For the remainder of this section, we will make use `decaes.jl` from option 1.
+For the remainder of this section, we will make use of the `decaes.jl` script from option 1.
 
 ## Multithreading
 
@@ -44,11 +44,13 @@ This is highly recommended to speed up computation time, but is not strictly req
     > Note that if you're using a C shell on these platforms, you should use the keyword `set` instead of `export`.
     > If you're on Windows, start up the command line in the location of `julia.exe` and use `set` instead of `export`.
 
-## Input files
+## File types
 
 The input image (`image.nii` above) must be one of two file types:
 1. [NIfTI file](https://nifti.nimh.nih.gov/) with extension `.nii`, or [gzip](https://www.gzip.org/) compressed NIfTI file with extension `.nii.gz`. See [NIfTI.jl](https://github.com/JuliaIO/NIfTI.jl) for more information
-2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`. **Note:** `.mat` files saved in the oldest format `v4` are not supported, but all newer formats (`v6`, `v7`, and `v7.3`) are supported. Output `.mat` files are written in format `v7.3`. See [MAT.jl](https://github.com/JuliaIO/MAT.jl) for more information
+2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`. **Note:** `.mat` files saved in the oldest format `v4` are not supported, but all newer formats (`v6`, `v7`, and `v7.3`) are supported. See [MAT.jl](https://github.com/JuliaIO/MAT.jl) for more information
+
+Output files are saved as `.mat` files, written in format `v7.3`. 
 
 The arguments `<COMMAND LINE ARGS>` are parsed by the entrypoint function [`main`](@ref); available options are detailed in the [Arguments](@ref) section.
 
@@ -58,7 +60,7 @@ Available command line arguments are broken into three categories:
 
 1. **Positional arguments:** these are the input files and/or folders. Input files/folders are typically placed at the beginning of `<COMMAND LINE ARGS>`.
 2. **Optional arguments:** settings governing the analysis pipeline. See below for details.
-3. **[`T2mapSEcorr`](@ref)/[`T2partSEcorr`](@ref) arguments:** settings for computing the $T_2$-distribution and subsequent $T_2$-part analysis. See below for the full parameter list; see [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) for parameter descriptions. Note: if no default is shown, the parameter is unused by default.
+3. **[`T2mapSEcorr`](@ref)/[`T2partSEcorr`](@ref) arguments:** settings for computing the $T_2$-distribution and subsequent $T_2$-parts analysis. See below for the full parameter list; see [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) for parameter descriptions. Note: if no default is shown, the parameter is unused by default.
 
 ```@example
 using DECAES # hide
@@ -66,7 +68,7 @@ DECAES.ArgParse.show_help(DECAES.ARGPARSE_SETTINGS; exit_when_done = false) # hi
 ```
 
 !!! note
-    If desired, the $T_2$-distribution computation and the $T_2$-part analysis may be performed separately:
+    If desired, the $T_2$-distribution computation and the $T_2$-parts analysis may be performed separately:
     * When the `--T2map` flag is passed, or both `--T2map` and `--T2part` flags are passed, input arrays should be 4D with data as (row, column, slice, echo)
     * When only the `--T2part` flag is passed, input arrays should be 4D with data as (row, column, slice, $T_2$ bin)
 
@@ -105,11 +107,12 @@ After a few seconds, the script should begin running with the following messages
 callmain(imfile, "--T2map", "--T2part") # hide
 ```
 
-The script will produce three files, each with the input filename (without suffix) used as a prefix:
+The script will produce four files, each with the input filename (without suffix) used as a prefix:
 
 1. `image.t2dist.mat`: MATLAB file containing the $T_2$-distributions
 2. `image.t2maps.mat`: MATLAB file containing $T_2$-distribution property maps and NNLS fit parameters; see [`T2mapSEcorr`](@ref)
-3. `image.t2parts.mat`: MATLAB file containing $T_2$-part analysis results such as the MWF; see [`T2partSEcorr`](@ref)
+3. `image.t2parts.mat`: MATLAB file containing $T_2$-parts analysis results such as the MWF; see [`T2partSEcorr`](@ref)
+4. `image.log`: Log file containing the console output
 
 ### [Multiple input files](@id multiinput)
 
@@ -218,11 +221,11 @@ println("\$ julia decaes.jl @/path/to/settings.txt") # hide
 
 ## Legacy options
 
-During the MATLAB port to Julia, some algorithms were replaced with mathematically identical but computationally faster algorithms which may cause small differences in output parameter maps, and some default options were changed.
+During the MATLAB port to Julia, some algorithms were replaced with mathematically identical but computationally more efficient algorithms which may cause small differences in output parameter maps, and some default options were changed.
 
 For example, the flip angle optimization procedure requires finding the root of a cubic spline.
 In MATLAB this was performed by evaluating the spline on a very fine mesh and choosing the value nearest zero.
-During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by a numerical rootfinding method from [Optim.jl](https://julianlsolvers.github.io/Optim.jl/stable/#user/minimization/#minimizing-a-univariate-function-on-a-bounded-interval).
+During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by an efficient rootfinding method.
 
 The differences due to algorithmic changes like the one above are quite small.
 For example, most tests will pass when using a relative tolerance of ``10^{-3}``, and almost all tests pass with a relative tolerance of ``10^{-2}``.

@@ -1,11 +1,11 @@
-# DECAES.jl
+# DEcomposition and Component Analysis of Exponential Signals (DECAES)
 
 ## Introduction
 
-Myelin Water Imaging (DECAES) is a magnetic resonance imaging (MRI) technique used to visualize the myelin water contained in the brain's white matter.
+Myelin Water Imaging (MWI) is a magnetic resonance imaging (MRI) technique used to visualize the myelin water contained in the brain's white matter.
 This package implements a method of computing the myelin water fraction (MWF) - the fraction of water trapped in myelin lipid bilayers relative to the total water in the region - which was pioneered at the University of British Columbia (UBC) by Alex MacKay and Ken Whittal.
 
-DECAES works by analyzing multi spin-echo type MRI scans.
+DECAES.jl works by analyzing multi spin-echo MRI scans.
 The multi-echo signal is decomposed into exponential components using a regularized inverse Laplace transform-based technique.
 This method involves solving the regularized nonnegative least squares (NNLS) problem
 
@@ -13,8 +13,8 @@ This method involves solving the regularized nonnegative least squares (NNLS) pr
 X = \mathrm{argmin}_{x \ge 0} ||Cx - d||_2^2 + \mu||x||_2^2
 ```
 
-where $d$ is the signal decay data, $C$ is a matrix of exponential decay bases, and $\mu$ is a regularization parameter.
-$C$ is constructed using the extended phase graph algorithm with stimulated echo correction and consists of bases with varying $T_2$ times.
+where $d$ is the signal magnitude data, $C$ is a matrix of exponential decay bases, and $\mu$ is a regularization parameter.
+$C$ is constructed using the extended phase graph algorithm with stimulated echo correction, where each column consists of exponential bases with varying $T_2$ times.
 The output $X$ is the spectrum of (nonnegative) exponential decay times, interpreted physically as the distribution of $T_2$-times arising from the multi-echo signal.
 Through analysing the resulting $T_2$-distribution, one can separate the contribution due to the myelin water from the intra- and extra-cellular water and compute the MWF.
 

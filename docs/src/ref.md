@@ -7,7 +7,7 @@ T2mapOptions
 T2mapSEcorr
 ```
 
-## [$T_2$-Part and the Myelin Water Fraction](@id t2part)
+## [$T_2$-Parts and the Myelin Water Fraction](@id t2part)
 
 ```@docs
 T2partOptions

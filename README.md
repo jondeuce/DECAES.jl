@@ -8,13 +8,12 @@
 [![Coveralls](https://coveralls.io/repos/github/jondeuce/DECAES.jl/badge.svg?branch=master)](https://coveralls.io/github/jondeuce/DECAES.jl?branch=master)
 [![Build Status](https://api.cirrus-ci.com/github/jondeuce/DECAES.jl.svg)](https://cirrus-ci.com/github/jondeuce/DECAES.jl)
 
-DECAES.jl is a *fast* Julia implementation of the nonnegative least squares (NNLS) [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/).
-This toolbox provides methods for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) of multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
+DECAES.jl is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) of multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
 Post-processing of these T2-distributions allows for the computation of measures such as the [myelin water fraction (MWF)](https://doi.org/10.1002/mrm.1910310614) or the [luminal water fraction (LWF)](https://doi.org/10.1148/radiol.2017161687).
 
 DECAES.jl is written in the open-source [Julia programming language](https://julialang.org/).
 Julia and command line interfaces are available through this package.
-The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the script `decaes.m`.
+The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the MATLAB function `decaes.m`.
 
 ## Installation
 
@@ -27,14 +26,13 @@ which will track the `master` branch of the package.
 ## Command Line Interface
 
 This toolbox provides a command line interface (CLI) for processing from the terminal.
-The CLI takes as input `.nii`, `.nii.gz`, or `.mat` files - or folders containing such files - and performs one or both of T2-distribution computation and T2-part analysis, the latter of which performs post-processing of the T2-distribution to calculate parameters such as the MWF.
+The CLI takes as input `.nii`, `.nii.gz`, or `.mat` files - or folders containing such files - and performs one or both of T2-distribution computation and T2-parts analysis, the latter of which performs post-processing of the T2-distribution to calculate parameters such as the MWF or LWF.
 
 There are two equivalent ways use the CLI, assuming DECAES.jl is already installed:
 
 **1. Helper script:** Create a script called e.g. `decaes.jl` with the following contents:
 
 ```julia
-# decaes.jl
 using DECAES # load the package
 main() # call CLI entrypoint function
 ```
@@ -64,7 +62,7 @@ Find package documentation at the above link, which includes:
 
 ## Examples repository
 
-See the [examples repository](https://github.com/jondeuce/mwiexamples) for a walk-through guide for using the CLI, including example DECAES data, as well as a script for calling the CLI from MATLAB.
+See the [examples repository](https://github.com/jondeuce/mwiexamples) for a walk-through guide for using the CLI, including example MWI data, as well as a script for calling the CLI from MATLAB.
 
 ## Benchmarks
 
@@ -122,10 +120,10 @@ The Julia implementation uses DECAES.jl.
 
 </center>
 
-**Note:** images sizes which include "+ mask" used brain masks generated with the [BET tool](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/BET/UserGuide) (automatically using the `--bet` flag for DECAES.jl, manually for MATLAB) and only processed voxels within the brain mask.
+**Note:** images sizes which include "+ mask" used brain masks generated with the [BET tool](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/BET/UserGuide) (done automatically using the `--bet` flag for DECAES.jl, and manually for MATLAB) and only processed voxels within the brain mask.
 
 The T2-Distribution column shows the time taken to complete the most costly step of the analysis pipeline, calling the function [`T2mapSEcorr`](https://jondeuce.github.io/DECAES.jl/dev/ref.html#DECAES.T2mapSEcorr).
-This function performs the voxelwise nonnegative least-squares (NNLS) analysis.
+This function performs the voxelwise nonnegative least-squares (NNLS) analysis to compute T2-distributions.
 The Total Time column includes image loading and saving time, Julia startup and compilation time, BET brain mask generation, and the post-processing step of calling the [`T2partSEcorr`](https://jondeuce.github.io/DECAES.jl/dev/ref.html#DECAES.T2partSEcorr).
 Note that MATLAB startup time is not included in the Total Time.
 
