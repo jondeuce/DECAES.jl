@@ -26,7 +26,7 @@ which will track the `master` branch of the package.
 ## Command Line Interface
 
 This toolbox provides a command line interface (CLI) for processing from the terminal.
-The CLI takes as input `.nii`, `.nii.gz`, or `.mat` files - or folders containing such files - and performs one or both of T2-distribution computation and T2-parts analysis, the latter of which performs post-processing of the T2-distribution to calculate parameters such as the MWF or LWF.
+The CLI takes as input `.nii`, `.nii.gz`, or `.mat` files and performs one or both of T2-distribution computation and T2-parts analysis, the latter of which performs post-processing of the T2-distribution to calculate parameters such as the MWF or LWF.
 
 There are two equivalent ways use the CLI, assuming DECAES.jl is already installed:
 
@@ -64,7 +64,7 @@ Find package documentation at the above link, which includes:
 
 See the [examples repository](https://github.com/jondeuce/mwiexamples) for a walk-through guide for using the CLI, including example MWI data, as well as a script for calling the CLI from MATLAB.
 
-## Benchmarks
+# Benchmarks
 
 Comparison of processing time on various data sets.
 The MATLAB implementation uses the scripts contained within the `MWI_NNLS_toolbox_0319` folder in the [ubcmwf github repository](https://github.com/ubcmri/ubcmwf).

@@ -1,6 +1,6 @@
 # Command Line Interface
 
-DECAES.jl provides a command line interface (CLI) for calling the main analysis functions [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref).
+DECAES.jl provides a command line interface (CLI) for calling the main analysis functions: [`T2mapSEcorr`](@ref) for computing $T_2$-distributions, and [`T2partSEcorr`](@ref) for computing $T_2$-parts analysis, such as computing the myelin water fraction.
 
 ## Using the CLI
 
@@ -24,6 +24,9 @@ $ julia decaes.jl image.nii <COMMAND LINE ARGS>
 ```bash
 $ julia -e 'using DECAES; main()' image.nii <COMMAND LINE ARGS>
 ```
+
+Either way of calling the CLI forwards the arguments `<COMMAND LINE ARGS>` to the entrypoint function [`main`](@ref).
+Available arguments are detailed in the [Arguments](@ref) section.
 
 For the remainder of this section, we will make use of the `decaes.jl` script from option 1.
 
@@ -50,15 +53,13 @@ The input image (`image.nii` above) must be one of two file types:
 1. [NIfTI file](https://nifti.nimh.nih.gov/) with extension `.nii`, or [gzip](https://www.gzip.org/) compressed NIfTI file with extension `.nii.gz`. See [NIfTI.jl](https://github.com/JuliaIO/NIfTI.jl) for more information
 2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`. **Note:** `.mat` files saved in the oldest format `v4` are not supported, but all newer formats (`v6`, `v7`, and `v7.3`) are supported. See [MAT.jl](https://github.com/JuliaIO/MAT.jl) for more information
 
-Output files are saved as `.mat` files, written in format `v7.3`. 
-
-The arguments `<COMMAND LINE ARGS>` are parsed by the entrypoint function [`main`](@ref); available options are detailed in the [Arguments](@ref) section.
+All output files are saved as `.mat` files in format `v7.3`. 
 
 ## Arguments
 
 Available command line arguments are broken into three categories:
 
-1. **Positional arguments:** these are the input files and/or folders. Input files/folders are typically placed at the beginning of `<COMMAND LINE ARGS>`.
+1. **Positional arguments:** these are the input files. Input files are typically placed at the beginning of `<COMMAND LINE ARGS>`.
 2. **Optional arguments:** settings governing the analysis pipeline. See below for details.
 3. **[`T2mapSEcorr`](@ref)/[`T2partSEcorr`](@ref) arguments:** settings for computing the $T_2$-distribution and subsequent $T_2$-parts analysis. See below for the full parameter list; see [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) for parameter descriptions. Note: if no default is shown, the parameter is unused by default.
 
@@ -94,7 +95,7 @@ end
 ```
 
 Suppose you have a multi spin-echo image file `image.nii` which you would like to perform $T_2$ analysis on.
-We can call [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) on the file `image.nii`, with default options, using `decaes.jl` as follows:
+We can call [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) on the file `image.nii` with default options using `decaes.jl` as follows:
 
 ```@example
 println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
@@ -123,25 +124,9 @@ println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
 println("\$ julia decaes.jl image1.nii image2.mat image3.nii.gz --T2map --T2part") # hide
 ```
 
-Input folders can be automatically read, too:
-
-```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl /path/to/input/folder/ --T2map --T2part") # hide
-```
-
-Input files and folders can me mixed and matched:
-
-```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image1.nii /path/to/input/folder/ image2.mat --T2map --T2part") # hide
-```
-
 !!! note
-    The rules for finding valid files within folders are deliberately simplistic:
-
-    1. If a `.nii` or `.nii.gz` file is found, it is loaded and is assumed to be 4D. An error will occur of the image is not 4D.
-    2. If a `.mat` file is found, it is loaded and only the first 4D array which is found within the loaded file is used; multiple 4D arrays should not be stored in the same `.mat` file. An error will occur if no 4D image is found.
+    `.nii` and `.nii.gz` input image files are assumed to be 4D when loaded; an error will occur if they are not 4D.
+    For `.mat` files, the first 4D array which is found within the `.mat` file is used (multiple 4D arrays should not be stored in the same `.mat` file); an error will occur if no 4D image is found.
 
 ### [Specify output folder](@id outfolder)
 
@@ -150,7 +135,7 @@ If you'd like to save them in a different folder, you can use the `-o` or `--out
 
 ```@example
 println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image.nii --T2map --T2part --ouput /path/to/output/folder/") # hide
+println("\$ julia decaes.jl image.nii --T2map --T2part --output /path/to/output/folder/") # hide
 ```
 
 The requested output folder will be created if it does not already exist.
@@ -164,6 +149,35 @@ For example, we can set the echo time `TE` to 8ms, the number of $T_2$ bins `nT2
 println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
 println("\$ julia decaes.jl image.nii --T2map --T2part --TE 0.008 --nT2 60 --T2Range 0.010 1.5") # hide
 ```
+
+### [Passing image masks](@id outfolder)
+
+Image masks can be passed into DECAES.jl using the `--mask` flag:
+
+```@example
+println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
+println("\$ julia decaes.jl image.nii --T2map --T2part --mask mask.nii") # hide
+```
+
+The mask is loaded and applied to the input image via elementwise multiplication over the spatial dimensions, e.g. the mask is applied for each echo of a 4D multi-echo input image.
+
+If multiple images are passed along with a single mask, the mask is used for all images:
+
+```@example
+println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
+println("\$ julia decaes.jl image1.nii image2.mat --T2map --T2part --mask mask.nii") # hide
+```
+
+Alternatively, a mask can be passed for each input image (note that masks, too, can be any valid file type):
+
+```@example
+println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
+println("\$ julia decaes.jl image1.nii image2.mat --T2map --T2part --mask mask1.mat mask2.nii.gz") # hide
+```
+
+!!! note
+    If input images have been manually masked such that they are e.g. zero outside of regions of interest, a mask need not be passed.
+    The `--Threshold` parameter of [T2mapSEcorr](@ref) controls a first echo intensity cutoff threshold (default value 200.0), below which voxels are automatically skipped during processing.
 
 ### Automatic brain masking with BET
 
@@ -185,6 +199,9 @@ println("\$ julia decaes.jl image.nii --T2map --T2part --bet --betpath /path/to/
 ```
 
 Note that `bet` arguments must be passed as a single string to `--betargs`, separated by spaces, as shown above.
+
+!!! note
+    If a mask file is passed using the `--mask` flag, the `--bet` flag will be ignored and the mask file will be used.
 
 ### Settings files
 
@@ -225,11 +242,11 @@ During the MATLAB port to Julia, some algorithms were replaced with mathematical
 
 For example, the flip angle optimization procedure requires finding the root of a cubic spline.
 In MATLAB this was performed by evaluating the spline on a very fine mesh and choosing the value nearest zero.
-During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by an efficient rootfinding method.
+During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by an efficient spline rootfinding method.
 
 The differences due to algorithmic changes like the one above are quite small.
 For example, most tests will pass when using a relative tolerance of ``10^{-3}``, and almost all tests pass with a relative tolerance of ``10^{-2}``.
-That is to say that nearly all outputs are identical to 3 or more significant digits, which includes T2-distributions, MWF maps, etc.
+That is to say that nearly all outputs are identical to 3 or more significant digits, which includes $T_2$-distributions, MWF maps, etc.
 
 The `--legacy` flag is available if *exact* reproducibility is required compared to the MATLAB version.
 This will ensure that all outputs match to nearly machine precision (a relative tolerance of ``10^{-10}`` is used during testing).

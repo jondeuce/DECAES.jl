@@ -9,9 +9,10 @@ See also:
 * [`T2partSEcorr`](@ref)
 """
 function main(command_line_args::Vector{String} = ARGS)
-    # Parse command line arguments. Note that if --legacy flag is passed,
-    # inputs will have to be re-parsed since default values are --legacy dependent
+    # Parse command line arguments
     opts = parse_args(command_line_args, ARGPARSE_SETTINGS; as_symbols = true)
+    
+    # If --legacy flag was passed, re-parse inputs since default values are --legacy dependent
     if opts[:legacy] == true
         opts = parse_args(command_line_args, ARGPARSE_SETTINGS_LEGACY; as_symbols = true)
     end
@@ -23,55 +24,87 @@ function main(command_line_args::Vector{String} = ARGS)
     t2part_kwargs = get_parsed_args_subset(opts, T2PART_FIELDTYPES)
 
     # Override --Silent flag with --quiet flag, if set
-    quiet && (t2map_kwargs[:Silent] = quiet)
-    quiet && (t2part_kwargs[:Silent] = quiet)
+    if quiet
+        t2map_kwargs[:Silent] = true
+        t2part_kwargs[:Silent] = true
+    end
 
-    # Infer nT2 from input T2 distribution
-    !T2map && (delete!(t2part_kwargs, :nT2))
+    # If not performing T2-mapping, infer nT2 from input T2 distribution
+    if !T2map
+        delete!(t2part_kwargs, :nT2)
+    end
 
     # Get input file list and output folder list
-    inputfiles, outputfolders = get_file_info(opts)
+    for info in get_file_info(opts)
+        @unpack inputfile, outputfolder, maskfile = info
 
-    for (filename, folder) in zip(inputfiles, outputfolders)
         # Make output path
-        choppedfilename, filesuffix = chop_allowed_suffix(basename(filename))
-        mkpath(folder)
+        choppedinputfile, filesuffix = chop_allowed_suffix(basename(inputfile))
+        mkpath(outputfolder)
 
         # Set logger to output to both console and log file
-        logfile = joinpath(folder, choppedfilename * ".log")
+        logfile = joinpath(outputfolder, choppedinputfile * ".log")
         open(logfile, "w+") do io
             with_logger(TeeLogger(ConsoleLogger(stdout), ConsoleLogger(io))) do
                 try
                     # Starting message/starting time
                     t_start = tic()
-                    !quiet && @info "Starting with $(Threads.nthreads()) threads"
+                    if !quiet
+                        @info "Starting with $(Threads.nthreads()) threads"
+                    end
 
                     # Save settings files
-                    !dry && map(filter(s -> startswith(s, "@"), command_line_args)) do settingsfile
-                        src = settingsfile[2:end] # drop "@" character
-                        dst = joinpath(folder, choppedfilename * "." * basename(src))
-                        cp(src, dst; force = true)
+                    if !dry
+                        settingsfiles = filter(s -> startswith(s, "@"), command_line_args)
+                        map(settingsfiles) do settingsfile
+                            src = settingsfile[2:end] # drop "@" character
+                            dst = joinpath(outputfolder, choppedinputfile * "." * basename(src))
+                            cp(src, dst; force = true)
+                        end
                     end
 
                     # Load image(s)
-                    image = @showtime(load_image(filename), "Loading input file: $filename", !quiet)
+                    image = @showtime(
+                        load_image(inputfile),
+                        "Loading input file: $inputfile",
+                        !quiet)
 
-                    # Apply BET mask
-                    bet && @showtime(make_apply_bet_mask!(image, betpath, betargs), "Making and applying BET mask with args: '$betargs'", !quiet)
+                    # Apply mask
+                    if maskfile !== nothing
+                        @showtime(
+                            try_apply_maskfile!(image, maskfile),
+                            "Applying mask from file: '$maskfile'",
+                            !quiet)
+                    elseif bet
+                        @showtime(
+                            try_apply_bet!(image, betpath, betargs),
+                            "Making and applying BET mask with args: '$betargs'",
+                            !quiet)
+                    end
 
                     # Results variables
                     local maps, dist, parts
 
                     if T2map
                         # Compute T2 distribution from input 4D multi-echo image
-                        maps, dist = @showtime(T2mapSEcorr(image; t2map_kwargs...), "Running T2mapSEcorr on file: $filename", !quiet)
+                        maps, dist = @showtime(T2mapSEcorr(image; t2map_kwargs...), "Running T2mapSEcorr on file: $inputfile", !quiet)
 
                         # Save results to .mat files
-                        savefile = joinpath(folder, choppedfilename * ".t2dist.mat")
-                        !dry && @showtime(MAT.matwrite(savefile, Dict("dist" => dist)), "Saving T2 distribution to file: $savefile", !quiet)
+                        savefile = joinpath(outputfolder, choppedinputfile * ".t2dist.mat")
+                        if !dry
+                            @showtime(
+                                MAT.matwrite(savefile, Dict("dist" => dist)),
+                                "Saving T2 distribution to file: $savefile",
+                                !quiet)
+                        end
 
-                        savefile = joinpath(folder, choppedfilename * ".t2maps.mat")
-                        !dry && @showtime(MAT.matwrite(savefile, maps), "Saving T2 parameter maps to file: $savefile", !quiet)
+                        savefile = joinpath(outputfolder, choppedinputfile * ".t2maps.mat")
+                        if !dry
+                            @showtime(
+                                MAT.matwrite(savefile, maps),
+                                "Saving T2 parameter maps to file: $savefile",
+                                !quiet)
+                        end
                     else
                         # Input image is the T2 distribution
                         dist = image
@@ -79,20 +112,32 @@ function main(command_line_args::Vector{String} = ARGS)
 
                     if T2part
                         # Analyze T2 distribution to produce parameter maps
-                        parts = @showtime(T2partSEcorr(dist; t2part_kwargs...), "Running T2partSEcorr", !quiet)
+                        parts = @showtime(
+                            T2partSEcorr(dist; t2part_kwargs...),
+                            "Running T2partSEcorr",
+                            !quiet)
 
                         # Save results to .mat file
-                        savefile = joinpath(folder, choppedfilename * ".t2parts.mat")
-                        !dry && @showtime(MAT.matwrite(savefile, parts), "Saving T2 parts maps to file: $savefile", !quiet)
+                        savefile = joinpath(outputfolder, choppedinputfile * ".t2parts.mat")
+                        if !dry
+                            @showtime(
+                                MAT.matwrite(savefile, parts),
+                                "Saving T2 parts maps to file: $savefile",
+                                !quiet)
+                        end
                     end
 
                     # Done message
                     if !quiet
-                        println(stdout, ""); @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"; println(stdout, "")
+                        println(stdout, "")
+                        @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"
+                        println(stdout, "")
                     end
                 catch e
-                    println(stdout, ""); @warn "Error during processing of file: $filename"
-                    println(stdout, ""); @warn sprint(showerror, e, catch_backtrace())
+                    println(stdout, "")
+                    @warn "Error during processing of file: $inputfile"
+                    println(stdout, "")
+                    @warn sprint(showerror, e, catch_backtrace())
                 end
             end
         end
@@ -112,11 +157,14 @@ function create_argparse_settings(;legacy = false)
 
     @add_arg_table settings begin
         "input"
-            help = "one or more input filenames or directories. If directories are passed, they are scanned non-recursively for valid input files. Valid file extensions are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
+            help = "one or more input filenames. Valid file extensions are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
             required = true
             nargs = '+' # At least one input is required
+        "--mask"
+            help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. If only one mask is passed, it is used for all input files; otherwise, the number of masks must equal the number of input files. Valid file extensions are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
+            nargs = '+' # At least one input is required
         "--output", "-o"
-            help = "output directory. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). Outputs are stored with the same basename as inputs plus added suffixes; see --T2map and --T2part"
+            help = "output directory. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). Outputs are stored with the same basename as inputs and additional suffixes; see --T2map and --T2part"
         "--T2map"
             help = "call T2mapSEcorr to compute T2 distributions from 4D multi spin-echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat"
             action = :store_true
@@ -149,7 +197,7 @@ function create_argparse_settings(;legacy = false)
     )
     @add_arg_table settings begin
         "--bet"
-            help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed, greatly decreasing processing time."
+            help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and --bet will be ignored."
             action = :store_true
         "--betargs"
             help = "BET optional arguments. Must be passed as a single string with arguments separated by spaces, e.g. '-m -n'. The flag '-m' creates the binary mask and will be added to the list of arguments if not provided."
@@ -164,31 +212,97 @@ function create_argparse_settings(;legacy = false)
     return settings
 end
 
-function load_image(filename)
+function get_file_info(opts)
+    @unpack input, output, mask = opts    
+
+    # Read in input files
+    inputfiles = String[]
+    for path in input
+        if is_allowed_suffix(path)
+            push!(inputfiles, path)
+        end
+    end
+
+    if isempty(inputfiles)
+        msg = if !isempty(input) && isfile(input[1])
+            "No valid file types were found for processing, but a file name was passed.\n" *
+            "Perhaps you meant to prepend an '@' character to a settings file, e.g. @$(input[1])?\n" *
+            "If not, note that only $ALLOWED_FILE_SUFFIXES_STRING file types are supported"
+        else
+            "No valid files were found for processing. Note that currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported"
+        end
+        error(msg)
+    end
+
+    # Get output folders
+    outputfolders = if output === nothing
+        dirname.(inputfiles)
+    else
+        [output for _ in 1:length(inputfiles)]
+    end
+
+    # Get mask files
+    maskfiles = if isempty(mask)
+        fill(nothing, length(inputfiles))
+    elseif length(mask) == 1
+        String[mask[1] for _ in 1:length(inputfiles)]
+    elseif length(mask) == length(inputfiles)
+        String.(mask)
+    else
+        error("Number of mask files passed does not equal the number of input image files passed")
+    end
+
+    # Create info dictionaries
+    info = Dict{Symbol, Union{String, Nothing}}[]
+    for (inputfile, outputfolder, maskfile) in zip(inputfiles, outputfolders, maskfiles)
+        d = eltype(info)(
+            :inputfile => inputfile,
+            :outputfolder => outputfolder,
+            :maskfile => maskfile,
+        )
+        push!(info, d)
+    end
+
+    return info
+end
+
+function load_image(filename, ::Val{dim} = Val(4)) where {dim}
     image = if endswith(filename, ".mat")
         data = MAT.matread(filename)
-        key = findfirst(x -> x isa AbstractArray{T,4} where {T}, data)
+        
+        # Load first `dim`-dimensional array which is found, or throw an error if none are found
+        key = findfirst(x -> x isa AbstractArray{T,dim} where {T}, data)
         if key === nothing
             error("No 4D array was found in the input file: $filename")
         end
         data[key]
     elseif endswith(filename, ".nii") || endswith(filename, ".nii.gz")
         data = NIfTI.niread(filename)
+        
         # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned
         #   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
         if data.header.scl_slope == 0
-            data.raw[:,:,:,:] # Return raw data
+            data.raw[ntuple(_ -> Colon(), dim)...] # Return raw data
         else
-            data[:,:,:,:] # Return scaled data (getindex from the NIfTI package handles scaling)
+            data[ntuple(_ -> Colon(), dim)...] # Return scaled data (getindex from the NIfTI package handles scaling)
         end
     else
         error("Currently, only $ALLOWED_FILE_SUFFIXES_STRING files are supported")
     end
-    if !(image isa Array{Float64,4})
-        # Currently, the pipeline is ~twice as fast on Float64 arrays than Float32 arrays.
-        # I'm not clear on exactly why this is at the moment. However, the MATLAB toolbox
-        # converts images to double as well, so I'm going to do the same here while loading
-        image = convert(Array{Float64,4}, image)
+
+    # Currently, the pipeline is ~twice as fast on Float64 arrays than Float32 arrays (unclear why).
+    # However, the MATLAB toolbox converts images to double as well, so here we simply do the same
+    image = convert(Array{Float64,dim}, image)
+
+    return image
+end
+
+function try_apply_maskfile!(image, maskfile)
+    try
+        image .*= load_image(maskfile, Val(3))
+    catch e
+        @warn "Error while loading mask file: $maskfile"
+        @warn sprint(showerror, e, catch_backtrace())
     end
     return image
 end
@@ -201,7 +315,7 @@ function make_bet_mask(image, betpath, betargs)
     end
 
     # Create mask using BET and return mask
-    mktempdir() do temppath
+    mask = mktempdir() do temppath
         tempbase = basename(tempname())
         nifti_imagefile = joinpath(temppath, tempbase * ".nii")
         nifti_maskfile = joinpath(temppath, tempbase * ".bet")
@@ -215,12 +329,14 @@ function make_bet_mask(image, betpath, betargs)
         # BET appends "_mask" and ".nii.gz" to output file name.
         # Find this file, ensure it is unique, then load and return it
         bet_maskfiles = filter!(file -> startswith(file, tempbase * ".bet_mask"), readdir(temppath))
-        @assert length(bet_maskfiles) == 1 # ensure unique
-        load_image(joinpath(temppath, bet_maskfiles[1]))
+        @assert length(bet_maskfiles) == 1 # ensure unique; this should never be false using a temp filename
+        load_image(joinpath(temppath, bet_maskfiles[1]), Val(3))
     end
+
+    return mask
 end
 
-function make_apply_bet_mask!(image, betpath, betargs)
+function try_apply_bet!(image, betpath, betargs)
     try
         image .*= make_bet_mask(image, betpath, betargs)
     catch e
@@ -251,39 +367,6 @@ function chop_allowed_suffix(filename::AbstractString)
         end
     end
     error("Currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported")
-end
-
-function get_file_info(opts)
-    @unpack input, output = opts    
-
-    inputfiles = String[]
-    for path in input
-        if isdir(path)
-            filenames = joinpath.(path, filter_allowed_suffix(readdir(path)))
-            append!(inputfiles, filenames)
-        elseif is_allowed_suffix(path)
-            push!(inputfiles, path)
-        end
-    end
-
-    if isempty(inputfiles)
-        msg = if !isempty(input) && isfile(input[1])
-            "No valid file types were found for processing, but a file name was passed.\n" *
-            "Perhaps you meant to prepend an '@' character to a settings file, e.g. @$(input[1])?\n" *
-            "If not, note that only $ALLOWED_FILE_SUFFIXES_STRING file types are supported"
-        else
-            "No valid files were found for processing. Note that currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported"
-        end
-        error(msg)
-    end
-
-    outputfolders = if output === nothing
-        dirname.(inputfiles)
-    else
-        [output for _ in 1:length(inputfiles)]
-    end
-
-    return @ntuple(inputfiles, outputfolders)
 end
 
 function sorted_arg_table_entries(options...)
