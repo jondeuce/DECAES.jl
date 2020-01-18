@@ -5,29 +5,30 @@ Options structure for [`T2mapSEcorr`](@ref).
 This struct collects keyword arguments passed to `T2mapSEcorr`, performs checks on parameter types and values, and assigns default values to unspecified parameters.
 
 # Arguments
-- `MatrixSize`:     size of first 3 dimensions of input 4D image. This argument is has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`
-- `nTE`:            number of echoes in input signal. This argument is has no default, but is inferred automatically as `size(image, 4)` when calling `T2mapSEcorr(image; kwargs...)`
-- `TE`:             interecho spacing (Default: `10e-3`, Units: seconds)
-- `T1`:             assumed value of T1 (Default: `1.0`, Units: seconds)
-- `Threshold`:      first echo intensity cutoff for empty voxels (Default: `200.0`)
-- `Chi2Factor`:     constraint on ``\\chi^2`` used for regularization when `Reg == "chi2"` (Default: `1.02`)
-- `nT2`:            number of T2 times to use (Default: `40`)
-- `T2Range`:        min and max T2 values (Default: `(10e-3, 2.0)`, Units: seconds)
-- `RefConAngle`:    refocusing pulse control angle (Default: `180.0`, Units: degrees)
-- `MinRefAngle`:    minimum refocusing angle for flip angle optimization (Default: `50.0`, Units: degrees)
-- `nRefAngles`:     during flip angle optimization, goodness of fit is checked for up to `nRefAngles` angles in the range `[MinRefAngle, 180]`. The optimal angle is then determined through interpolation from these samples (Default: `32`)
-- `nRefAnglesMin`:  initial number of angles to check during flip angle optimization before refinement near likely optima; `nRefAnglesMin == nRefAngles` forces all angles to be checked (Default: `5`)
-- `Reg`:            regularization routine to use:
-    - `"no"`:       no regularization of solution
-    - `"chi2"`:     use `Chi2Factor` based regularization (Default)
-    - `"lcurve"`:   use L-Curve based regularization
-- `SetFlipAngle`:   instead of optimizing flip angle, use this flip angle for all voxels (Default: `nothing`, Units: degrees)
-- `SaveRegParam`:   `true`/`false` option to include the resulting regularization parameter mu and ``\\chi^2`` factor as outputs within the maps dictionary (Default: `false`)
-- `SaveNNLSBasis`:  `true`/`false` option to include a 5-D array of NNLS basis matrices as an output within the maps dictionary (Default: `false`)
+- `MatrixSize`:       size of first 3 dimensions of input 4D image. This argument is has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`
+- `nTE`:              number of echoes in input signal. This argument is has no default, but is inferred automatically as `size(image, 4)` when calling `T2mapSEcorr(image; kwargs...)`
+- `TE`:               interecho spacing (Default: `10e-3`, Units: seconds)
+- `T1`:               assumed value of T1 (Default: `1.0`, Units: seconds)
+- `Threshold`:        first echo intensity cutoff for empty voxels (Default: `200.0`)
+- `Chi2Factor`:       constraint on ``\\chi^2`` used for regularization when `Reg == "chi2"` (Default: `1.02`)
+- `nT2`:              number of T2 times to use (Default: `40`)
+- `T2Range`:          min and max T2 values (Default: `(10e-3, 2.0)`, Units: seconds)
+- `RefConAngle`:      refocusing pulse control angle (Default: `180.0`, Units: degrees)
+- `MinRefAngle`:      minimum refocusing angle for flip angle optimization (Default: `50.0`, Units: degrees)
+- `nRefAngles`:       during flip angle optimization, goodness of fit is checked for up to `nRefAngles` angles in the range `[MinRefAngle, 180]`. The optimal angle is then determined through interpolation from these samples (Default: `32`)
+- `nRefAnglesMin`:    initial number of angles to check during flip angle optimization before refinement near likely optima; `nRefAnglesMin == nRefAngles` forces all angles to be checked (Default: `5`)
+- `Reg`:              regularization routine to use:
+    - `"no"`:         no regularization of solution
+    - `"chi2"`:       use `Chi2Factor` based regularization (Default)
+    - `"lcurve"`:     use L-Curve based regularization
+- `SetFlipAngle`:     instead of optimizing flip angle, use this flip angle for all voxels (Default: `nothing`, Units: degrees)
+- `SaveResidualNorm`: `true`/`false` option to include a 3D array of the ``\\ell^2``-norms of the residuals from the NNLS fits in the output maps dictionary (Default: `false`)
+- `SaveDecayCurve`:   `true`/`false` option to include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary (Default: `false`)
+- `SaveRegParam`:     `true`/`false` option to include 3D arrays of the regularization parameters ``\\mu`` and resulting ``\\chi^2``-factors in the output maps dictionary (Default: `false`)
+- `SaveNNLSBasis`:    `true`/`false` option to include a 4D array of NNLS basis matrices in the output maps dictionary (Default: `false`)
 !!! note
-    The 5-D array that is saved when `SaveNNLSBasis` is set to `true` has dimensions `MatrixSize x nTE x nT2`,
+    The 4D array that is saved when `SaveNNLSBasis` is set to `true` has dimensions `MatrixSize x nTE x nT2`,
     and therefore is typically extremely large; by default, it is `nT2 = 40` times the size of the input image.
-    Saving the NNLS basis is only advised for very small images
 - `Silent`:         suppress printing to the console (Default: `false`)
 
 See also:
@@ -85,6 +86,10 @@ See also:
     SetFlipAngle::Union{T,Nothing} = nothing
     @assert SetFlipAngle isa Nothing || 0.0 < SetFlipAngle <= 180.0
 
+    SaveResidualNorm::Bool = false
+
+    SaveDecayCurve::Bool = false
+
     SaveRegParam::Bool = false
 
     SaveNNLSBasis::Bool = false
@@ -115,21 +120,23 @@ Uses nonnegative least squares (NNLS) to compute T2 distributions in the presenc
 Records parameter maps and T2 distributions for further partitioning.
 
 # Arguments
-- `image`: 4-D array with intensity data as `(row, column, slice, echo)`
+- `image`: 4D array with intensity data as `(row, column, slice, echo)`
 - A series of optional keyword argument settings which will be used to construct a [`T2mapOptions`](@ref) struct internally, or a [`T2mapOptions`](@ref) struct directly
 
 # Outputs
-- `maps`: dictionary containing 3D maps with the following fields:
-    - `"gdn"`: general density
-    - `"ggm"`: general geometric mean
-    - `"gva"`: general variance
-    - `"fnr"`: fit to noise ratio = gdn / sqrt(sum(residuals.^2) / (nTE-1))
-    - `"snr"`: signal to noise ratio = maximum(signal) / std(residuals)
-    - `"alpha"`: refocusing pulse flip angle
-    - `"mu"`: (optional) regularization parameter from NNLS fit
-    - `"chi2factor"`: (optional) ``\\chi^2`` increase factor from NNLS fit
-    - `"decaybasis"`: (optional) decay basis from EPGdecaycurve
-- `distributions`: 4-D array with data as `(row, column, slice, T2 amplitude)` containing T2 distributions
+- `maps`: dictionary containing 3D, 4D, or 5D parameter maps with the following fields:
+    - `"gdn"`:        3D (MatrixSize)             General density = sum(T2distribution)
+    - `"ggm"`:        3D (MatrixSize)             General geometric mean
+    - `"gva"`:        3D (MatrixSize)             General variance
+    - `"fnr"`:        3D (MatrixSize)             Fit to noise ratio = gdn / sqrt(sum(residuals.^2) / (nTE-1))
+    - `"snr"`:        3D (MatrixSize)             Signal to noise ratio = maximum(signal) / std(residuals)
+    - `"alpha"`:      3D (MatrixSize)             Refocusing pulse flip angle
+    - `"resnorm"`:    3D (MatrixSize)             (optional) ``\\ell^2``-norm of NNLS fit residuals
+    - `"decaycurve"`: 4D (MatrixSize x nTE)       (optional) Decay curve resulting from NNLS fit
+    - `"mu"`:         3D (MatrixSize)             (optional) Regularization parameter from NNLS fit
+    - `"chi2factor"`: 3D (MatrixSize)             (optional) ``\\chi^2`` increase factor from NNLS fit
+    - `"decaybasis"`: 5D (MatrixSize x nTE x nT2) (optional) Decay basis from EPGdecaycurve
+- `distributions`: 4D (MatrixSize x nT2) array with data as `(row, column, slice, T2 amplitude)` containing T2 distributions.
 
 # Examples
 ```julia-repl
@@ -188,11 +195,14 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     maps["fnr"]    = fill(T(NaN), opts.MatrixSize...)
     maps["snr"]    = fill(T(NaN), opts.MatrixSize...)
     maps["alpha"]  = fill(T(NaN), opts.MatrixSize...)
-    opts.SaveRegParam  && (maps["mu"] = fill(T(NaN), opts.MatrixSize...))
-    opts.SaveRegParam  && (maps["chi2factor"] = fill(T(NaN), opts.MatrixSize...))
-    opts.SaveNNLSBasis && (maps["decaybasis"] = fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2))
+    opts.SaveResidualNorm && (maps["resnorm"]    = fill(T(NaN), opts.MatrixSize...))
+    opts.SaveDecayCurve   && (maps["decaycurve"] = fill(T(NaN), opts.MatrixSize..., opts.nTE))
+    opts.SaveRegParam     && (maps["mu"]         = fill(T(NaN), opts.MatrixSize...))
+    opts.SaveRegParam     && (maps["chi2factor"] = fill(T(NaN), opts.MatrixSize...))
+    opts.SaveNNLSBasis    && (maps["decaybasis"] = fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2))
+
     distributions  = fill(T(NaN), opts.MatrixSize..., opts.nT2)
-    
+
     thread_buffers = [thread_buffer_maker(image, opts) for _ in 1:Threads.nthreads()]
     global_buffer  = global_buffer_maker(image, opts)
 
@@ -405,7 +415,7 @@ end
 function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::CartesianIndex)
     @unpack T2_dist, T2_times, logT2_times, alpha_opt, mu_opt, chi2fact_opt, decay_data, decay_basis = thread_buffer
     @unpack decay_calc, residuals, gva_buf, curr_count = thread_buffer
-    
+
     # Compute and save parameters of distribution
     @inbounds begin
         @unpack gdn, ggm, gva, fnr, snr, alpha = maps
@@ -429,6 +439,20 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
     if o.SaveRegParam
         @unpack mu, chi2factor = maps
         @inbounds mu[I], chi2factor[I] = mu_opt[], chi2fact_opt[]
+    end
+
+    # Optionally save ℓ²-norm of residuals
+    if o.SaveResidualNorm
+        @unpack resnorm = maps
+        @inbounds resnorm[I] = sqrt(sum(abs2, residuals))
+    end
+
+    # Optionally save signal decay curve from fit
+    if o.SaveDecayCurve
+        @unpack decaycurve = maps
+        @inbounds for j in 1:o.nTE
+            decaycurve[I,j] = decay_calc[j]
+        end
     end
 
     # Optionally save NNLS basis

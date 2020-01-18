@@ -63,7 +63,7 @@ Base.show(io::IO, ::MIME"text/plain", o::T2partOptions) = show(io, _show_string(
 Analyzes T2 distributions produced by [`T2mapSEcorr`](@ref) to produce data maps of a series of parameters.
 
 # Arguments
-- `T2distributions`: 4-D array with data as `(row, column, slice, T2 amplitude)`
+- `T2distributions`: 4D array with data as `(row, column, slice, T2 amplitude)`
 - A series of optional keyword argument settings which will be used to construct a [`T2partOptions`](@ref) struct internally, or a [`T2partOptions`](@ref) struct directly
 
 # Ouputs
