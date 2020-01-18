@@ -2,7 +2,7 @@ module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
 using StaticArrays, SIMD
-using Dierckx, Polynomials, PolynomialRoots
+using Optim, Dierckx, Polynomials, PolynomialRoots
 using ArgParse, Parameters, TimerOutputs, Logging, LoggingExtras
 using MAT, NIfTI
 

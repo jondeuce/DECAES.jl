@@ -17,7 +17,7 @@ This struct collects keyword arguments passed to `T2partSEcorr`, performs checks
 See also:
 * [`T2partSEcorr`](@ref)
 """
-@with_kw struct T2partOptions{T} @deftype T
+@with_kw_noshow struct T2partOptions{T} @deftype T
     legacy::Bool = false
 
     MatrixSize::NTuple{3,Int}
@@ -41,6 +41,7 @@ See also:
     Silent::Bool = false
 end
 T2partOptions(args...; kwargs...) = T2partOptions{Float64}(args...; kwargs...)
+T2partOptions(image::Array{T,4}; kwargs...) where {T} = T2partOptions{T}(;MatrixSize = size(image)[1:3], nT2 = size(image)[4], kwargs...)
 
 function _show_string(o::T2partOptions)
     io = IOBuffer()
@@ -54,7 +55,8 @@ function _show_string(o::T2partOptions)
     end
     return String(take!(io))
 end
-Base.show(io::IO, ::MIME"text/plain", o::T2partOptions) = show(io, _show_string(o))
+# Base.show(io::IO, o::T2partOptions) = print(io, _show_string(o))
+Base.show(io::IO, ::MIME"text/plain", o::T2partOptions) = print(io, _show_string(o))
 
 """
     T2partSEcorr(T2distributions; <keyword arguments>)
@@ -93,11 +95,7 @@ See also:
 function T2partSEcorr(T2distributions::Array{T,4}; kwargs...) where {T}
     reset_timer!(TIMER)
     out = @timeit_debug TIMER "T2partSEcorr" begin
-        T2partSEcorr(T2distributions, T2partOptions{T}(;
-            MatrixSize = size(T2distributions)[1:3],
-            nT2 = size(T2distributions, 4),
-            kwargs...
-        ))
+        T2partSEcorr(T2distributions, T2partOptions(T2distributions; kwargs...))
     end
     if timeit_debug_enabled()
         println("\n"); show(TIMER); println("\n")
@@ -140,14 +138,14 @@ end
 function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOptions{T}, I) where {T}
     @unpack dist, T2_times, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights = thread_buffer
 
-    # Load in voxel T2 distribution, or return nothing for distributions containing NaN entries
+    # Return nothing if distribution contains NaN entries
     @inbounds for j in 1:o.nT2
-        T2 = T2distributions[I, j]
-        if isnan(T2)
-            return nothing
-        else
-            dist[j] = T2
-        end
+        isnan(T2distributions[I, j]) && return nothing
+    end
+
+    # Load in voxel T2 distribution
+    @inbounds @simd for j in 1:o.nT2
+        dist[j] = T2distributions[I, j]
     end
 
     # Precompute sums and dot products over small pool, medium pool, and entire ranges
@@ -198,7 +196,7 @@ function sigmoid_weights(o::T2partOptions{T}) where {T}
         # Curve reaches 50% at T2_50perc and is (k and 1-k)*100 percent at T2_50perc +/- T2_kperc  
         k, T2_kperc, T2_50perc = T(0.1), o.Sigmoid, o.SPWin[2]
         sigma = abs(T2_kperc / (sqrt(T(2)) * erfinv(2*k-1)))
-        normccdf.((logrange(o.T2Range..., o.nT2) .- T2_50perc) ./ sigma)
+        (x -> x <= eps(T) ? zero(T) : x).(normccdf.((logrange(o.T2Range..., o.nT2) .- T2_50perc) ./ sigma))
     else
         nothing
     end

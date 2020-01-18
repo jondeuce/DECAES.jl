@@ -34,7 +34,7 @@ This struct collects keyword arguments passed to `T2mapSEcorr`, performs checks 
 See also:
 * [`T2mapSEcorr`](@ref)
 """
-@with_kw struct T2mapOptions{T} @deftype T
+@with_kw_noshow struct T2mapOptions{T} @deftype T
     legacy::Bool = false
 
     MatrixSize::NTuple{3,Int}
@@ -97,6 +97,7 @@ See also:
     Silent::Bool = false
 end
 T2mapOptions(args...; kwargs...) = T2mapOptions{Float64}(args...; kwargs...)
+T2mapOptions(image::Array{T,4}; kwargs...) where {T} = T2mapOptions{T}(;MatrixSize = size(image)[1:3], nTE = size(image)[4], kwargs...)
 
 function _show_string(o::T2mapOptions)
     io = IOBuffer()
@@ -110,7 +111,8 @@ function _show_string(o::T2mapOptions)
     end
     return String(take!(io))
 end
-Base.show(io::IO, ::MIME"text/plain", o::T2mapOptions) = show(io, _show_string(o))
+# Base.show(io::IO, o::T2mapOptions) = print(io, _show_string(o))
+Base.show(io::IO, ::MIME"text/plain", o::T2mapOptions) = print(io, _show_string(o))
 
 """
     T2mapSEcorr(image; <keyword arguments>)
@@ -164,11 +166,7 @@ See also:
 function T2mapSEcorr(image::Array{T,4}; kwargs...) where {T}
     reset_timer!(TIMER)
     out = @timeit_debug TIMER "T2mapSEcorr" begin
-        T2mapSEcorr(image, T2mapOptions{T}(;
-            MatrixSize = size(image)[1:3],
-            nTE = size(image, 4),
-            kwargs...
-        ))
+        T2mapSEcorr(image, T2mapOptions(image; kwargs...))
     end
     if timeit_debug_enabled()
         println("\n"); show(TIMER); println("\n")

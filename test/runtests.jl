@@ -51,24 +51,24 @@ end
 
 # CLI parameter settings to loop over
 const cli_params_perms = Dict{Symbol, Any}(
-    :Chi2Factor     => 1.025,
-    :MPWin          => (0.038, 0.180),
-    :MinRefAngle    => 55.0,
-    :RefConAngle    => 172.0,
-    :Reg            => "chi2",
-    :SPWin          => (0.013, 0.037),
-    :SaveNNLSBasis  => true,
-    :SaveRegParam   => true,
-    :SetFlipAngle   => 170.0,
-    :Sigmoid        => 1.0,
-    :Silent         => true,
-    :T1             => 0.95,
-    :T2Range        => (0.016, 1.8),
-    :TE             => 0.011,
-    :Threshold      => 190.0,
-    :nRefAngles     => 9,
-    :nRefAnglesMin  => 4,
-    :nT2            => 45, # Include odd number
+    :Chi2Factor     => [1.025],
+    :MPWin          => [(0.038, 0.180)],
+    :MinRefAngle    => [55.0],
+    :RefConAngle    => [172.0],
+    :Reg            => ["no", "chi2", "lcurve"],
+    :SPWin          => [(0.013, 0.037)],
+    :SaveNNLSBasis  => [true],
+    :SaveRegParam   => [true],
+    :SetFlipAngle   => [170.0],
+    :Sigmoid        => [1.0],
+    :Silent         => [true],
+    :T1             => [0.95],
+    :T2Range        => [(0.016, 1.8)],
+    :TE             => [0.011],
+    :Threshold      => [190.0],
+    :nRefAngles     => [9, 10], # Include odd number
+    :nRefAnglesMin  => [4, 5], # Include odd number
+    :nT2            => [45], # Include odd number
 )
 
 @testset "CLI" begin
@@ -80,8 +80,8 @@ const cli_params_perms = Dict{Symbol, Any}(
     nloop = max(length.(iters)...)
     repeat_until(x) = Iterators.take(Iterators.cycle(x), nloop)
 
-    for params in zip(map(repeat_until, iters)...)
-        (k, v), make_settings_file, file_suffix = params
+    for ((k, vlist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...)
+        v = rand(vlist)
         flag = "--" * string(k) # CLI flag
         vals = v isa Tuple ? [string(x) for x in v] : # Pass each arg separately
                v isa Bool  ? [] : # No arg necessary, flag only
