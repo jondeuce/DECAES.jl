@@ -150,7 +150,7 @@ println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
 println("\$ julia decaes.jl image.nii --T2map --T2part --TE 0.008 --nT2 60 --T2Range 0.010 1.5") # hide
 ```
 
-### [Passing image masks](@id outfolder)
+### [Passing image masks](@id passmasks)
 
 Image masks can be passed into DECAES.jl using the `--mask` flag:
 
@@ -159,16 +159,9 @@ println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
 println("\$ julia decaes.jl image.nii --T2map --T2part --mask mask.nii") # hide
 ```
 
-The mask is loaded and applied to the input image via elementwise multiplication over the spatial dimensions, e.g. the mask is applied for each echo of a 4D multi-echo input image.
+The mask file is loaded and applied to the input image via elementwise multiplication over the spatial dimensions, e.g. the mask is applied to each echo of a 4D multi-echo input image.
 
-If multiple images are passed along with a single mask, the mask is used for all images:
-
-```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image1.nii image2.mat --T2map --T2part --mask mask.nii") # hide
-```
-
-Alternatively, a mask can be passed for each input image (note that masks, too, can be any valid file type):
+If multiple image files are passed, a mask can be passed for each input image (note that each mask file can be any valid file type):
 
 ```@example
 println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
@@ -176,8 +169,8 @@ println("\$ julia decaes.jl image1.nii image2.mat --T2map --T2part --mask mask1.
 ```
 
 !!! note
-    If input images have been manually masked such that they are e.g. zero outside of regions of interest, a mask need not be passed.
-    The `--Threshold` parameter of [T2mapSEcorr](@ref) controls a first echo intensity cutoff threshold (default value 200.0), below which voxels are automatically skipped during processing.
+    If input images have been manually masked such that they are e.g. zero outside regions of interest, a mask need not be passed.
+    The `--Threshold` parameter of [`T2mapSEcorr`](@ref) controls a first echo intensity cutoff threshold (default value 200.0), below which voxels are automatically skipped during processing.
 
 ### Automatic brain masking with BET
 

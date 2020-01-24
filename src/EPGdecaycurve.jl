@@ -28,24 +28,22 @@ function EPGdecaycurve!(work, ETL::Int, flip_angle::T, TE::T, T2::T, T1::T, refc
     # Unpack workspace
     @unpack Mz, decay_curve = work
     @assert ETL > 2 && length(Mz) == 3*ETL && length(decay_curve) == ETL
-    Mz .= Ref(zero(Vec{2,T}))
 
     # Precompute compute element flip matrices and other intermediate variables
     E2, E1, E2_half = exp(-TE/T2), exp(-TE/T1), exp(-(TE/2)/T2)
     T1mat = element_flipmat(flip_angle)
     T2mat = element_flipmat(flip_angle * (refcon/180))
     @inbounds T2mat_elements = ( # independent elements of T2mat
-        s_α     = -imag(T2mat[1,3]), # sin(α)
-        c_α     =  real(T2mat[3,3]), # cos(α)
-        s_½α_sq =  real(T2mat[2,1]), # sin(α/2)^2
-        c_½α_sq =  real(T2mat[1,1]), # cos(α/2)^2
-        s_α_½   = -imag(T2mat[3,1]), # sin(α)/2
+       -imag(T2mat[1,3]), # sin(α)
+        real(T2mat[3,3]), # cos(α)
+        real(T2mat[2,1]), # sin(α/2)^2
+        real(T2mat[1,1]), # cos(α/2)^2
+       -imag(T2mat[3,1]), # sin(α)/2
     )
 
     # Initialize magnetization phase state vector (MPSV)
     m0 = E2_half * sind(flip_angle/2) # initial population
-    M0 = SA{T}[m0, 0, 0] # initial magnetization in F1 state
-    M1 = T1mat * M0 # apply first refocusing pulse
+    M1 = m0 * T1mat[:,1] # first refocusing pulse applied to [m0, 0, 0]
     @inbounds decay_curve[1] = E2_half * sqrt(abs2(M1[2])) # first echo amplitude
 
     # Apply first relaxation matrix iteration on non-zero states
@@ -84,60 +82,128 @@ element_flipmat(α::T) where {T} = SA{Complex{T}}[
 # section below for a more readable implementation which
 # produces exactly the same result
 @inline function flipmat_relaxmat_action!(
-        decay_curve :: SizedArray{Tuple{ETL}, T},
-        Mz          :: SizedArray{Tuple{ETL3}, Vec{2,T}},
-        T2mat_elements,
-        E1,
-        E2_half,
-        E2
+        decay_curve    :: SizedArray{Tuple{ETL}, T},
+        Mz             :: SizedArray{Tuple{ETL3}, Vec{2,T}},
+        T2mat_elements :: NTuple{5, T},
+        E1             :: T,
+        E2_half        :: T,
+        E2             :: T,
     ) where {ETL,ETL3,T}
-    # @assert 3*ETL == ETL3
 
-    # Extract matrix elements, initialize buffers
+    ###########################
+    # Extract matrix elements + initialize temporaries
     a1, a2, a3, a4, a5 = T2mat_elements
+    b1, b2, b3, b4, b5 = E2*a1, E1*a2, E2*a3, E2*a4, E1*a5
+    c1, c3, c4 = E2_half*a1, E2_half*a3, E2_half*a4
+    b1F, b5F, c1F = Vec((-b1, b1)), Vec((-b5, b5)), Vec((-c1, c1))
     @inbounds Mz3 = Mz[3]
 
     @inbounds for i = 2:ETL-1
-        # Unroll first flipmat/relaxmat iteration to get Mz[2] for decay_curve
+        ###########################
+        # Unroll first flipmat/relaxmat iteration
         Vx, Vy = Mz[1], Mz[2]
-        a1z = a1 * Vec((Mz3[2], -Mz3[1]))
-        Mz4 = E2 * (a4 * Vx + a3 * Vy + a1z) # relaxmat: 1 -> 4, save in buffer
-        Mz2 = a3 * Vx + a4 * Vy - a1z # flipmat: 2 -> decay_curve
+        c1z = shufflevector(c1F * Mz3, Val((1,0)))
+        Mz2 = muladd(c3, Vx, muladd(c4, Vy, -c1z)) # flipmat: 2 -> decay_curve
+        Mz4 = muladd(b4, Vx, muladd(b3, Vy, E2_half * c1z)) # relaxmat: 1 -> 4, save in buffer
 
         ###########################
         # decay_curve curve coefficient
-        decay_curve[i] = E2_half * sqrt(sum(Mz2 * Mz2))
+        decay_curve[i] = sqrt(sum(Mz2 * Mz2))
 
         # Unrolled flipmat/relaxmat iteration
-        Mz[1] = E2 * Mz2 # relaxmat: 2 -> 1
-        Mz3   = E1 * (a2 * Mz3 + a5 * Vec((Vx[2] - Vy[2], Vy[1] - Vx[1]))) # relaxmat: 3 -> 3, save in buffer
+        Mz[1] = E2_half * Mz2 # relaxmat: 2 -> 1
+        b5xy  = shufflevector(b5F * (Vx - Vy), Val((1,0)))
+        Mz3   = muladd(b2, Mz3, b5xy) # relaxmat: 3 -> 3, save in buffer
 
         ###########################
         # flipmat + relaxmat loop
-        @inbounds for j in 4:3:3*min(i+1, ETL)
+        @inbounds for j in 4:3:3*min(i-1, ETL)
             Vx, Vy, Vz = Mz[j], Mz[j+1], Mz[j+2]
-            a1z     = a1 * Vec((Vz[2], -Vz[1]))
-            tmp     = E2 * (a4 * Vx + a3 * Vy + a1z)
+            b1z     = shufflevector(b1F * Vz, Val((1,0)))
             Mz[j  ] = Mz4 # relaxmat: assign forward, j -> j+3
-            Mz4     = tmp
-            Mz[j-2] = E2 * (a3 * Vx + a4 * Vy - a1z) # relaxmat: assign backwards, j+1 -> j+1-3
-            Mz[j+2] = E1 * (a2 * Vz + a5 * Vec((Vx[2] - Vy[2], Vy[1] - Vx[1]))) # relaxmat: j+2 -> j+2
+            Mz4     = muladd(b4, Vx, muladd(b3, Vy,  b1z))
+            Mz[j-2] = muladd(b3, Vx, muladd(b4, Vy, -b1z)) # relaxmat: assign backwards, j+1 -> j+1-3
+            b5xy    = shufflevector(b5F * (Vx - Vy), Val((1,0)))
+            Mz[j+2] = muladd(b2, Vz, b5xy) # relaxmat: j+2 -> j+2
         end
+
+        ###########################
+        # cleanup + zero next elements
+        j  = 3i-2
+        Vx = Mz[j]
+        Mz[j  ] = Mz4 # relaxmat: assign forward, j -> j+3
+        Mz[j-2] = b3 * Vx # relaxmat: assign backwards, j+1 -> j+1-3
+        Mz[j+2] = shufflevector(b5F * Vx, Val((1,0))) # relaxmat: j+2 -> j+2
+        Mz[j+3] = b4 * Vx # relaxmat: assign forward, j -> j+3
+        Mz[j+1] = Vec((zero(T), zero(T))) # relaxmat: assign backwards, j+1 -> j+1-3
+        Mz[j+5] = Vec((zero(T), zero(T))) # relaxmat: j+2 -> j+2
     end
 
     ###########################
     # decay_curve curve coefficient
-    @inbounds V = a3 * Mz[1] + a4 * Mz[2] + a1 * Vec((-Mz3[2], Mz3[1])) # last iteration of flipmat unrolled
-    @inbounds decay_curve[end] = E2_half * sqrt(sum(V * V))
+    c1z = shufflevector(c1F * Mz3, Val((1,0)))
+    @inbounds Mz2 = muladd(c3, Mz[1], muladd(c4, Mz[2], -c1z)) # last iteration of flipmat unrolled
+    @inbounds decay_curve[end] = sqrt(sum(Mz2 * Mz2))
 
     return decay_curve
 end
 
 ####
-#### flipmat_relaxmat_action_slow!
+#### EPGdecaycurve_slow!
 ####
 
-function flipmat_relaxmat_action_slow!(decay_curve, Mz, ETL, T2mat_elements, E1, E2_half, E2)
+function EPGdecaycurve_work_slow(T, ETL)
+    Mz = SizedVector{3*ETL}(zeros(Complex{T}, 3*ETL))
+    decay_curve = SizedVector{ETL}(zeros(T, ETL))
+    return @ntuple(Mz, decay_curve)
+end
+
+function EPGdecaycurve_slow!(work, ETL::Int, flip_angle::T, TE::T, T2::T, T1::T, refcon::T) where {T}
+    # Unpack workspace
+    @unpack Mz, decay_curve = work
+    @assert ETL > 2 && length(Mz) == 3*ETL && length(decay_curve) == ETL
+    @inbounds Mz .= 0
+
+    # Precompute compute element flip matrices and other intermediate variables
+    E2, E1, E2_half = exp(-TE/T2), exp(-TE/T1), exp(-(TE/2)/T2)
+    T1mat = element_flipmat(flip_angle)
+    T2mat = element_flipmat(flip_angle * (refcon/180))
+    @inbounds T2mat_elements = ( # independent elements of T2mat
+       -imag(T2mat[1,3]), # sin(α)
+        real(T2mat[3,3]), # cos(α)
+        real(T2mat[2,1]), # sin(α/2)^2
+        real(T2mat[1,1]), # cos(α/2)^2
+       -imag(T2mat[3,1]), # sin(α)/2
+    )
+
+    # Initialize magnetization phase state vector (MPSV)
+    m0 = E2_half * sind(flip_angle/2) # initial population
+    M0 = SA{T}[m0, 0, 0] # initial magnetization in F1 state
+    M1 = T1mat * M0 # apply first refocusing pulse
+    @inbounds decay_curve[1] = E2_half * sqrt(abs2(M1[2])) # first echo amplitude
+
+    # Apply first relaxation matrix iteration on non-zero states
+    @inbounds Mz[1] = E2 * M1[2]
+    @inbounds Mz[2] = 0
+    @inbounds Mz[3] = E1 * M1[3]
+    @inbounds Mz[4] = E2 * M1[1]
+
+    # Perform flip-relax sequence ETL-1 times
+    @timeit_debug TIMER "Flip-Relax Sequence" begin
+        flipmat_relaxmat_action_slow!(decay_curve, Mz, T2mat_elements, E1, E2_half, E2)
+    end
+
+    return decay_curve
+end
+
+function flipmat_relaxmat_action_slow!(
+        decay_curve    :: SizedArray{Tuple{ETL}, T},
+        Mz             :: SizedArray{Tuple{ETL3}, Complex{T}},
+        T2mat_elements :: NTuple{5, T},
+        E1             :: T,
+        E2_half        :: T,
+        E2             :: T,
+    ) where {ETL,ETL3,T}
     @inbounds for i = 2:ETL
         # Perform the flip for all states
         flipmat_action!(Mz, min(i+1, ETL), T2mat_elements)

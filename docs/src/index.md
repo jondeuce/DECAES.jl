@@ -56,6 +56,14 @@ pkg> add https://github.com/jondeuce/DECAES.jl.git
 Once the package is finished installing, type the backspace key to exit the package manager REPL mode (the `julia>` prompt should reappear).
 Exit Julia using the keyboard shortcut `Ctrl+D`, or by typing `exit()`.
 
+## [Updating](@id updating)
+
+To update DECAES to the latest version, start `julia` from the command line, type `]` to enter the package manager REPL mode, and enter the following:
+
+```julia
+pkg> update DECAES
+```
+
 ## Table of contents
 
 ```@contents

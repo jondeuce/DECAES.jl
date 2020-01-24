@@ -157,11 +157,11 @@ function create_argparse_settings(;legacy = false)
 
     @add_arg_table settings begin
         "input"
-            help = "one or more input filenames. Valid file extensions are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
+            help = "one or more input filenames. Valid file types are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
             required = true
             nargs = '+' # At least one input is required
         "--mask"
-            help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. If only one mask is passed, it is used for all input files; otherwise, the number of masks must equal the number of input files. Valid file extensions are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
+            help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. The number of mask files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
             nargs = '+' # At least one input is required
         "--output", "-o"
             help = "output directory. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). Outputs are stored with the same basename as inputs and additional suffixes; see --T2map and --T2part"
@@ -244,8 +244,6 @@ function get_file_info(opts)
     # Get mask files
     maskfiles = if isempty(mask)
         fill(nothing, length(inputfiles))
-    elseif length(mask) == 1
-        String[mask[1] for _ in 1:length(inputfiles)]
     elseif length(mask) == length(inputfiles)
         String.(mask)
     else

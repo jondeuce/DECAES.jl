@@ -126,19 +126,21 @@ Records parameter maps and T2 distributions for further partitioning.
 - A series of optional keyword argument settings which will be used to construct a [`T2mapOptions`](@ref) struct internally, or a [`T2mapOptions`](@ref) struct directly
 
 # Outputs
-- `maps`: dictionary containing 3D, 4D, or 5D parameter maps with the following fields:
-    - `"gdn"`:        3D (MatrixSize)             General density = sum(T2distribution)
-    - `"ggm"`:        3D (MatrixSize)             General geometric mean
-    - `"gva"`:        3D (MatrixSize)             General variance
-    - `"fnr"`:        3D (MatrixSize)             Fit to noise ratio = gdn / sqrt(sum(residuals.^2) / (nTE-1))
-    - `"snr"`:        3D (MatrixSize)             Signal to noise ratio = maximum(signal) / std(residuals)
-    - `"alpha"`:      3D (MatrixSize)             Refocusing pulse flip angle
-    - `"resnorm"`:    3D (MatrixSize)             (optional) ``\\ell^2``-norm of NNLS fit residuals
-    - `"decaycurve"`: 4D (MatrixSize x nTE)       (optional) Decay curve resulting from NNLS fit
-    - `"mu"`:         3D (MatrixSize)             (optional) Regularization parameter from NNLS fit
-    - `"chi2factor"`: 3D (MatrixSize)             (optional) ``\\chi^2`` increase factor from NNLS fit
-    - `"decaybasis"`: 5D (MatrixSize x nTE x nT2) (optional) Decay basis from EPGdecaycurve
-- `distributions`: 4D (MatrixSize x nT2) array with data as `(row, column, slice, T2 amplitude)` containing T2 distributions.
+- `maps`: dictionary containing parameter maps with the following fields:
+    - **Default Fields**
+        - `"gdn"`:        General density = sum(T2distribution) (`MatrixSize` 3D array)
+        - `"ggm"`:        General geometric mean (`MatrixSize` 3D array)
+        - `"gva"`:        General variance (`MatrixSize` 3D array)
+        - `"fnr"`:        Fit to noise ratio = gdn / sqrt(sum(residuals.^2) / (nTE-1)) (`MatrixSize` 3D array)
+        - `"snr"`:        Signal to noise ratio = maximum(signal) / std(residuals) (`MatrixSize` 3D array)
+        - `"alpha"`:      Refocusing pulse flip angle (`MatrixSize` 3D array)
+    - **Optional Fields**
+        - `"resnorm"`:    ``\\ell^2``-norm of NNLS fit residuals; see `SaveResidualNorm` option (`MatrixSize` 3D array)
+        - `"decaycurve"`: Decay curve resulting from NNLS fit; see `SaveDecayCurve` option (`MatrixSize x nTE` 4D array)
+        - `"mu"`:         Regularization parameter from NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
+        - `"chi2factor"`: ``\\chi^2`` increase factor from NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
+        - `"decaybasis"`: Decay basis from EPGdecaycurve (`MatrixSize x nTE x nT2` 5D array)
+- `distributions`: T2-distribution array with data as `(row, column, slice, T2 amplitude)` (`MatrixSize x nT2` 4D array)
 
 # Examples
 ```julia-repl
