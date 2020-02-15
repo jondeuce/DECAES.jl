@@ -155,7 +155,7 @@ function create_argparse_settings(;legacy = false)
         # exc_handler = ArgParse.debug_handler,
     )
 
-    @add_arg_table settings begin
+    @add_arg_table! settings begin
         "input"
             help = "one or more input filenames. Valid file types are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
             required = true
@@ -182,20 +182,20 @@ function create_argparse_settings(;legacy = false)
             action = :store_true
     end
 
-    add_arg_group(settings,
+    add_arg_group!(settings,
         "T2mapSEcorr/T2partSEcorr arguments",
         "internal arguments",
     )
     t2map_opts = T2mapOptions{Float64}(nTE = 32, MatrixSize = (1,1,1), legacy = legacy)
     t2part_opts = T2partOptions{Float64}(nT2 = t2map_opts.nT2, MatrixSize = (1,1,1), legacy = legacy)
     opts_args = sorted_arg_table_entries(t2map_opts, t2part_opts)
-    add_arg_table(settings, opts_args...)
+    add_arg_table!(settings, opts_args...)
 
-    add_arg_group(settings,
+    add_arg_group!(settings,
         "BET arguments",
         "arguments for mask generation using BET",
     )
-    @add_arg_table settings begin
+    @add_arg_table! settings begin
         "--bet"
             help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and --bet will be ignored."
             action = :store_true
