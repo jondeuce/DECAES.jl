@@ -4,7 +4,7 @@
 Returns the regularized NNLS solution, X, of the equation
 
 ```math
-X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu||H x||_2^2
+X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu^2 ||H x||_2^2
 ```
 
 where ``H`` is the identity matrix and ``\\mu`` is chosen by the L-curve theory using the Generalized Cross-Validation method.
@@ -63,27 +63,27 @@ function lsqnonneg_lcurve!(work, C::AbstractMatrix{T}, d::AbstractVector{T}) whe
     d_smooth_top .= d; d_smooth_bottom .= 0
 
     # Find mu by minimizing the function G(mu) (GCV method)
-    mu = @timeit_debug TIMER "L-curve Optimization" begin
-        opt_result = Optim.optimize(μ -> lcurve_GCV(μ, C, d, work), T(0), T(0.1), Optim.Brent(); rel_tol = T(1e-6))
-        Optim.minimizer(opt_result)
+    @timeit_debug TIMER() "L-curve Optimization" begin
+        opt_result = Optim.optimize(μ -> lcurve_GCV(μ, C, d, work), eps(T), T(0.1), Optim.Brent(); rel_tol = T(1e-6))
+        mu = Optim.minimizer(opt_result)
     end
 
     # Compute the regularized solution
-    @timeit_debug TIMER "Reg. lsqnonneg!" begin
-        set_diag!(C_smooth_bottom, mu)
+    set_diag!(C_smooth_bottom, mu)
+    @timeit_debug TIMER() "Reg. lsqnonneg!" begin
         lsqnonneg!(nnls_work_smooth, C_smooth, d_smooth)
-        mul!(d_backproj, C, nnls_work_smooth.x)
-        resid .= d .- d_backproj
-        chi2_final = sum(abs2, resid)
     end
+    mul!(d_backproj, C, nnls_work_smooth.x)
+    resid .= d .- d_backproj
+    chi2_final = sum(abs2, resid)
 
     # Find non-regularized solution
-    @timeit_debug TIMER "Non-reg. lsqnonneg!" begin
+    @timeit_debug TIMER() "Non-reg. lsqnonneg!" begin
         lsqnonneg!(nnls_work, C, d)
-        mul!(d_backproj, C, nnls_work.x)
-        resid .= d .- d_backproj
-        chi2_min = sum(abs2, resid)
     end
+    mul!(d_backproj, C, nnls_work.x)
+    resid .= d .- d_backproj
+    chi2_min = sum(abs2, resid)
 
     # Assign output
     work.x .= nnls_work_smooth.x
@@ -98,36 +98,29 @@ function lcurve_GCV(μ, C, d, work)
     @unpack nnls_work_smooth, C_smooth, C_smooth_bottom, d_smooth = work
     @unpack A_mu, Ct_tmp, CtC_tmp = work
 
-    # C_smooth = [C; μ * I], d_smooth = [d; 0],
-    # X_reg = lsqnonneg(C_smooth, d_smooth), resid = d - C * X_reg
-    @timeit_debug TIMER "lsqnonneg!" begin
-        set_diag!(C_smooth_bottom, μ)
+    # C_smooth = [C; μ * I], d_smooth = [d; 0], X_reg = lsqnonneg(C_smooth, d_smooth), resid = d - C * X_reg
+    set_diag!(C_smooth_bottom, μ)
+    @timeit_debug TIMER() "lsqnonneg!" begin
         lsqnonneg!(nnls_work_smooth, C_smooth, d_smooth)
-        mul!(d_backproj, C, nnls_work_smooth.x)
-        resid .= d .- d_backproj
     end
+    mul!(d_backproj, C, nnls_work_smooth.x)
+    resid .= d .- d_backproj # d - C*X_reg
 
     # Efficient compution of
-    #   A_mu = C * (C'C + μ*I)^-1 * C'
+    #   A_mu = C * (C'C + μ^2*I)^-1 * C'
     # where the matrices have sizes
     #   C: (m,n), A_mu: (m,m), Ct_tmp: (n,m), CtC_tmp: (n,n)
-    @timeit_debug TIMER "A_mu" begin
+    @timeit_debug TIMER() "A_mu" begin
+        m, n = size(C)
         mul!(CtC_tmp, C', C) # C'C
-        @inbounds for i in 1:size(CtC_tmp,1)
-            CtC_tmp[i,i] += μ # C'C + μ*I
+        @inbounds for i in 1:n
+            CtC_tmp[i,i] += μ^2 # C'C + μ^2*I
         end
-        ldiv!(Ct_tmp, lu!(CtC_tmp), C') # (C'C + μ*I)^-1 * C'
-        mul!(A_mu, C, Ct_tmp) # C * (C'C + μ*I)^-1 * C'
+        ldiv!(Ct_tmp, cholesky!(Symmetric(CtC_tmp)), C') # (C'C + μ^2*I)^-1 * C'
+        mul!(A_mu, C, Ct_tmp) # C * (C'C + μ^2*I)^-1 * C'
+        trace = m - tr(A_mu) # tr(I - A_mu) = m - tr(A_mu) for m x m matrix A_mu
+        gcv = sum(abs2, resid) / trace^2 # ||C*X_reg - d||^2 / tr(I - A_mu)^2
     end
-
-    # Compute trace(I - A_mu), avoiding the matrix subtraction
-    trace = zero(eltype(A_mu))
-    @inbounds for i in 1:size(A_mu,1) # tr(I - A_mu)
-        trace += (1 - A_mu[i,i])
-    end
-
-    # Return ||C*X_reg - d||^2 / tr(I - A_mu)^2
-    gcv = sum(abs2, resid) / trace^2
 
     return gcv
 end

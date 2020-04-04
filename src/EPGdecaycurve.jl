@@ -1,3 +1,21 @@
+####
+#### Abstract Interface
+####
+
+abstract type AbstractEPGWorkspace{T,ETL} end
+
+struct EPGOptions{T,ETL}
+    flip_angle::T
+    TE::T
+    T2::T
+    T1::T
+    refcon::T
+end
+
+EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_Cplx(T, ETL::Int) # fallback
+EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: SIMD.FloatingTypes} = EPGWork_Vec(T, ETL::Int)
+# EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: SIMD.FloatingTypes} = EPGWork_Cplx_Vec_Unrolled(T, ETL::Int)
+
 """
     EPGdecaycurve(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)
 
@@ -15,87 +33,101 @@ using the extended phase graph algorithm using the given input parameters.
 # Outputs
 - `decay_curve::AbstractVector`: normalized echo decay curve with length `ETL`
 """
-EPGdecaycurve(ETL::Int, flip_angle::T, TE::T, T2::T, T1::T, refcon::T) where {T} =
-    EPGdecaycurve!(EPGdecaycurve_work(T, ETL), ETL, flip_angle, TE, T2, T1, refcon)
-
-function EPGdecaycurve_work(T, ETL)
-    Mz = SizedVector{3*ETL}(zeros(Vec{2,T}, 3*ETL))
-    decay_curve = SizedVector{ETL}(zeros(T, ETL))
-    return @ntuple(Mz, decay_curve)
+function EPGdecaycurve(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)
+    T = float(promote_type(typeof(flip_angle), typeof(TE), typeof(T2), typeof(T1), typeof(refcon)))
+    EPGdecaycurve!(EPGdecaycurve_work(T, ETL), EPGOptions{T,ETL}(flip_angle, TE, T2, T1, refcon))
 end
+EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, o::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve!(work.decay_curve, work, o)
+EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real) where {T,ETL} = EPGdecaycurve!(work.decay_curve, work, EPGOptions{T,ETL}(flip_angle, TE, T2, T1, refcon))
+EPGdecaycurve!(decay_curve::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real) where {T,ETL} = EPGdecaycurve!(decay_curve, work, EPGOptions{T,ETL}(flip_angle, TE, T2, T1, refcon))
 
-function EPGdecaycurve!(work, ETL::Int, flip_angle::T, TE::T, T2::T, T1::T, refcon::T) where {T}
-    # Unpack workspace
-    @unpack Mz, decay_curve = work
-    @assert ETL > 2 && length(Mz) == 3*ETL && length(decay_curve) == ETL
+function EPGdecaycurve!(decay_curve::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, o::EPGOptions{T,ETL}) where {T,ETL}
 
-    # Precompute compute element flip matrices and other intermediate variables
-    E2, E1, E2_half = exp(-TE/T2), exp(-TE/T1), exp(-(TE/2)/T2)
-    T1mat = element_flipmat(flip_angle)
-    T2mat = element_flipmat(flip_angle * (refcon/180))
-    @inbounds T2mat_elements = ( # independent elements of T2mat
-       -imag(T2mat[1,3]), # sin(α)
-        real(T2mat[3,3]), # cos(α)
-        real(T2mat[2,1]), # sin(α/2)^2
-        real(T2mat[1,1]), # cos(α/2)^2
-       -imag(T2mat[3,1]), # sin(α)/2
-    )
+    @timeit_debug TIMER() "Flip-Relax Sequence" begin
+        # Initialize decay_curve, workspace, etc. and return precomputed values for flipmat_relaxmat_action!
+        precomp = epg_setup!(decay_curve, work, o)
 
-    # Initialize magnetization phase state vector (MPSV)
-    m0 = E2_half * sind(flip_angle/2) # initial population
-    M1 = m0 * T1mat[:,1] # first refocusing pulse applied to [m0, 0, 0]
-    @inbounds decay_curve[1] = E2_half * sqrt(abs2(M1[2])) # first echo amplitude
-
-    # Apply first relaxation matrix iteration on non-zero states
-    @inbounds Mz[1] = E2 * Vec(reim(M1[2]))
-    @inbounds Mz[2] = zero(Vec{2,T})
-    @inbounds Mz[3] = E1 * Vec(reim(M1[3]))
-    @inbounds Mz[4] = E2 * Vec(reim(M1[1]))
-
-    # Perform flip-relax sequence ETL-1 times
-    @timeit_debug TIMER "Flip-Relax Sequence" begin
-        flipmat_relaxmat_action!(decay_curve, Mz, T2mat_elements, E1, E2_half, E2)
+        # Perform flip-relax sequence
+        flipmat_relaxmat_action!(decay_curve, work, precomp)
     end
 
     return decay_curve
 end
 
-# Element matrix for the effect of the refocusing pulse with angle
-# α (in degrees) on the magnetization state vector
-element_flipmat(α::T) where {T} = SA{Complex{T}}[
+####
+#### Helper functions
+####
+
+# Element matrix for refocusing pulse with angle α (in degrees); acts on the magnetization state vector (MPSV)
+@inline element_flipmat(α::T) where {T} = SA{Complex{T}}[
         cosd(α/2)^2    sind(α/2)^2 -im*sind(α);
         sind(α/2)^2    cosd(α/2)^2  im*sind(α);
     -im*sind(α)/2   im*sind(α)/2       cosd(α)]
 
 ####
-#### flipmat_relaxmat_action!
+#### EPGWork_Vec
 ####
 
-# Optimized function which combines flip matrix and
+# Optimized version which combines flip matrix and
 # relaxation matrix functions into one loop.
-# Combining these loop and using explicit SIMD.jl `Vec`
-# vector types instead of `Complex` values drastically
-# lowers execution time.
-# Since this function is called many times during T2mapSEcorr,
-# the micro-optimizations are worth it despite the loss of
-# code readability. See the `flipmat_relaxmat_action_slow!`
-# section below for a more readable implementation which
-# produces exactly the same result
+# Combining these loops and using explicit SIMD.jl `Vec`
+# vector types instead of `Complex` decreases execution time
+# by a factor of ~2.
+# As this function is called many times during T2mapSEcorr,
+# the micro-optimizations are worth the loss of code readability.
+# See the `EPGWork_Cplx` section below for a more readable
+# implementation which produces exactly the same result.
+
+struct EPGWork_Vec{T, ETL, MzType<:AbstractVector{Vec{2,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+    Mz::MzType
+    decay_curve::DCType
+    function EPGWork_Vec(T, ETL::Int)
+        Mz = SizedVector{3*ETL,Vec{2,T}}(zeros(Vec{2,T}, 3*ETL))
+        dc = SizedVector{ETL,T}(zeros(T, ETL))
+        new{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
+    end
+end
+
+@inline function epg_setup!(decay_curve::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, o::EPGOptions{T,ETL}) where {T,ETL}
+    # Unpack workspace
+    @unpack Mz = work
+    @unpack flip_angle, TE, T2, T1, refcon = o
+
+    # Initialize magnetization phase state vector (MPSV)
+    E2, E1, E2_half = exp(-TE/T2), exp(-TE/T1), exp(-(TE/2)/T2)
+    α1  = flip_angle # T1 flip angle
+    α2  = flip_angle * (refcon/180) # T2 flip angle
+    m0  = E2_half * sind(α1/2) # initial population
+    M1x =  m0 * cosd(α1/2)^2 # M1x, M1y, M1z are elements resulting from first refocusing pulse applied to [m0, 0, 0]
+    M1y =  m0 - M1x          # M1y = m0 * sind(α1/2)^2 = m0 - m0 * cosd(α1/2)^2 = m0 - M1x
+    M1z = -m0 * sind(α1)/2   # Note: this is the imaginary part
+    @inbounds decay_curve[1] = E2_half * abs(M1y) # first echo amplitude
+
+    # Apply first relaxation matrix iteration on non-zero states
+    @inbounds begin
+        Mz[1] = Vec((E2 * M1y, zero(T)))
+        Mz[2] = zero(Vec{2,T})
+        Mz[3] = Vec((zero(T), E1 * M1z))
+        Mz[4] = Vec((E2 * M1x, zero(T)))
+    end
+
+    return @ntuple(α2, E1, E2_half, E2)
+end
+
 @inline function flipmat_relaxmat_action!(
-        decay_curve    :: SizedArray{Tuple{ETL}, T},
-        Mz             :: SizedArray{Tuple{ETL3}, Vec{2,T}},
-        T2mat_elements :: NTuple{5, T},
-        E1             :: T,
-        E2_half        :: T,
-        E2             :: T,
-    ) where {ETL,ETL3,T}
+        decay_curve    :: AbstractVector{T},
+        work           :: EPGWork_Vec{T,ETL},
+        precomp,
+    ) where {T,ETL}
 
     ###########################
     # Extract matrix elements + initialize temporaries
-    a1, a2, a3, a4, a5 = T2mat_elements
+    @unpack α2, E1, E2_half, E2 = precomp
+    a1, a2, a3, a4, a5 = sind(α2), cosd(α2), sind(α2/2)^2, cosd(α2/2)^2, sind(α2)/2 # independent elements of T2mat
     b1, b2, b3, b4, b5 = E2*a1, E1*a2, E2*a3, E2*a4, E1*a5
     c1, c3, c4 = E2_half*a1, E2_half*a3, E2_half*a4
     b1F, b5F, c1F = Vec((-b1, b1)), Vec((-b5, b5)), Vec((-c1, c1))
+    @unpack Mz = work
     @inbounds Mz3 = Mz[3]
 
     @inbounds for i = 2:ETL-1
@@ -149,20 +181,37 @@ element_flipmat(α::T) where {T} = SA{Complex{T}}[
 end
 
 ####
-#### EPGdecaycurve_slow!
+#### EPGWork_Cplx and EPGWork_Cplx_Vec_Unrolled
 ####
 
-function EPGdecaycurve_work_slow(T, ETL)
-    Mz = SizedVector{3*ETL}(zeros(Complex{T}, 3*ETL))
-    decay_curve = SizedVector{ETL}(zeros(T, ETL))
-    return @ntuple(Mz, decay_curve)
+struct EPGWork_Cplx{T, ETL, MzType<:AbstractVector{Complex{T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+    Mz::MzType
+    decay_curve::DCType
+    function EPGWork_Cplx(T, ETL::Int)
+        Mz = SizedVector{3*ETL,Complex{T}}(zeros(Complex{T}, 3*ETL))
+        dc = SizedVector{ETL,T}(zeros(T, ETL))
+        new{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
+    end
 end
 
-function EPGdecaycurve_slow!(work, ETL::Int, flip_angle::T, TE::T, T2::T, T1::T, refcon::T) where {T}
+struct EPGWork_Cplx_Vec_Unrolled{T, ETL, MzType<:AbstractVector{Complex{T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+    Mz::MzType
+    decay_curve::DCType
+    function EPGWork_Cplx_Vec_Unrolled(T, ETL::Int)
+        Mz = SizedVector{3*ETL,Complex{T}}(zeros(Complex{T}, 3*ETL))
+        dc = SizedVector{ETL,T}(zeros(T, ETL))
+        new{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
+    end
+end
+
+@inline function epg_setup!(
+        decay_curve::AbstractVector{T},
+        work::Union{EPGWork_Cplx{T,ETL}, EPGWork_Cplx_Vec_Unrolled{T,ETL}},
+        o::EPGOptions{T,ETL},
+    ) where {T,ETL}
     # Unpack workspace
-    @unpack Mz, decay_curve = work
-    @assert ETL > 2 && length(Mz) == 3*ETL && length(decay_curve) == ETL
-    @inbounds Mz .= 0
+    @unpack Mz = work
+    @unpack flip_angle, TE, T2, T1, refcon = o
 
     # Precompute compute element flip matrices and other intermediate variables
     E2, E1, E2_half = exp(-TE/T2), exp(-TE/T1), exp(-(TE/2)/T2)
@@ -183,112 +232,76 @@ function EPGdecaycurve_slow!(work, ETL::Int, flip_angle::T, TE::T, T2::T, T1::T,
     @inbounds decay_curve[1] = E2_half * sqrt(abs2(M1[2])) # first echo amplitude
 
     # Apply first relaxation matrix iteration on non-zero states
-    @inbounds Mz[1] = E2 * M1[2]
-    @inbounds Mz[2] = 0
-    @inbounds Mz[3] = E1 * M1[3]
-    @inbounds Mz[4] = E2 * M1[1]
-
-    # Perform flip-relax sequence ETL-1 times
-    @timeit_debug TIMER "Flip-Relax Sequence" begin
-        flipmat_relaxmat_action_slow!(decay_curve, Mz, T2mat_elements, E1, E2_half, E2)
+    @inbounds begin
+        Mz[1] = E2 * M1[2]
+        Mz[2] = 0
+        Mz[3] = E1 * M1[3]
+        Mz[4] = E2 * M1[1]
+        Mz[5] = 0
+        Mz[6] = 0
     end
 
-    return decay_curve
+    return @ntuple(T2mat_elements, E1, E2_half, E2)
 end
 
-function flipmat_relaxmat_action_slow!(
-        decay_curve    :: SizedArray{Tuple{ETL}, T},
-        Mz             :: SizedArray{Tuple{ETL3}, Complex{T}},
-        T2mat_elements :: NTuple{5, T},
-        E1             :: T,
-        E2_half        :: T,
-        E2             :: T,
-    ) where {ETL,ETL3,T}
+@inline function flipmat_relaxmat_action!(
+        decay_curve::AbstractVector{T},
+        work::Union{EPGWork_Cplx{T,ETL}, EPGWork_Cplx_Vec_Unrolled{T,ETL}},
+        precomp,
+    ) where {T,ETL}
+
+    @unpack Mz = work
+    @unpack E2_half = precomp
+
     @inbounds for i = 2:ETL
         # Perform the flip for all states
-        flipmat_action!(Mz, min(i+1, ETL), T2mat_elements)
+        flipmat_action!(work, precomp, i)
 
-        # Record the magnitude of the population of F1* as the echo amplitude
-        # and allow for relaxation
+        # Record the magnitude of the population of F1* as the echo amplitude, allowing for relaxation
         decay_curve[i] = E2_half * sqrt(abs2(Mz[2]))
 
         # Allow time evolution of magnetization between pulses
-        relaxmat_action!(Mz, min(i+1, ETL), E2, E1)
+        (i < ETL) && relaxmat_action!(work, precomp, min(i+1, ETL))
     end
+
     return decay_curve
 end
 
-# Computes the action of the transition matrix that describes the effect of the refocusing pulse
-# on the magnetization phase state vector, as given by Hennig (1988), but corrected by Jones (1997)
-# 
-# The below implementation is heavily micro-optimized, but is exactly equivilant to the
-# following pseudo-code loop:
-# 
-#   for each complex magnetization vector M
-#       M <-- T2mat * M
-#   end for
-# 
-# where T2mat is complex flip matrix from `element_flipmat`
-@inline function flipmat_action!(Mz::AbstractVector{Complex{T}}, nStates, T2mat_elements) where {T}
-    @assert 3*nStates <= length(Mz)
+#### EPGWork_Cplx
 
-    # # Basic loop: load in complex SVector, do multiplication, assign to Mz
-    # @inbounds @simd for j in 1:3:3*nStates
-    #     m = SVector{3,Complex{T}}((Mz[j], Mz[j+1], Mz[j+2]))
-    #     m = T2mat * m
-    #     Mz[j], Mz[j+1], Mz[j+2] = m
-    # end
-    
-    # Optimized loop: use explicity SIMD vector units from SIMD.jl
-    # to ensure full use of vector instructions and specialize on structure
-    # of `element_flipmat`
+@inline function flipmat_action!(work::EPGWork_Cplx{T,ETL}, precomp, nStates::Int) where {T,ETL}
+    @unpack Mz = work
+    @unpack T2mat_elements = precomp
     s_α, c_α, s_½α_sq, c_½α_sq, s_α_½ = T2mat_elements
-    @inbounds @simd for j in 1:3:3*nStates
-        Vmx = Vec(reim(Mz[j  ]))
-        Vmy = Vec(reim(Mz[j+1]))
-        Vmz = Vec(reim(Mz[j+2]))
-        s_α_Vtmp   = s_α * Vec((Vmz[2], -Vmz[1]))
-        s_α_½_Vtmp = s_α_½ * Vec((Vmx[2] - Vmy[2], Vmy[1] - Vmx[1]))
-        Vm         = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy,  s_α_Vtmp))
-        Mz[j]      = Complex(Vm[1], Vm[2])
-        Vm         = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy, -s_α_Vtmp))
-        Mz[j+1]    = Complex(Vm[1], Vm[2])
-        Vm         = muladd(c_α, Vmz, s_α_½_Vtmp)
-        Mz[j+2]    = Complex(Vm[1], Vm[2])
+
+    @inbounds @simd for j in 1:3:3*nStates-2
+        Vmx, Vmy, Vmz = Mz[j], Mz[j+1], Mz[j+2]
+        ms_α_Vtmp  = s_α * mul_im(Vmz)
+        s_α_½_Vtmp = s_α_½ * mul_im(Vmy - Vmx)
+        Mz[j]      = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy, -ms_α_Vtmp))
+        Mz[j+1]    = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy,  ms_α_Vtmp))
+        Mz[j+2]    = muladd(c_α, Vmz, s_α_½_Vtmp)
     end
 
-    # # Twice loop-unrolled version of above loop:
-    # #     NOTE: currently not working
-    # s_α, c_α, s_½α_sq, c_½α_sq, s_α_½ = T2mat_elements
-    # @inbounds @simd for j in 1:6:3*nStates
-    #     Vmx = Vec((reim(Mz[j  ])..., reim(Mz[j+3])...))
-    #     Vmy = Vec((reim(Mz[j+1])..., reim(Mz[j+4])...))
-    #     Vmz = Vec((reim(Mz[j+2])..., reim(Mz[j+5])...))
-    #     s_α_Vtmp   = s_α * Vec((Vmz[2], -Vmz[1], Vmz[4], -Vmz[3]))
-    #     s_α_½_Vtmp = s_α_½ * Vec((Vmx[2] - Vmy[2], Vmy[1] - Vmx[1], Vmx[4] - Vmy[4], Vmy[3] - Vmx[3]))
-    #     VMx        = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy,  s_α_Vtmp))
-    #     VMy        = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy, -s_α_Vtmp))
-    #     VMz        = muladd(c_α, Vmz, s_α_½_Vtmp)
-    #     Mz[j  ]    = Complex(VMx[1], VMx[2])
-    #     Mz[j+1]    = Complex(VMy[1], VMy[2])
-    #     Mz[j+2]    = Complex(VMz[1], VMz[2])
-    #     Mz[j+3]    = Complex(VMx[3], VMx[4])
-    #     Mz[j+4]    = Complex(VMy[3], VMy[4])
-    #     Mz[j+5]    = Complex(VMz[3], VMz[4])
-    # end
+    # Zero out next elements
+    if nStates+1 < ETL
+        j = 3*nStates+1
+        @inbounds Mz[j]   = 0
+        @inbounds Mz[j+1] = 0
+        @inbounds Mz[j+2] = 0
+    end
 
     return Mz
 end
 
-# Computes the action of the relaxation matrix that describes the time evolution of the
-# magnetization phase state vector after each refocusing pulse as described by Hennig (1988)
-@inline function relaxmat_action!(Mz::AbstractVector{Complex{T}}, nStates, E2, E1) where {T}
-    @assert 3*nStates <= length(Mz)
+@inline function relaxmat_action!(work::EPGWork_Cplx{T,ETL}, precomp, nStates::Int) where {T,ETL}
+    @unpack Mz = work
+    @unpack E2, E1 = precomp
 
     # Basic relaxation matrix loop:
     @inbounds mprev = Mz[1]
     @inbounds Mz[1] = E2 * Mz[2] # F1* --> F1
-    @inbounds @simd for j in 2:3:3*(nStates-1)
+    @inbounds @simd for j in 2:3:3*nStates-4
         m1, m2, m3 = Mz[j+1], Mz[j+2], Mz[j+3]
         mtmp  = m2
         m0    = E2 * m3     # F(n)* --> F(n-1)*
@@ -297,34 +310,109 @@ end
         mprev = mtmp
         Mz[j], Mz[j+1], Mz[j+2] = m0, m1, m2
     end
-    @inbounds Mz[end-1]  = 0
-    @inbounds Mz[end  ] *= E1
-
-    # # Twice loop-unrolled version of above loop:
-    # #     NOTE: currently not working
-    # @inbounds mprev = Mz[1]
-    # @inbounds Mz[1] = E2 * Mz[2] # F1* --> F1
-    # @inbounds @simd for j in 2:6:6*(nStates÷2-1)
-    #     m1, m2, m3, m4, m5, m6 = Mz[j+1], Mz[j+2], Mz[j+3], Mz[j+4], Mz[j+5], Mz[j+6]
-    #     m0    = E2 * m3     # F(n)* --> F(n-1)*
-    #     m1   *= E1          # Z(n)  --> Z(n)
-    #     mtmp2 = m2
-    #     m2    = E2 * mprev  # F(n)  --> F(n+1)
-    #     m3    = E2 * m6     # F(n)* --> F(n-1)*
-    #     m4   *= E1          # Z(n)  --> Z(n)
-    #     mtmp5 = m5
-    #     m5    = E2 * mtmp2  # F(n)  --> F(n+1)
-    #     mprev = mtmp5
-    #     Mz[j], Mz[j+1], Mz[j+2], Mz[j+3], Mz[j+4], Mz[j+5] = m0, m1, m2, m3, m4, m5
-    # end
-    # @inbounds if iseven(length(Mz)÷3)
-    #     # Last state handled manually, if necessary
-    #     Mz[end-4]  = E2 * Mz[end-1] # F(n)* --> F(n-1)*
-    #     Mz[end-3] *= E1             # Z(n)  --> Z(n)
-    #     Mz[end-2]  = E2 * mprev     # F(n)  --> F(n+1)
-    # end
-    # @inbounds Mz[end-1]  = 0
-    # @inbounds Mz[end  ] *= E1
 
     return Mz
 end
+
+#### EPGWork_Cplx_Vec_Unrolled
+
+@inline function flipmat_action!(work::EPGWork_Cplx_Vec_Unrolled{T,ETL}, precomp, nStates::Int) where {T,ETL}
+    @unpack Mz = work
+    @unpack T2mat_elements = precomp
+    s_α, c_α, s_½α_sq, c_½α_sq, s_α_½ = T2mat_elements
+
+    # Twice loop-unrolled flip-matrix loop
+    s_α, c_α, s_½α_sq, c_½α_sq, s_α_½ = T2mat_elements
+    Vs_α = Vec((-s_α, s_α, -s_α, s_α))
+    Vs_α_½ = Vec((-s_α_½, s_α_½, -s_α_½, s_α_½))
+    @inbounds @simd for j in 1:6:3*nStates-5 # 1+(0:3*(n-2))
+        Vmx = Vec((reim(Mz[j  ])..., reim(Mz[j+3])...))
+        Vmy = Vec((reim(Mz[j+1])..., reim(Mz[j+4])...))
+        Vmz = Vec((reim(Mz[j+2])..., reim(Mz[j+5])...))
+        s_α_Vtmp   = shufflevector(Vs_α * Vmz, Val((1,0,3,2)))
+        s_α_½_Vtmp = shufflevector(Vs_α_½ * (Vmx - Vmy), Val((1,0,3,2)))
+        VMx        = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy,  s_α_Vtmp))
+        VMy        = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy, -s_α_Vtmp))
+        VMz        = muladd(c_α, Vmz, s_α_½_Vtmp)
+        Mz[j  ]    = Complex(VMx[1], VMx[2])
+        Mz[j+1]    = Complex(VMy[1], VMy[2])
+        Mz[j+2]    = Complex(VMz[1], VMz[2])
+        Mz[j+3]    = Complex(VMx[3], VMx[4])
+        Mz[j+4]    = Complex(VMy[3], VMy[4])
+        Mz[j+5]    = Complex(VMz[3], VMz[4])
+    end
+    if isodd(nStates)
+        @inbounds begin
+            j = 3*nStates-2
+            Vmx, Vmy, Vmz = Mz[j], Mz[j+1], Mz[j+2]
+            ms_α_Vtmp  = s_α * mul_im(Vmz)
+            s_α_½_Vtmp = s_α_½ * mul_im(Vmy - Vmx)
+            Mz[j]      = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy, -ms_α_Vtmp))
+            Mz[j+1]    = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy,  ms_α_Vtmp))
+            Mz[j+2]    = muladd(c_α, Vmz, s_α_½_Vtmp)
+        end
+    end
+
+    # Zero out next elements
+    if nStates+1 < ETL
+        j = 3*nStates+1
+        @inbounds Mz[j]   = 0
+        @inbounds Mz[j+1] = 0
+        @inbounds Mz[j+2] = 0
+    end
+
+    return Mz
+end
+
+@inline function relaxmat_action!(work::EPGWork_Cplx_Vec_Unrolled{T,ETL}, precomp, nStates::Int) where {T,ETL}
+    @unpack Mz = work
+    @unpack E2, E1 = precomp
+
+    # Twice loop-unrolled version of above loop
+    @inbounds mprev = Mz[1]
+    @inbounds Mz[1] = E2 * Mz[2] # F1* --> F1
+    @inbounds @simd for j in 2:6:3*nStates-7
+        m1, m2, m3, m4, m5, m6 = Mz[j+1], Mz[j+2], Mz[j+3], Mz[j+4], Mz[j+5], Mz[j+6]
+        m0    = E2 * m3     # F(n)* --> F(n-1)*
+        m1   *= E1          # Z(n)  --> Z(n)
+        mtmp2 = m2
+        m2    = E2 * mprev  # F(n)  --> F(n+1)
+        m3    = E2 * m6     # F(n)* --> F(n-1)*
+        m4   *= E1          # Z(n)  --> Z(n)
+        mtmp5 = m5
+        m5    = E2 * mtmp2  # F(n)  --> F(n+1)
+        mprev = mtmp5
+        Mz[j], Mz[j+1], Mz[j+2], Mz[j+3], Mz[j+4], Mz[j+5] = m0, m1, m2, m3, m4, m5
+    end
+    if iseven(nStates)
+        @inbounds begin
+            j = 3*nStates-4
+            m1, m2, m3 = Mz[j+1], Mz[j+2], Mz[j+3]
+            m0    = E2 * m3     # F(n)* --> F(n-1)*
+            m1   *= E1          # Z(n)  --> Z(n)
+            m2    = E2 * mprev  # F(n)  --> F(n+1)
+            Mz[j], Mz[j+1], Mz[j+2] = m0, m1, m2
+        end
+    end
+
+    return Mz
+end
+
+# Computing the action of the transition matrix that describes the effect of the refocusing pulse
+# on the magnetization phase state vector, as given by Hennig (1988), but corrected by Jones (1997):
+# 
+#   for each complex magnetization vector M
+#       M <-- T2mat * M
+#   end for
+# 
+# where T2mat is complex flip matrix from `element_flipmat`
+
+# Basic loop: load in complex SVector, do multiplication, assign to Mz
+# @inbounds @simd for j in 1:3:3*nStates-2
+#     m = SVector{3,Complex{T}}((Mz[j], Mz[j+1], Mz[j+2]))
+#     m = T2mat * m
+#     Mz[j], Mz[j+1], Mz[j+2] = m
+# end
+
+# Computes the action of the relaxation matrix that describes the time evolution of the
+# magnetization phase state vector after each refocusing pulse as described by Hennig (1988)

@@ -7,7 +7,7 @@ The main decomposition method used is a regularized nonnegative inverse Laplace 
 This method involves solving the regularized nonnegative least squares (NNLS) inverse problem
 
 ```math
-X = \mathrm{argmin}_{x \ge 0} ||Cx - d||_2^2 + \mu||x||_2^2
+X = \mathrm{argmin}_{x \ge 0} ||Cx - d||_2^2 + \mu^2 ||x||_2^2
 ```
 
 where $d$ is the signal magnitude data, $C$ is a matrix of exponential decay bases, and $\mu$ is a regularization parameter.

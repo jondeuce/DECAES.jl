@@ -70,7 +70,7 @@ function main(command_line_args::Vector{String} = ARGS)
                         !quiet)
 
                     # Apply mask
-                    if maskfile !== nothing
+                    if !isnothing(maskfile)
                         @showtime(
                             try_apply_maskfile!(image, maskfile),
                             "Applying mask from file: '$maskfile'",
@@ -235,7 +235,7 @@ function get_file_info(opts)
     end
 
     # Get output folders
-    outputfolders = if output === nothing
+    outputfolders = if isnothing(output)
         dirname.(inputfiles)
     else
         [output for _ in 1:length(inputfiles)]
@@ -270,7 +270,7 @@ function load_image(filename, ::Val{dim} = Val(4)) where {dim}
         
         # Load first `dim`-dimensional array which is found, or throw an error if none are found
         key = findfirst(x -> x isa AbstractArray{T,dim} where {T}, data)
-        if key === nothing
+        if isnothing(key)
             error("No 4D array was found in the input file: $filename")
         end
         data[key]
@@ -383,7 +383,7 @@ function sorted_arg_table_entries(options...)
             push!(args, Dict(:action => ifelse(v, :store_false, :store_true)))
         elseif T <: Union{<:Tuple, Nothing}
             nargs = length(fieldtypes(_get_tuple_type(T)))
-            if v === nothing
+            if isnothing(v)
                 push!(args, Dict(:nargs => nargs, :default => v))
             else
                 push!(args, Dict(:nargs => nargs, :default => [v...]))
@@ -409,7 +409,7 @@ function get_parsed_args_subset(opts::Dict{Symbol,Any}, subset_fieldtypes::Dict{
             end
         elseif v isa AbstractVector # convert AbstractVector v to appropriate Tuple type
             if isempty(v)
-                delete!(kwargs, k) # default v === nothing for a Tuple type results in an empty vector
+                delete!(kwargs, k) # default v = nothing for a Tuple type results in an empty vector
             else
                 T = _get_tuple_type(subset_fieldtypes[k])
                 kwargs[k] = tuple(_parse_or_convert.(fieldtypes(T), v)...) # each element should be individually parsed
@@ -418,13 +418,3 @@ function get_parsed_args_subset(opts::Dict{Symbol,Any}, subset_fieldtypes::Dict{
     end
     return kwargs
 end
-
-# Global constants and settings computed during precompilation
-const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz")
-const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
-
-const ARGPARSE_SETTINGS = create_argparse_settings(legacy = false)
-const ARGPARSE_SETTINGS_LEGACY = create_argparse_settings(legacy = true)
-
-const T2MAP_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2mapOptions{Float64}) .=> fieldtypes(T2mapOptions{Float64}))
-const T2PART_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2partOptions{Float64}) .=> fieldtypes(T2partOptions{Float64}))

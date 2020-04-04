@@ -1,120 +1,4 @@
 """
-    T2mapOptions(; <keyword arguments>)
-
-Options structure for [`T2mapSEcorr`](@ref).
-This struct collects keyword arguments passed to `T2mapSEcorr`, performs checks on parameter types and values, and assigns default values to unspecified parameters.
-
-# Arguments
-- `MatrixSize`:       size of first 3 dimensions of input 4D image. This argument is has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`
-- `nTE`:              number of echoes in input signal. This argument is has no default, but is inferred automatically as `size(image, 4)` when calling `T2mapSEcorr(image; kwargs...)`
-- `TE`:               interecho spacing (Default: `10e-3`, Units: seconds)
-- `T1`:               assumed value of T1 (Default: `1.0`, Units: seconds)
-- `Threshold`:        first echo intensity cutoff for empty voxels (Default: `200.0`)
-- `Chi2Factor`:       constraint on ``\\chi^2`` used for regularization when `Reg == "chi2"` (Default: `1.02`)
-- `nT2`:              number of T2 times to use (Default: `40`)
-- `T2Range`:          min and max T2 values (Default: `(10e-3, 2.0)`, Units: seconds)
-- `RefConAngle`:      refocusing pulse control angle (Default: `180.0`, Units: degrees)
-- `MinRefAngle`:      minimum refocusing angle for flip angle optimization (Default: `50.0`, Units: degrees)
-- `nRefAngles`:       during flip angle optimization, goodness of fit is checked for up to `nRefAngles` angles in the range `[MinRefAngle, 180]`. The optimal angle is then determined through interpolation from these samples (Default: `32`)
-- `nRefAnglesMin`:    initial number of angles to check during flip angle optimization before refinement near likely optima; `nRefAnglesMin == nRefAngles` forces all angles to be checked (Default: `5`)
-- `Reg`:              regularization routine to use:
-    - `"no"`:         no regularization of solution
-    - `"chi2"`:       use `Chi2Factor` based regularization (Default)
-    - `"lcurve"`:     use L-Curve based regularization
-- `SetFlipAngle`:     instead of optimizing flip angle, use this flip angle for all voxels (Default: `nothing`, Units: degrees)
-- `SaveResidualNorm`: `true`/`false` option to include a 3D array of the ``\\ell^2``-norms of the residuals from the NNLS fits in the output maps dictionary (Default: `false`)
-- `SaveDecayCurve`:   `true`/`false` option to include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary (Default: `false`)
-- `SaveRegParam`:     `true`/`false` option to include 3D arrays of the regularization parameters ``\\mu`` and resulting ``\\chi^2``-factors in the output maps dictionary (Default: `false`)
-- `SaveNNLSBasis`:    `true`/`false` option to include a 4D array of NNLS basis matrices in the output maps dictionary (Default: `false`)
-!!! note
-    The 4D array that is saved when `SaveNNLSBasis` is set to `true` has dimensions `MatrixSize x nTE x nT2`,
-    and therefore is typically extremely large; by default, it is `nT2 = 40` times the size of the input image.
-- `Silent`:         suppress printing to the console (Default: `false`)
-
-See also:
-* [`T2mapSEcorr`](@ref)
-"""
-@with_kw_noshow struct T2mapOptions{T} @deftype T
-    legacy::Bool = false
-
-    MatrixSize::NTuple{3,Int}
-    @assert all(MatrixSize .>= 1)
-
-    nTE::Int
-    @assert nTE >= 4
-
-    TE = 0.010 # seconds
-    @assert 0.0 < TE
-
-    vTEparam::Union{Tuple{T,T,Int}, Nothing} = nothing
-    @assert vTEparam isa Nothing || begin
-        TE1 = vTEparam[1]; TE2 = vTEparam[2]; nTE1 = vTEparam[3]
-        TE1 < TE2 && nTE1 < nTE && TE1 * round(Int, TE2/TE1) ≈ TE2
-    end
-    @assert vTEparam === nothing || error("Variable TE is not implemented")
-
-    T1 = 1.0 # seconds
-    @assert 0.0 < T1
-
-    Threshold = 200.0 # magnitude signal intensity
-    @assert Threshold >= 0.0
-
-    Chi2Factor = 1.02
-    @assert Chi2Factor > 1
-
-    nT2::Int = 40
-    @assert 10 <= nT2 <= 120
-
-    T2Range::NTuple{2,T} = !legacy ? (0.01, 2.0) : (0.015, 2.0) # seconds
-    @assert 0.0 < T2Range[1] < T2Range[2]
-
-    RefConAngle = 180.0 # degrees
-    @assert 0.0 <= RefConAngle <= 180.0
-
-    MinRefAngle = 50.0 # degrees
-    @assert 0.0 <= MinRefAngle <= 180.0
-
-    nRefAngles::Int = !legacy ? 32 : 8
-    @assert nRefAngles >= 2
-
-    nRefAnglesMin::Int = !legacy ? min(5, nRefAngles) : nRefAngles
-    @assert 2 <= nRefAnglesMin <= nRefAngles
-
-    Reg::String = "chi2"
-    @assert Reg ∈ ("no", "chi2", "lcurve")
-
-    SetFlipAngle::Union{T,Nothing} = nothing
-    @assert SetFlipAngle isa Nothing || 0.0 < SetFlipAngle <= 180.0
-
-    SaveResidualNorm::Bool = false
-
-    SaveDecayCurve::Bool = false
-
-    SaveRegParam::Bool = false
-
-    SaveNNLSBasis::Bool = false
-
-    Silent::Bool = false
-end
-T2mapOptions(args...; kwargs...) = T2mapOptions{Float64}(args...; kwargs...)
-T2mapOptions(image::Array{T,4}; kwargs...) where {T} = T2mapOptions{T}(;MatrixSize = size(image)[1:3], nTE = size(image)[4], kwargs...)
-
-function _show_string(o::T2mapOptions)
-    io = IOBuffer()
-    print(io, "T2-Distribution analysis settings:")
-    fields = fieldnames(typeof(o))
-    fields = fields[sortperm(uppercase.(string.([fields...])))] # sort alphabetically, ignoring case
-    padlen = 1 + maximum(f -> length(string(f)), fields)
-    for f in fields
-        (f == :legacy || f == :vTEparam) && continue # skip
-        print(io, "\n$(lpad(rpad(f, padlen), padlen + 4)): $(getfield(o,f))")
-    end
-    return String(take!(io))
-end
-# Base.show(io::IO, o::T2mapOptions) = print(io, _show_string(o))
-Base.show(io::IO, ::MIME"text/plain", o::T2mapOptions) = print(io, _show_string(o))
-
-"""
     T2mapSEcorr(image; <keyword arguments>)
     T2mapSEcorr(image, opts::T2mapOptions)
 
@@ -128,18 +12,22 @@ Records parameter maps and T2 distributions for further partitioning.
 # Outputs
 - `maps`: dictionary containing parameter maps with the following fields:
     - **Default Fields**
-        - `"gdn"`:        General density = sum(T2distribution) (`MatrixSize` 3D array)
-        - `"ggm"`:        General geometric mean (`MatrixSize` 3D array)
-        - `"gva"`:        General variance (`MatrixSize` 3D array)
-        - `"fnr"`:        Fit to noise ratio = gdn / sqrt(sum(residuals.^2) / (nTE-1)) (`MatrixSize` 3D array)
-        - `"snr"`:        Signal to noise ratio = maximum(signal) / std(residuals) (`MatrixSize` 3D array)
-        - `"alpha"`:      Refocusing pulse flip angle (`MatrixSize` 3D array)
+        - `"echotimes"`     Echo times of time signal (length `nTE` 1D array)
+        - `"t2times"`       T2 times corresponding to T2-distributions (length `nT2` 1D array)
+        - `"refangleset"`   Refocusing angles used during flip angle optimization (length `nRefAngles` 1D array by default; scalar if `SetFlipAngle` is used)
+        - `"decaybasisset"` Decay basis sets corresponding to `"refangleset"` (`nTE x nT2 x nRefAngles` 3D array by default; `nTE x nT2` 2D array if `SetFlipAngle` is used)
+        - `"gdn"`:          Map of general density = sum(T2distribution) (`MatrixSize` 3D array)
+        - `"ggm"`:          Map of general geometric mean of T2-distribution (`MatrixSize` 3D array)
+        - `"gva"`:          Map of general variance (`MatrixSize` 3D array)
+        - `"fnr"`:          Map of fit to noise ratio = gdn / sqrt(sum(residuals.^2) / (nTE-1)) (`MatrixSize` 3D array)
+        - `"snr"`:          Map of signal to noise ratio = maximum(signal) / std(residuals) (`MatrixSize` 3D array)
+        - `"alpha"`:        Map of optimized refocusing pulse flip angle (`MatrixSize` 3D array)
     - **Optional Fields**
-        - `"resnorm"`:    ``\\ell^2``-norm of NNLS fit residuals; see `SaveResidualNorm` option (`MatrixSize` 3D array)
-        - `"decaycurve"`: Decay curve resulting from NNLS fit; see `SaveDecayCurve` option (`MatrixSize x nTE` 4D array)
-        - `"mu"`:         Regularization parameter from NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
-        - `"chi2factor"`: ``\\chi^2`` increase factor from NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
-        - `"decaybasis"`: Decay basis from EPGdecaycurve (`MatrixSize x nTE x nT2` 5D array)
+        - `"resnorm"`:      ``\\ell^2``-norm of NNLS fit residuals; see `SaveResidualNorm` option (`MatrixSize` 3D array)
+        - `"decaycurve"`:   Signal decay curve resulting from NNLS fit; see `SaveDecayCurve` option (`MatrixSize x nTE` 4D array)
+        - `"mu"`:           Regularization parameter used during from NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
+        - `"chi2factor"`:   ``\\chi^2`` increase factor relative to unregularized NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
+        - `"decaybasis"`:   Decay bases resulting from flip angle optimization; see `SaveNNLSBasis` option (`MatrixSize x nTE x nT2` 5D array, or `nTE x nT2` 2D array if `SetFlipAngle` is used)
 - `distributions`: T2-distribution array with data as `(row, column, slice, T2 amplitude)` (`MatrixSize x nT2` 4D array)
 
 # Examples
@@ -149,13 +37,17 @@ julia> image = DECAES.mock_image(MatrixSize = (100,100,1), nTE = 32); # mock ima
 julia> maps, dist = T2mapSEcorr(image; TE = 10e-3, Silent = true); # compute the T2-maps and T2-distribution
 
 julia> maps
-Dict{String,Array{Float64,N} where N} with 6 entries:
-  "gdn"   => [10052.7 10117.6 … 10030.9 10290.4; 10110.2 10193.6 … 9953.01 10085.3; … ; 1004…
-  "alpha" => [176.666 177.116 … 177.557 176.503; 177.455 177.83 … 177.558 177.639; … ; 176.6…
-  "snr"   => [541.095 636.746 … 492.519 787.512; 503.934 592.39 … 455.082 509.539; … ; 448.9…
-  "fnr"   => [677.631 807.875 … 626.881 1012.96; 625.444 764.197 … 571.902 653.781; … ; 569.…
-  "gva"   => [0.280518 0.307561 … 0.372818 0.423089; 0.330033 0.377154 … 0.218693 0.260413; …
-  "ggm"   => [0.0494424 0.0456093 … 0.0467535 0.0454226; 0.0480455 0.0444683 … 0.0473485 0.0…
+Dict{String,Array{Float64,N} where N} with 10 entries:
+  "echotimes"     => [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1  …  0.23, …
+  "t2times"       => [0.01, 0.0114551, 0.013122, 0.0150315, 0.0172188, 0.0197244, 0.022594…
+  "refangleset"   => [50.0, 54.1935, 58.3871, 62.5806, 66.7742, 70.9677, 75.1613, 79.3548,…
+  "gdn"           => [1.86624e5 1.1901e5 … 1.3624e5 1.72367e5; 1.49169e5 1.24536e5 … 1.623…
+  "fnr"           => [479.252 451.153 … 492.337 522.685; 328.645 440.903 … 473.648 416.366…
+  "alpha"         => [165.011 164.049 … 163.291 164.945; 164.849 166.599 … 163.674 165.679…
+  "gva"           => [0.485815 0.401323 … 0.340727 0.436184; 0.321887 0.317154 … 0.278256 …
+  "ggm"           => [0.0494864 0.0506017 … 0.0518207 0.0501371; 0.0530299 0.052983 … 0.05…
+  "snr"           => [368.732 349.29 … 384.417 406.59; 258.914 349.542 … 373.792 331.304; …
+  "decaybasisset" => [0.0277684 0.0315296 … 0.0750511 0.0751058; 0.0469882 0.0536334 … 0.1…
 ```
 
 See also:
@@ -166,12 +58,13 @@ See also:
 * [`EPGdecaycurve`](@ref)
 """
 function T2mapSEcorr(image::Array{T,4}; kwargs...) where {T}
-    reset_timer!(TIMER)
-    out = @timeit_debug TIMER "T2mapSEcorr" begin
+    map(reset_timer!, THREAD_LOCAL_TIMERS)
+    out = @timeit_debug TIMER() "T2mapSEcorr" begin
         T2mapSEcorr(image, T2mapOptions(image; kwargs...))
     end
     if timeit_debug_enabled()
-        println("\n"); show(TIMER); println("\n")
+        display(THREAD_LOCAL_TIMERS[1]) #TODO
+        display(TimerOutputs.flatten(THREAD_LOCAL_TIMERS[1])) #TODO
     end
     return out
 end
@@ -188,31 +81,21 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     end
     LEGACY[] = opts.legacy
 
-    maps = Dict{String, Array{T}}()
-    maps["gdn"]    = fill(T(NaN), opts.MatrixSize...)
-    maps["ggm"]    = fill(T(NaN), opts.MatrixSize...)
-    maps["gva"]    = fill(T(NaN), opts.MatrixSize...)
-    maps["fnr"]    = fill(T(NaN), opts.MatrixSize...)
-    maps["snr"]    = fill(T(NaN), opts.MatrixSize...)
-    maps["alpha"]  = fill(T(NaN), opts.MatrixSize...)
-    opts.SaveResidualNorm && (maps["resnorm"]    = fill(T(NaN), opts.MatrixSize...))
-    opts.SaveDecayCurve   && (maps["decaycurve"] = fill(T(NaN), opts.MatrixSize..., opts.nTE))
-    opts.SaveRegParam     && (maps["mu"]         = fill(T(NaN), opts.MatrixSize...))
-    opts.SaveRegParam     && (maps["chi2factor"] = fill(T(NaN), opts.MatrixSize...))
-    opts.SaveNNLSBasis    && (maps["decaybasis"] = fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2))
-
+    maps = Dict{String, Any}()
     distributions  = fill(T(NaN), opts.MatrixSize..., opts.nT2)
-
     thread_buffers = [thread_buffer_maker(image, opts) for _ in 1:Threads.nthreads()]
     global_buffer  = global_buffer_maker(image, opts)
 
     # =========================================================================
-    # Find the basis matrices for each flip angle
+    # Initialization
     # =========================================================================
-    @timeit_debug TIMER "Initialization" begin
+    @timeit_debug TIMER() "Initialization" begin
         for i in 1:length(thread_buffers)
+            # Compute lookup table of EPG decay bases
             init_epg_decay_basis!(thread_buffers[i], opts)
         end
+        # Initialize output maps
+        init_output_t2maps!(thread_buffers[1], maps, opts)
     end
 
     # =========================================================================
@@ -235,6 +118,54 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     return @ntuple(maps, distributions)
 end
 
+function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {T}
+    @unpack T2_times, flip_angles, decay_basis, decay_basis_set = thread_buffer
+
+    # Misc. processing parameters
+    maps["echotimes"] = convert(Vector{T}, copy(opts.TE .* (1:opts.nTE))) #TODO update if vTEparam is implemented
+    maps["t2times"]   = convert(Vector{T}, copy(T2_times))
+
+    if isnothing(opts.SetFlipAngle)
+        maps["refangleset"]   = convert(Vector{T}, copy(flip_angles))
+        maps["decaybasisset"] = convert(Array{T,3}, reshape(reduce(hcat, decay_basis_set), size(decay_basis_set[1])..., length(decay_basis_set)))
+    else
+        maps["refangleset"]   = T(opts.SetFlipAngle)
+        maps["decaybasisset"] = convert(Matrix{T}, copy(decay_basis))
+    end
+
+    # Default output maps
+    maps["gdn"] = fill(T(NaN), opts.MatrixSize...)
+    maps["ggm"] = fill(T(NaN), opts.MatrixSize...)
+    maps["gva"] = fill(T(NaN), opts.MatrixSize...)
+    maps["fnr"] = fill(T(NaN), opts.MatrixSize...)
+    maps["snr"] = fill(T(NaN), opts.MatrixSize...)
+    maps["alpha"] = fill(T(NaN), opts.MatrixSize...)
+
+    # Optional output maps
+    if opts.SaveResidualNorm
+        maps["resnorm"] = fill(T(NaN), opts.MatrixSize...)
+    end
+
+    if opts.SaveDecayCurve
+        maps["decaycurve"] = fill(T(NaN), opts.MatrixSize..., opts.nTE)
+    end
+
+    if opts.SaveRegParam
+        maps["mu"] = fill(T(NaN), opts.MatrixSize...)
+        maps["chi2factor"] = fill(T(NaN), opts.MatrixSize...)
+    end
+
+    if opts.SaveNNLSBasis
+        if isnothing(opts.SetFlipAngle)
+            maps["decaybasis"] = fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) # unique decay basis set for each voxel
+        else
+            maps["decaybasis"] = convert(Matrix{T}, copy(decay_basis)) # single decay basis set used for all voxels
+        end
+    end
+
+    return nothing
+end
+
 # =========================================================
 # Main loop function
 # =========================================================
@@ -250,21 +181,21 @@ function voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, o
     end
 
     # Find optimum flip angle
-    if opts.SetFlipAngle === nothing
-        @timeit_debug TIMER "Optimize Flip Angle" begin
+    if isnothing(opts.SetFlipAngle)
+        @timeit_debug TIMER() "Optimize Flip Angle" begin
             optimize_flip_angle!(thread_buffer, opts)
         end
     end
 
     # Fit decay basis using optimized alpha
-    if opts.SetFlipAngle === nothing
-        @timeit_debug TIMER "Compute Final NNLS Basis" begin
+    if isnothing(opts.SetFlipAngle)
+        @timeit_debug TIMER() "Compute Final NNLS Basis" begin
             epg_decay_basis!(thread_buffer, opts)
         end
     end
 
     # Calculate T2 distribution and map parameters
-    @timeit_debug TIMER "Calculate T2 Dist" begin
+    @timeit_debug TIMER() "Calculate T2 Dist" begin
         fit_T2_distribution!(thread_buffer, opts)
     end
 
@@ -294,7 +225,9 @@ function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
 
     function chi2_alpha_fun(flip_angles, i)
         # First argument `flip_angles` has been used implicitly in creating `decay_basis_set` already
-        lsqnonneg!(nnls_work, decay_basis_set[i], decay_data)
+        @timeit_debug TIMER() "lsqnonneg!" begin
+            lsqnonneg!(nnls_work, decay_basis_set[i], decay_data)
+        end
         T2_dist_nnls = nnls_work.x
         mul!(decay_pred, decay_basis_set[i], T2_dist_nnls)
         residuals .= decay_data .- decay_pred
@@ -302,7 +235,7 @@ function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
         return chi2
     end
 
-    @timeit_debug TIMER "Surrogate Spline Opt" begin
+    @timeit_debug TIMER() "Surrogate Spline Opt" begin
         # Find the minimum chi-squared and the corresponding angle
         alpha_opt[], chi2_alpha_opt[] = surrogate_spline_opt(chi2_alpha_fun, flip_angles, o.nRefAnglesMin)
     end
@@ -313,48 +246,46 @@ end
 # =========================================================
 # EPG decay curve fitting
 # =========================================================
-function epg_decay_basis_work(o::T2mapOptions{T}) where {T}
-    return o.vTEparam === nothing ?
+function epg_decay_curve_work(o::T2mapOptions{T}) where {T}
+    return isnothing(o.vTEparam) ?
         EPGdecaycurve_work(T, o.nTE) :
         EPGdecaycurve_vTE_work(T, o.vTEparam...)
 end
 
 function init_epg_decay_basis!(thread_buffer, o::T2mapOptions)
-    @unpack decay_basis_work, decay_basis_set, decay_basis, flip_angles, T2_times = thread_buffer
+    @unpack decay_curve_work, decay_basis_set, decay_basis, flip_angles, T2_times = thread_buffer
 
-    if o.SetFlipAngle === nothing
+    if isnothing(o.SetFlipAngle)
         # Loop to compute basis for each angle
-        @inbounds for i = 1:o.nRefAngles
-            epg_decay_basis!(decay_basis_work, decay_basis_set[i], flip_angles[i], T2_times, o)
+        @inbounds for i in 1:o.nRefAngles
+            epg_decay_basis!(decay_curve_work, decay_basis_set[i], flip_angles[i], T2_times, o)
         end
     else
         # Compute basis for fixed flip angle `SetFlipAngle`
-        epg_decay_basis!(decay_basis_work, decay_basis, o.SetFlipAngle, T2_times, o)
+        epg_decay_basis!(decay_curve_work, decay_basis, o.SetFlipAngle, T2_times, o)
     end
 
     return nothing
 end
 
 function epg_decay_basis!(thread_buffer, o::T2mapOptions)
-    @unpack decay_basis_work, decay_basis, alpha_opt, T2_times = thread_buffer
-    epg_decay_basis!(decay_basis_work, decay_basis, alpha_opt[], T2_times, o)
+    @unpack decay_curve_work, decay_basis, alpha_opt, T2_times = thread_buffer
+    epg_decay_basis!(decay_curve_work, decay_basis, alpha_opt[], T2_times, o)
     return nothing
 end
 
-function epg_decay_basis!(decay_basis_work, decay_basis, flip_angle, T2_times, o::T2mapOptions)
-    @unpack decay_curve = decay_basis_work
+function epg_decay_basis!(decay_curve_work, decay_basis::AbstractMatrix{T}, flip_angle::T, T2_times::AbstractVector{T}, o::T2mapOptions{T}) where {T}
 
     # Compute the NNLS basis over T2 space
-    @inbounds for j = 1:o.nT2
-        @timeit_debug TIMER "EPGdecaycurve!" begin
-            if o.vTEparam !== nothing
-                EPGdecaycurve_vTE!(decay_basis_work, o.nTE, flip_angle, o.vTEparam..., T2_times[j], o.T1, o.RefConAngle)
+    @timeit_debug TIMER() "EPGdecaycurve!" begin
+        @inbounds for j in 1:o.nT2
+            if !isnothing(o.vTEparam)
+                EPGdecaycurve_vTE!(decay_curve_work, o.nTE, flip_angle, o.vTEparam..., T2_times[j], o.T1, o.RefConAngle)
             else
-                EPGdecaycurve!(decay_basis_work, o.nTE, flip_angle, o.TE, T2_times[j], o.T1, o.RefConAngle)
+                # decay_curve = view(decay_basis, :, j) #TODO
+                decay_curve = NNLS.fastview(decay_basis, 1+(j-1)*o.nTE, o.nTE)
+                EPGdecaycurve!(decay_curve, decay_curve_work, flip_angle, o.TE, T2_times[j], o.T1, o.RefConAngle)
             end
-        end
-        for i = 1:o.nTE
-            decay_basis[i,j] = decay_curve[i]
         end
     end
 
@@ -456,7 +387,7 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
     end
 
     # Optionally save NNLS basis
-    if o.SaveNNLSBasis
+    if o.SaveNNLSBasis && isnothing(o.SetFlipAngle)
         @unpack decaybasis = maps
         @inbounds for J in CartesianIndices((o.nTE, o.nT2))
             decaybasis[I,J] = decay_basis[J]
@@ -484,10 +415,10 @@ function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
         decay_data       = zeros(T, o.nTE),
         decay_calc       = zeros(T, o.nTE),
         residuals        = zeros(T, o.nTE),
-        decay_basis_work = epg_decay_basis_work(o),
+        decay_curve_work = epg_decay_curve_work(o),
         flip_angle_work  = optimize_flip_angle_work(o),
         T2_dist_work     = T2_distribution_work(o),
-        alpha_opt        = Ref(ifelse(o.SetFlipAngle === nothing, T(NaN), o.SetFlipAngle)),
+        alpha_opt        = Ref(ifelse(isnothing(o.SetFlipAngle), T(NaN), o.SetFlipAngle)),
         chi2_alpha_opt   = Ref(T(NaN)),
         T2_dist          = zeros(T, o.nT2),
         gva_buf          = zeros(T, o.nT2),

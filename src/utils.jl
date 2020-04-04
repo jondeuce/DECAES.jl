@@ -2,9 +2,11 @@
 #### Miscellaneous utils
 ####
 ndigits(x::Int) = x == 0 ? 1 : floor(Int, log10(abs(x))) + 1
-logrange(a::T, b::T, len::Int) where {T} = T(10) .^ range(log10(a), log10(b); length = len)
+logrange(a::T, b::T, len::Int) where {T} = (r = T(10) .^ range(log10(a), log10(b); length = len); r[1] = a; r[end] = b; return r)
 normcdf(x::T) where {T} = erfc(-x/sqrt(T(2)))/2 # Cumulative distribution for normal distribution
 normccdf(x::T) where {T} = erfc(x/sqrt(T(2)))/2 # Compliment of normcdf, i.e. 1 - normcdf(x)
+
+@inline mul_im(z::Complex) = Complex(-imag(z), real(z)) # optimized i*(a+b*i) = -b+a*i
 
 function set_diag!(A::AbstractMatrix, val)
     @inbounds for i in 1:min(size(A)...)
@@ -18,6 +20,22 @@ function find_nearest(r::AbstractRange, x::Number)
           x >= r[end] ? length(r) :
           clamp(round(Int, 1 + (x - r[1]) / step(r)), 1, length(r))
     r[idx], idx # nearest value in r to x and corresponding index
+end
+
+function local_gridsearch(f, i::Int)
+    yleft, y, yright = f(i-1), f(i), f(i+1)
+    while !(yleft ≥ y ≤ yright) # search for local min
+        if yleft < y
+            i -= 1 # shift left
+            yleft, y, yright = f(i-1), yleft, y
+        elseif yright < y
+            i += 1 # shift right
+            yleft, y, yright = y, yright, f(i+1)
+        else
+            break
+        end
+    end
+    return y, i
 end
 
 # Macro copied from DrWatson.jl in order to not depend on the package
@@ -114,7 +132,9 @@ end
 ####
 #### Timing utilities
 ####
-const TIMER = TimerOutput() # Global timer object
+const GLOBAL_TIMER = TimerOutput() # Global timer object
+const THREAD_LOCAL_TIMERS = [TimerOutput() for _ in 1:Threads.nthreads()] # Thread-local timer objects
+TIMER() = @inbounds THREAD_LOCAL_TIMERS[Threads.threadid()]
 
 tic() = time()
 toc(t) = tic() - t
@@ -161,7 +181,7 @@ spline_opt(args...)  = LEGACY[] ? _spline_opt_legacy(args...)  : _spline_opt(arg
 spline_root(args...) = LEGACY[] ? _spline_root_legacy(args...) : _spline_root(args...)
 
 function _make_spline(X, Y)
-    @assert length(X) == length(Y) && length(X) > 1
+    # @assert length(X) == length(Y) && length(X) > 1
     deg_spline = min(3, length(X)-1)
     spl = Dierckx.Spline1D(X, Y; k = deg_spline)
 end
@@ -208,10 +228,27 @@ _spline_opt(X::AbstractVector, Y::AbstractVector) = _spline_opt(_make_spline(X, 
 # the (x,y) pair such that x ∈ X[1]:0.001:X[end] is nearest to the exact optimum
 function _spline_opt_legacy(spl::Dierckx.Spline1D)
     xopt, yopt = _spline_opt(spl)
-    knots = get_knots(spl)
+    knots = Dierckx.get_knots(spl)
     Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    x, _ = find_nearest(Xs, xopt) # find nearest x in Xs to xopt
-    y = spl(x)
+    _, i0 = find_nearest(Xs, xopt) # find nearest x in Xs to xopt
+
+    # Note that the above finds the x value nearest the true minimizer, but we need the x value corresponding to
+    # the y value nearest the true minimum. Since we are near the minimum, search for a local minimum.
+    dy(i) = spl(@inbounds(Xs[clamp(i,1,length(Xs))]))
+    y, i = local_gridsearch(dy, i0)
+    x = Xs[i]
+
+    return @ntuple(x, y)
+end
+function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
+    knots = Dierckx.get_knots(spl)
+    Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    x, y = Xs[1], spl(Xs[1])
+    for (i,xi) in enumerate(Xs)
+        (i == 1) && continue
+        yi = spl(xi)
+        (yi < y) && ((x, y) = (xi, yi))
+    end
     return @ntuple(x, y)
 end
 _spline_opt_legacy(X::AbstractVector, Y::AbstractVector) = _spline_opt_legacy(_make_spline(X, Y))
@@ -229,17 +266,17 @@ function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
             if imag(ri) == 0 # real roots only
                 xi = x0 + real(ri)
                 if x0 <= xi <= x1 # filter roots within range
-                    x = (x === nothing) ? xi : min(x, xi)
+                    x = isnothing(x) ? xi : min(x, xi)
                 end
             end
         end
-        if x !== nothing
+        if !isnothing(x)
             return x
         end
     end
-    if x === nothing
-        warn("No root was found on the spline domain; returning nothing")
-    end
+    # if isnothing(x)
+    #     warn("No root was found on the spline domain; returning nothing")
+    # end
 
     return x
 end
@@ -251,29 +288,29 @@ _spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0) = _spline_
 # This isn't very efficient; instead we use exact spline root finding and return
 # the nearest x ∈ X[1]:0.001:X[end] such that the y value is nearest zero
 function _spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
-
+    # Find x value nearest to the root
     knots = Dierckx.get_knots(spl)
     Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
     xroot = _spline_root(spl, value)
-    _, i = find_nearest(Xs, xroot) # find nearest x in Xs to xroot
+    _, i0 = find_nearest(Xs, xroot) # find nearest x in Xs to xroot
 
-    # Note that the above finds the nearest x value, but we need the x corresponding to the
-    # nearest y value. Since we are near the minimum, just search locally for any minima
+    # Note that the above finds the x value nearest the true root, but we need the x value corresponding to the
+    # y value nearest to `value`. Since we are near the root, search for a local minimum in abs(spl(x)-value).
     dy(i) = abs(spl(@inbounds(Xs[clamp(i,1,length(Xs))])) - value)
-    yleft, y, yright = dy(i-1), dy(i), dy(i+1)
-    while !(yleft ≥ y ≤ yright) # search for local min
-        if yleft < y
-            i -= 1 # shift left
-            yleft, y, yright = dy(i-1), yleft, y
-        elseif yright < y
-            i += 1 # shift right
-            yleft, y, yright = y, yright, dy(i+1)
-        else
-            break
-        end
-    end
+    y, i = local_gridsearch(dy, i0)
     x = Xs[i]
 
+    return x
+end
+function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
+    knots = Dierckx.get_knots(spl)
+    Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    x, f = Xs[1], abs(spl(Xs[1]) - value)
+    for (i,xi) in enumerate(Xs)
+        (i == 1) && continue
+        fi = abs(spl(xi) - value)
+        (fi < f) && ((x, f) = (xi, fi))
+    end
     return x
 end
 _spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_root_legacy(_make_spline(X, Y), value)
@@ -284,7 +321,7 @@ _spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_r
 #   `X` discrete vector in which to evaluate `f`
 #   `min_n_eval` minimum number of elements of `X` which are evaluated
 function surrogate_spline_opt(f, X, min_n_eval::Int = length(X))
-    @assert length(X) >= 2
+    # @assert length(X) >= 2
 
     # Check if X has less than min_n_eval points
     min_n_eval = max(2, min_n_eval)
@@ -334,20 +371,28 @@ end
 #### Generate (moderately) realistic mock images
 ####
 
-# Return an (MatrixSize..., nTE) sized array of type T containing random
-# bi-exponential signals with a small amount of noise.
-function mock_image(::Type{T} = Float64; MatrixSize::NTuple{3,Int} = (2,2,2), nTE::Int = 32, eps = 0.002) where {T}
+# Mock CPMG image
+function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2,2), nTE = 32); kwargs...) where {T}
     oldseed = Random.seed!(0)
-    mag() = T(0.8) .* exp.(.-inv(5.5+rand(T)).*(1:nTE)) .+ T(0.2) .* exp.(.-inv(1.5+0.5*rand(T)).*(1:nTE))
-    noisey(ε) = (m = mag(); return abs.(m .+ m[1] .* ε .* randn(eltype(m), size(m))))
+
+    @unpack MatrixSize, TE, nTE = T2mapOptions(o; kwargs...)
+    SNR = T(50)
+    eps = T(10^(-SNR/20))
+
+    mag() = T(0.85) .* EPGdecaycurve(nTE, T(165), TE, T(65e-3), T(1), T(180)) .+
+            T(0.15) .* EPGdecaycurve(nTE, T(165), TE, T(15e-3), T(1), T(180)) # bi-exponential signal with EPG correction
+    noise(m) = abs(m[1]) .* eps .* randn(T, size(m)) # gaussian noise of size SNR relative to signal amplitude
+    noiseysignal() = (m = mag(); sqrt.((m .+ noise(m)).^2 .+ noise(m).^2)) # bi-exponential signal with rician noise
+
     M = zeros(T, (MatrixSize..., nTE))
     @inbounds for I in CartesianIndices(MatrixSize)
-        M[I,:] .= T(1e4) .* noisey(eps)
+        M[I,:] .= T(1e5 + 1e5*rand()) .* noiseysignal()
     end
+
     Random.seed!(oldseed)
     return M
 end
 
 # Mock T2 distribution, computed with default parameters
-mock_T2_dist(args...; nT2 = 40, kwargs...) =
-    T2mapSEcorr(mock_image(args...; kwargs...); nT2 = nT2, Silent = true)[2]
+mock_T2_dist(o::T2mapOptions = T2mapOptions{Float64}(MatrixSize = (2,2,2), nTE = 32, nT2 = 40); kwargs...) =
+    T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]

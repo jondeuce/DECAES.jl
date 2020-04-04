@@ -5,7 +5,7 @@ Returns the regularized NNLS solution, X, that incurrs an increase in ``\\chi^2`
 The regularized NNLS problem solved internally is:
 
 ```math
-X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu||x||_2^2
+X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu^2 ||x||_2^2
 ```
 
 where ``\\mu`` is determined by approximating a solution to the nonlinear equation
@@ -68,12 +68,12 @@ function lsqnonneg_reg!(work, C::AbstractMatrix{T}, d::AbstractVector{T}, Chi2Fa
 
     # Non-regularized solution
     nnls_work.x .= 0
-    @timeit_debug TIMER "Non-Reg. lsqnonneg!" begin
+    @timeit_debug TIMER() "Non-Reg. lsqnonneg!" begin
         lsqnonneg!(nnls_work, C, d)
-        mul!(d_backproj, C, nnls_work.x)
-        resid .= d .- d_backproj
-        chi2_min = sum(abs2, resid)
     end
+    mul!(d_backproj, C, nnls_work.x)
+    resid .= d .- d_backproj
+    chi2_min = sum(abs2, resid)
 
     # Initialzation of various components
     nnls_work_smooth.x .= nnls_work.x
@@ -81,34 +81,36 @@ function lsqnonneg_reg!(work, C::AbstractMatrix{T}, d::AbstractVector{T}, Chi2Fa
     chi2_cache = [chi2_min]
 
     # Minimize energy of spectrum; loop to find largest mu that keeps chi-squared in desired range
-    while chi2_cache[end] < Chi2Factor * chi2_min
-        # Incrememt mu vector
+    while chi2_cache[end] ≤ Chi2Factor * chi2_min
+        # Chi2Factor not reached; push larger mu to mu_cache
         push!(mu_cache, mu_cache[end] > 0 ? 2*mu_cache[end] : T(0.001))
 
-        @timeit_debug TIMER "Loop Reg. lsqnonneg!" begin
-            # Compute T2 distribution with smoothing
-            set_diag!(C_smooth_bottom, mu_cache[end])
+        # Compute T2 distribution with smoothing
+        set_diag!(C_smooth_bottom, mu_cache[end])
+        @timeit_debug TIMER() "Loop Reg. lsqnonneg!" begin
             lsqnonneg!(nnls_work_smooth, C_smooth, d_smooth)
-            
-            # Find predicted curve and calculate residuals and chi-squared
-            mul!(d_backproj, C, nnls_work_smooth.x)
-            resid .= d .- d_backproj
-            push!(chi2_cache, sum(abs2, resid))
         end
+
+        # Find predicted curve and calculate residuals and chi-squared
+        mul!(d_backproj, C, nnls_work_smooth.x)
+        resid .= d .- d_backproj
+        push!(chi2_cache, sum(abs2, resid))
     end
 
     # Smooth the chi2(mu) curve using a spline fit and find the mu value such
     # that chi2 increases by Chi2Factor, i.e. chi2(mu) = Chi2Factor * chi2_min
-    mu = spline_root(mu_cache, chi2_cache, Chi2Factor * chi2_min)
+    @timeit_debug TIMER() "spline_root" begin
+        mu = spline_root(mu_cache, chi2_cache, Chi2Factor * chi2_min)
+    end
 
     # Compute the regularized solution
-    @timeit_debug TIMER "Final Reg. lsqnonneg!" begin
-        set_diag!(C_smooth_bottom, mu)
+    set_diag!(C_smooth_bottom, mu)
+    @timeit_debug TIMER() "Final Reg. lsqnonneg!" begin
         lsqnonneg!(nnls_work_smooth, C_smooth, d_smooth)
-        mul!(d_backproj, C, nnls_work_smooth.x)
-        resid .= d .- d_backproj
-        chi2_final = sum(abs2, resid)
     end
+    mul!(d_backproj, C, nnls_work_smooth.x)
+    resid .= d .- d_backproj
+    chi2_final = sum(abs2, resid)
 
     # Assign output
     work.x .= nnls_work_smooth.x
