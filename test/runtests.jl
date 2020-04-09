@@ -222,9 +222,8 @@ try
     mfile_exists(fname) = mxcall(:exist, 1, fname) == 2
 
     if !mfile_exists("T2map_SEcorr_nechoes_2019") || !mfile_exists("T2part_SEcorr_2019")
-        @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m " *
-            "were not found on the default MATLAB path. Modify your MATLAB path " *
-            "to include these files, restart Julia, and try testing again."
+        @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
+              "Modify your default MATLAB path to include these files, restart Julia, and try testing again."
     else
         # Relative tolerance threshold for legacy algorithms to match MATLAB version
         default_rtol = 1e-10

@@ -13,8 +13,8 @@ struct EPGOptions{T,ETL}
 end
 
 EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_Cplx(T, ETL::Int) # fallback
-EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: SIMD.FloatingTypes} = EPGWork_Vec(T, ETL::Int)
-# EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: SIMD.FloatingTypes} = EPGWork_Cplx_Vec_Unrolled(T, ETL::Int)
+EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_Vec(T, ETL::Int)
+# EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_Cplx_Vec_Unrolled(T, ETL::Int)
 
 """
     EPGdecaycurve(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)

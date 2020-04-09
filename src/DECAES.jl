@@ -1,10 +1,13 @@
 module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
-using StaticArrays, SIMD
-using Optim, Dierckx, Polynomials, PolynomialRoots
-using ArgParse, Parameters, TimerOutputs, Logging, LoggingExtras
-using MAT, NIfTI
+using ArgParse, Logging, LoggingExtras
+import Optim, Dierckx, Polynomials, PolynomialRoots
+import MAT, NIfTI
+using Parameters: @with_kw, @with_kw_noshow, @unpack
+using StaticArrays: SVector, SizedVector, SA
+using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
+using SIMD: Vec, FloatingTypes, shufflevector
 
 include("nnls.jl")
 using .NNLS

@@ -188,13 +188,13 @@ end
 
 function _build_polynomials(spl)
     k = spl.k
-    t = get_knots(spl)[1:end-1]
+    t = Dierckx.get_knots(spl)[1:end-1]
     coeffs = zeros(k+1, length(t))
     coeffs[1, :] .= spl.(t)
     for m in 1:k
-        coeffs[m+1, :] .= derivative(spl, t, m) ./ factorial(m)
+        coeffs[m+1, :] .= Dierckx.derivative(spl, t, m) ./ factorial(m)
     end
-    return [Poly(coeffs[:, j]) for j in 1:size(coeffs, 2)]
+    return [Polynomials.Poly(coeffs[:, j]) for j in 1:size(coeffs, 2)]
 end
 
 # Global minimization through fitting a spline to data (X, Y)
@@ -206,7 +206,7 @@ function _spline_opt(spl::Dierckx.Spline1D)
         x0, x1 = knots[i], knots[i+1] # spline section endpoints
         _x, _y = x1, p(x1 - x0) # check right endpoint
         (_y < y) && (x = _x; y = _y)
-        r = PolynomialRoots.roots(Polynomials.coeffs(polyder(p)))
+        r = PolynomialRoots.roots(Polynomials.coeffs(Polynomials.polyder(p)))
         for ri in r
             if imag(ri) == 0 # real roots only
                 xi = x0 + real(ri)
