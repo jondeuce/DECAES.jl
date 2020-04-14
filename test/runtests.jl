@@ -166,8 +166,31 @@ end
 #   default MATLAB path.
 # ================================================================================
 
+const RUN_MATLAB_TESTS = Ref(true)
+
+# Try loading MATLAB.jl
 try
     @eval using MATLAB
+catch e
+    @warn "Failed to load Julia package MATLAB.jl; skipping UBCMWF MATLAB tests"
+    @warn sprint(showerror, e, catch_backtrace())
+    RUN_MATLAB_TESTS[] = false
+end
+
+# Check that MATLAB path is correctly set
+if RUN_MATLAB_TESTS[]
+    mfile_exists(fname) = MATLAB.mxcall(:exist, 1, fname) == 2
+
+    if !mfile_exists("T2map_SEcorr_nechoes_2019") || !mfile_exists("T2part_SEcorr_2019")
+        @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
+            "Modify your default MATLAB path to include these files. For example, add a command such as" *
+            "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
+            "to your startup.m file using the appropriate path for your file system. Then, try testing again."
+        RUN_MATLAB_TESTS[] = false
+    end
+end
+
+function matlab_tests()
 
     # Helper functions
     matlabify(x::AbstractString) = String(x)
@@ -178,10 +201,10 @@ try
     matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k,v) in kwargs])
 
     mxT2mapSEcorr(image, maxCores = 6; kwargs...) =
-        mxcall(:T2map_SEcorr_nechoes_2019, 2, image, maxCores, matlabify(kwargs)...)
+        MATLAB.mxcall(:T2map_SEcorr_nechoes_2019, 2, image, maxCores, matlabify(kwargs)...)
 
     mxT2partSEcorr(image; kwargs...) =
-        mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
+        MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
 
     # T2mapSEcorr parameters which aren't in the MATLAB API
     new_t2map_params = Set{Symbol}([
@@ -201,7 +224,7 @@ try
         :T2Range          => [(8e-3, 1.0)],
         :RefConAngle      => [175.0],
         :MinRefAngle      => [60.0],
-        :nRefAngles       => [4, 12],
+        :nRefAngles       => [7, 12],
         :Reg              => ["no", "chi2", "lcurve"],
         :SetFlipAngle     => [178.0],
         :SaveResidualNorm => [false, true],
@@ -218,75 +241,68 @@ try
         :Sigmoid    => [1.5],
     )
 
-    # Check path is correctly set, and run tests if it is
-    mfile_exists(fname) = mxcall(:exist, 1, fname) == 2
+    # Relative tolerance threshold for legacy algorithms to match MATLAB version
+    default_rtol = 1e-10
 
-    if !mfile_exists("T2map_SEcorr_nechoes_2019") || !mfile_exists("T2part_SEcorr_2019")
-        @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
-              "Modify your default MATLAB path to include these files, restart Julia, and try testing again."
-    else
-        # Relative tolerance threshold for legacy algorithms to match MATLAB version
-        default_rtol = 1e-10
+    @testset "T2mapSEcorr" begin
+        image = DECAES.mock_image(nTE = 32 + rand(0:1))
 
-        @testset "T2mapSEcorr" begin
-            image = DECAES.mock_image(nTE = 32 + rand(0:1))
-
-            for (param,valuelist) in t2map_params_perms, paramval in valuelist
-                # The MATLAB implementation of the L-Curve method uses an internal call to `fminbnd`
-                # with a tolerance of 1e-3, and therefore the Julia outputs would only match to a
-                # tolerance of 1e-3. Additionally, there is a typo in the `G(mu,C_g,d_g)` subfunction:
-                #   - Numerator should be ||A*x_mu - b||^2, not ||A*x_mu - b||
-                #   - See e.g. equation (1.4) in Fenu, C. et al., 2017, GCV for Tikhonov regularization by partial SVD (https://doi.org/10.1007/s10543-017-0662-0)
-                # There is also a small error in methodology:
-                #   - Solving regularized ||Ax-b||^2 via [A; mu*I] \ [b; 0] is equivalent to minimizing (note mu^2, not mu):
-                #       ||Ax-b||^2 + mu^2||x||^2
-                # Below, this test is therefore skipped by default. If you have a version in which these errors are fixed,
-                # the below line can be modified (with rtol set appropriately larger than your solver tolerance)
-                rtol = default_rtol
-                if param === :Reg && paramval == "lcurve"
-                    continue
-                    # rtol = 1e-3
-                end
-
-                jl_kwargs = Dict{Symbol,Any}(:SaveRegParam => true, :legacy => true, :Silent => true) # default settings
-                jl_kwargs[param] = paramval
-
-                mat_kwargs = Dict{Symbol,Any}(:Save_regparam => "yes") # default settings
-                if param == :SaveRegParam # renamed parameter
-                    mat_kwargs[:Save_regparam] = ifelse(paramval, "yes", "no") # renamed parameter
-                elseif param == :nRefAngles # renamed parameter
-                    mat_kwargs[:nAngles] = paramval
-                elseif param == :RefConAngle # renamed parameter
-                    mat_kwargs[:RefCon] = paramval
-                elseif param ∉ new_t2map_params # skip Julia-only parameters
-                    mat_kwargs[param] = paramval
-                end
-
-                # Run T2mapSEcorr
-                t2map_out_jl  = T2mapSEcorr(image; jl_kwargs...)
-                t2map_out_mat = mxT2mapSEcorr(image; mat_kwargs...)
-                allpassed = test_compare_t2map(t2map_out_jl, t2map_out_mat; rtol = rtol)
-                !allpassed && println("t2map failed: $param = $paramval")
+        for (param,valuelist) in t2map_params_perms, paramval in valuelist
+            # The MATLAB implementation of the L-Curve method uses an internal call to `fminbnd`
+            # with a tolerance of 1e-3, and therefore the Julia outputs would only match to a
+            # tolerance of 1e-3. Additionally, there is a typo in the `G(mu,C_g,d_g)` subfunction:
+            #   - Numerator should be ||A*x_mu - b||^2, not ||A*x_mu - b||
+            #   - See e.g. equation (1.4) in Fenu, C. et al., 2017, GCV for Tikhonov regularization by partial SVD (https://doi.org/10.1007/s10543-017-0662-0)
+            # There is also a small error in methodology:
+            #   - Solving regularized ||Ax-b||^2 via [A; mu*I] \ [b; 0] is equivalent to minimizing (note mu^2, not mu):
+            #       ||Ax-b||^2 + mu^2||x||^2
+            # Below, this test is therefore skipped by default. If you have a version in which these errors are fixed,
+            # the below line can be modified (with rtol set appropriately larger than your solver tolerance)
+            rtol = default_rtol
+            if param === :Reg && paramval == "lcurve"
+                continue
+                # rtol = 1e-3
             end
-        end
 
-        @testset "T2partSEcorr" begin
-            T2dist = DECAES.mock_T2_dist()
+            jl_kwargs = Dict{Symbol,Any}(:SaveRegParam => true, :legacy => true, :Silent => true) # default settings
+            jl_kwargs[param] = paramval
 
-            for (param,valuelist) in t2part_params_perms, paramval in valuelist
-                # Run T2partSEcorr
-                jl_kwargs  = Dict{Symbol,Any}(param => paramval, :legacy => true, :Silent => true)
-                mat_kwargs = Dict{Symbol,Any}(param => paramval)
-                t2part_jl  = T2partSEcorr(T2dist; jl_kwargs...)
-                t2part_mat = mxT2partSEcorr(T2dist; mat_kwargs...)
-                allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
-                !allpassed && println("t2part failed: $param = $paramval")
+            mat_kwargs = Dict{Symbol,Any}(:Save_regparam => "yes") # default settings
+            if param == :SaveRegParam # renamed parameter
+                mat_kwargs[:Save_regparam] = ifelse(paramval, "yes", "no") # renamed parameter
+            elseif param == :nRefAngles # renamed parameter
+                mat_kwargs[:nAngles] = paramval
+            elseif param == :RefConAngle # renamed parameter
+                mat_kwargs[:RefCon] = paramval
+            elseif param ∉ new_t2map_params # skip Julia-only parameters
+                mat_kwargs[param] = paramval
             end
+
+            # Run T2mapSEcorr
+            t2map_out_jl  = T2mapSEcorr(image; jl_kwargs...)
+            t2map_out_mat = mxT2mapSEcorr(image; mat_kwargs...)
+            allpassed = test_compare_t2map(t2map_out_jl, t2map_out_mat; rtol = rtol)
+            !allpassed && println("t2map failed: $param = $paramval")
         end
     end
-catch e
-    @warn "using MATLAB failed; skipping MATLAB tests"
-    @warn sprint(showerror, e, catch_backtrace())
+
+    @testset "T2partSEcorr" begin
+        T2dist = DECAES.mock_T2_dist()
+
+        for (param,valuelist) in t2part_params_perms, paramval in valuelist
+            # Run T2partSEcorr
+            jl_kwargs  = Dict{Symbol,Any}(param => paramval, :legacy => true, :Silent => true)
+            mat_kwargs = Dict{Symbol,Any}(param => paramval)
+            t2part_jl  = T2partSEcorr(T2dist; jl_kwargs...)
+            t2part_mat = mxT2partSEcorr(T2dist; mat_kwargs...)
+            allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
+            !allpassed && println("t2part failed: $param = $paramval")
+        end
+    end
+end
+
+if RUN_MATLAB_TESTS[]
+    matlab_tests()
 end
 
 nothing
