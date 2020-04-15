@@ -107,7 +107,7 @@ BET arguments:
 $ julia decaes.jl image.nii --T2map --T2part</code></pre><p>After a few seconds, the script should begin running with the following messages appearing as the script progresses (note that real images will take longer to process than this toy example):</p><pre><code class="language-none">[ Info: Starting with 1 threads
 
 [ Info: Loading input file: image.nii.gz ...
-[ Info: Done (0.23 seconds)
+[ Info: Done (0.26 seconds)
 
 [ Info: Running T2mapSEcorr on file: image.nii.gz ...
 ┌ Info: T2-Distribution analysis settings:
@@ -130,15 +130,15 @@ $ julia decaes.jl image.nii --T2map --T2part</code></pre><p>After a few seconds,
 │     T2Range          : (0.01, 2.0)
 │     TE               : 0.01
 └     Threshold        : 200.0
-[ Info: [  0%] -- Elapsed Time: 00h:00m:03s -- Estimated Time Remaining: --h:--m:--s
-[ Info: [100%] -- Elapsed Time: 00h:00m:11s -- Estimated Time Remaining: 00h:00m:00s
-[ Info: Done (13.14 seconds)
+[ Info: [  0%] -- Elapsed Time: 00h:00m:04s -- Estimated Time Remaining: --h:--m:--s
+[ Info: [100%] -- Elapsed Time: 00h:00m:12s -- Estimated Time Remaining: 00h:00m:00s
+[ Info: Done (13.93 seconds)
 
 [ Info: Saving T2 distribution to file: image.t2dist.mat ...
-[ Info: Done (0.41 seconds)
+[ Info: Done (0.43 seconds)
 
 [ Info: Saving T2 parameter maps to file: image.t2maps.mat ...
-[ Info: Done (0.15 seconds)
+[ Info: Done (0.16 seconds)
 
 [ Info: Running T2partSEcorr ...
 ┌ Info: T2-part analysis settings:
@@ -149,12 +149,12 @@ $ julia decaes.jl image.nii --T2map --T2part</code></pre><p>After a few seconds,
 │     Silent     : false
 │     SPWin      : (0.01, 0.025)
 └     T2Range    : (0.01, 2.0)
-[ Info: Done (0.48 seconds)
+[ Info: Done (0.57 seconds)
 
 [ Info: Saving T2 parts maps to file: image.t2parts.mat ...
 [ Info: Done (0.0 seconds)
 
-[ Info: Finished (14.49 seconds)</code></pre><p>The script will produce four files, each with the input filename (without suffix) used as a prefix:</p><ol><li><code>image.t2dist.mat</code>: MATLAB file containing the <span>$T_2$</span>-distributions</li><li><code>image.t2maps.mat</code>: MATLAB file containing <span>$T_2$</span>-distribution property maps and NNLS fit parameters; see <a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a></li><li><code>image.t2parts.mat</code>: MATLAB file containing <span>$T_2$</span>-parts analysis results such as the MWF; see <a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a></li><li><code>image.log</code>: Log file containing the console output</li></ol><h3 id="multiinput-1"><a class="docs-heading-anchor" href="#multiinput-1">Multiple input files</a><a class="docs-heading-anchor-permalink" href="#multiinput-1" title="Permalink"></a></h3><p>Multiple input files (possibly of different file types) can be passed in the obvious way:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
+[ Info: Finished (15.43 seconds)</code></pre><p>The script will produce four files, each with the input filename (without suffix) used as a prefix:</p><ol><li><code>image.t2dist.mat</code>: MATLAB file containing the <span>$T_2$</span>-distributions</li><li><code>image.t2maps.mat</code>: MATLAB file containing <span>$T_2$</span>-distribution property maps and NNLS fit parameters; see <a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a></li><li><code>image.t2parts.mat</code>: MATLAB file containing <span>$T_2$</span>-parts analysis results such as the MWF; see <a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a></li><li><code>image.log</code>: Log file containing the console output</li></ol><h3 id="multiinput-1"><a class="docs-heading-anchor" href="#multiinput-1">Multiple input files</a><a class="docs-heading-anchor-permalink" href="#multiinput-1" title="Permalink"></a></h3><p>Multiple input files (possibly of different file types) can be passed in the obvious way:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
 $ julia decaes.jl image1.nii image2.mat image3.nii.gz --T2map --T2part</code></pre><div class="admonition is-info"><header class="admonition-header">Note</header><div class="admonition-body"><p><code>.nii</code> and <code>.nii.gz</code> input image files are assumed to be 4D when loaded; an error will occur if they are not 4D. For <code>.mat</code> files, the first 4D array which is found within the <code>.mat</code> file is used (multiple 4D arrays should not be stored in the same <code>.mat</code> file); an error will occur if no 4D image is found.</p></div></div><h3 id="outfolder-1"><a class="docs-heading-anchor" href="#outfolder-1">Specify output folder</a><a class="docs-heading-anchor-permalink" href="#outfolder-1" title="Permalink"></a></h3><p>By default, output files are saved in the same location as the corresponding input file. If you&#39;d like to save them in a different folder, you can use the <code>-o</code> or <code>--output</code> flag:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
 $ julia decaes.jl image.nii --T2map --T2part --output /path/to/output/folder/</code></pre><p>The requested output folder will be created if it does not already exist.</p><h3 id="nondefault-1"><a class="docs-heading-anchor" href="#nondefault-1">Non-default parameters</a><a class="docs-heading-anchor-permalink" href="#nondefault-1" title="Permalink"></a></h3><p>Parameter values can be set to non-default values at the command line. For example, we can set the echo time <code>TE</code> to 8ms, the number of <span>$T_2$</span> bins <code>nT2</code> to 60, and the <span>$T_2$</span> distribution range to [10ms, 1.5s] as follows:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
 $ julia decaes.jl image.nii --T2map --T2part --TE 0.008 --nT2 60 --T2Range 0.010 1.5</code></pre><h3 id="passmasks-1"><a class="docs-heading-anchor" href="#passmasks-1">Passing image masks</a><a class="docs-heading-anchor-permalink" href="#passmasks-1" title="Permalink"></a></h3><p>Image masks can be passed into DECAES.jl using the <code>--mask</code> flag:</p><pre><code class="language-none">$ export JULIA_NUM_THREADS=1
@@ -275,4 +275,4 @@ BET arguments:
                         the binary mask and will be added to the list
                         of arguments if not provided. (default: &quot;-m -n
                         -f 0.25 -R&quot;)
-  --betpath BETPATH     path to BET executable. (default: &quot;bet&quot;)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../ref/">API Reference »</a></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> on <span class="colophon-date" title="Wednesday 15 April 2020 05:21">Wednesday 15 April 2020</span>. Using Julia version 1.3.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+  --betpath BETPATH     path to BET executable. (default: &quot;bet&quot;)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../ref/">API Reference »</a></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> on <span class="colophon-date" title="Wednesday 15 April 2020 05:40">Wednesday 15 April 2020</span>. Using Julia version 1.3.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
