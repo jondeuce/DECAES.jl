@@ -8,18 +8,18 @@ version = "1.1.0"
 
 [[ArrayInterface]]
 deps = ["LinearAlgebra", "Requires", "SparseArrays"]
-git-tree-sha1 = "fbd3561b9cfb426fb6eb20219165c1b5457fa285"
+git-tree-sha1 = "5f34aee5e5dbc1ce5cfb137d63f719a64d98ae82"
 uuid = "4fba245c-0d91-5ea0-9b3e-6abc04ee57a9"
-version = "2.8.4"
+version = "2.8.5"
 
 [[Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
 [[BinDeps]]
 deps = ["Libdl", "Pkg", "SHA", "URIParser", "Unicode"]
-git-tree-sha1 = "66158ad56b4bf6cc8413b37d0b7bc52402682764"
+git-tree-sha1 = "46cf2c1668ad07aba5a9d331bdeea994a1f13856"
 uuid = "9e28174c-4ba2-5203-b857-d8d62c4213ee"
-version = "1.0.0"
+version = "1.0.1"
 
 [[BinaryProvider]]
 deps = ["Libdl", "SHA"]
@@ -82,9 +82,9 @@ version = "1.1.0"
 
 [[DataStructures]]
 deps = ["InteractiveUtils", "OrderedCollections"]
-git-tree-sha1 = "4dead20a1606a60292529023d6eac18a1ef6432e"
+git-tree-sha1 = "9faa13be79557bf4c5713fb912b0e3c5aa33d046"
 uuid = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
-version = "0.17.12"
+version = "0.17.13"
 
 [[Dates]]
 deps = ["Printf"]
@@ -162,10 +162,10 @@ deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 
 [[Intervals]]
-deps = ["Dates", "Printf", "TimeZones"]
-git-tree-sha1 = "30bce135cd5856edc91f146e3b7e60d736bd067b"
+deps = ["Dates", "Printf", "RecipesBase", "TimeZones"]
+git-tree-sha1 = "5e9938f4dff72e5ed4c0f7fbe34b204cbabcf43a"
 uuid = "d8418881-c3e1-53bb-8760-2df7ec849ed5"
-version = "1.0.0"
+version = "1.1.0"
 
 [[LibGit2]]
 deps = ["Printf"]
@@ -276,9 +276,9 @@ version = "0.2.0"
 
 [[Polynomials]]
 deps = ["Intervals", "LinearAlgebra", "RecipesBase"]
-git-tree-sha1 = "a88e0eddef9202b651f4b60b37b59ca67bb49516"
+git-tree-sha1 = "19f1b9e3f27702309880b9ccb051287729af7db4"
 uuid = "f27b6e38-b328-58d1-80ce-0feddd5e7a45"
-version = "0.7.0"
+version = "0.8.0"
 
 [[PositiveFactorizations]]
 deps = ["LinearAlgebra", "Test"]
@@ -370,10 +370,10 @@ uuid = "b718987f-49a8-5099-9789-dcd902bef87d"
 version = "1.0.1"
 
 [[TimeZones]]
-deps = ["Dates", "EzXML", "Mocking", "Printf", "Serialization", "Unicode"]
-git-tree-sha1 = "f60a33649ef8380bafe6be7d1af1eeb8a3a3ea92"
+deps = ["Dates", "EzXML", "Mocking", "Printf", "RecipesBase", "Serialization", "Unicode"]
+git-tree-sha1 = "0f070959511602e90ac4a8fa1799746c95cc3c19"
 uuid = "f269a46b-ccf7-5d73-abea-4c690281aa53"
-version = "1.0.1"
+version = "1.1.0"
 
 [[TimerOutputs]]
 deps = ["Printf"]
