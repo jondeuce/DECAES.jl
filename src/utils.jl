@@ -51,36 +51,29 @@ end
 
 # Threaded `foreach` construct, borrowing implementation from ThreadTools.jl
 #   See: https://github.com/baggepinnen/ThreadTools.jl/blob/55aaf2bbe735e52cefaad143e7614d4f00e312b0/src/ThreadTools.jl#L57
-function tforeach(f, args...; blocksize = 1, callback = () -> nothing)
-    # One available thread: call regular foreach
-    if Threads.nthreads() == 1
-        return foreach(args...) do (args...)
-            f(args...)
-            callback()
-        end
-    end
-
-    tasks = if blocksize == 1
-        # Spawn one task for each function call
-        map(args...) do (args...)
+function tforeach(f, xs; blocksize = 1)
+    if Threads.nthreads() == 1 || length(xs) <= 2 * Threads.nthreads() || length(xs) <= blocksize
+        # Run `f` sequentially
+        tforeach_seq(f, xs)
+    elseif blocksize == 1
+        # Spawn one task for each `f` call
+        @sync for i in eachindex(xs)
             Threads.@spawn begin
-                f(args...)
-                callback()
+                f(@inbounds xs[i])
             end
         end
     else
-        # Spawn one task for each `blocksize` function calls
-        blockargs = Iterators.partition(Iterators.zip(args...), blocksize)
-        map(blockargs) do blockargs
-            Threads.@spawn begin
-                foreach(args -> f(args...), blockargs)
-                callback()
-            end
+        # Spawn one task for each `blocksize` `f` calls
+        @sync for p in Iterators.partition(xs, blocksize)
+            Threads.@spawn tforeach_seq(f, p)
         end
     end
+end
 
-    # Fetch task results, running them in parallel
-    foreach(wait, tasks)
+function tforeach_seq(f, xs)
+    @simd ivdep for i in eachindex(xs)
+        f(@inbounds xs[i])
+    end
 end
 
 # Running linear regression
