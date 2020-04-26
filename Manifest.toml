@@ -212,9 +212,9 @@ version = "0.4.0"
 
 [[LoopVectorization]]
 deps = ["DocStringExtensions", "LinearAlgebra", "OffsetArrays", "SIMDPirates", "SLEEFPirates", "UnPack", "VectorizationBase"]
-git-tree-sha1 = "2490432d3394be11eedcecd35c5f01e2f7e32448"
+git-tree-sha1 = "a46175e3f8125db7d2b96a8091d5adc5c2cf4912"
 uuid = "bdcacae8-1622-11e9-2a5c-532679323890"
-version = "0.7.1"
+version = "0.7.2"
 
 [[MAT]]
 deps = ["BufferedStreams", "CodecZlib", "HDF5", "SparseArrays"]
