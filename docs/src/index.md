@@ -50,7 +50,7 @@ Some applications of myelin water imaging:
 Start `julia` from the command line, type `]` to enter the package manager REPL mode (the `julia>` prompt will be replaced by a `pkg>` prompt), and enter the following command:
 
 ```julia
-pkg> add https://github.com/jondeuce/DECAES.jl.git
+pkg> add DECAES
 ```
 
 Once the package is finished installing, type the backspace key to exit the package manager REPL mode (the `julia>` prompt should reappear).
