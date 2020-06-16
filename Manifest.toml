@@ -206,9 +206,9 @@ version = "0.4.1"
 
 [[LoopVectorization]]
 deps = ["DocStringExtensions", "LinearAlgebra", "OffsetArrays", "SIMDPirates", "SLEEFPirates", "UnPack", "VectorizationBase"]
-git-tree-sha1 = "a3e12731ea51d6281e15193db1fac00f902fa948"
+git-tree-sha1 = "49f63ee627fdce98e6a1c478d984479e8a5c16f1"
 uuid = "bdcacae8-1622-11e9-2a5c-532679323890"
-version = "0.7.8"
+version = "0.8.0"
 
 [[Lz4_jll]]
 deps = ["Libdl", "Pkg"]
@@ -346,15 +346,15 @@ version = "2.8.0"
 
 [[SIMDPirates]]
 deps = ["VectorizationBase"]
-git-tree-sha1 = "a0384f5fa5812f13a7db3cf724973382c585a4e6"
+git-tree-sha1 = "8476ffece81efca861b20282c74d70d07ef882ff"
 uuid = "21efa798-c60a-11e8-04d3-e1a92915a26a"
-version = "0.7.25"
+version = "0.8.3"
 
 [[SLEEFPirates]]
 deps = ["Libdl", "SIMDPirates", "VectorizationBase"]
-git-tree-sha1 = "19e484ca35bb2b39b0b3b76077927f366727abd4"
+git-tree-sha1 = "c5c88ccad9e4aac35e7b4737bfc08296210b2d27"
 uuid = "476501e8-09a2-5ece-8869-fb82de89a1fa"
-version = "0.4.8"
+version = "0.5.0"
 
 [[Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
@@ -430,18 +430,18 @@ deps = ["Random", "SHA"]
 uuid = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [[UnPack]]
-git-tree-sha1 = "e0cb9715adda456f7657e45377fd3063bf87179a"
+git-tree-sha1 = "d4bfa022cd30df012700cf380af2141961bb3bfb"
 uuid = "3a884ed6-31ef-47d7-9d2a-63182c4928ed"
-version = "0.1.0"
+version = "1.0.1"
 
 [[Unicode]]
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
 
 [[VectorizationBase]]
 deps = ["CpuId", "LinearAlgebra"]
-git-tree-sha1 = "e471bcf74579adbed671fbc6ee34bfa2b2190bc0"
+git-tree-sha1 = "ce12b6b864d5c67f88c243ee6224d285da219d2c"
 uuid = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
-version = "0.11.5"
+version = "0.12.1"
 
 [[XML2_jll]]
 deps = ["Libdl", "Libiconv_jll", "Pkg", "Zlib_jll"]
