@@ -8,7 +8,7 @@
 [![Coveralls](https://coveralls.io/repos/github/jondeuce/DECAES.jl/badge.svg?branch=master)](https://coveralls.io/github/jondeuce/DECAES.jl?branch=master)
 [![Build Status](https://api.cirrus-ci.com/github/jondeuce/DECAES.jl.svg)](https://cirrus-ci.com/github/jondeuce/DECAES.jl)
 
-DECAES.jl is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) of multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
+DECAES.jl is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) from multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
 Post-processing of these T2-distributions allows for the computation of measures such as the [myelin water fraction (MWF)](https://doi.org/10.1002/mrm.1910310614) or the [luminal water fraction (LWF)](https://doi.org/10.1148/radiol.2017161687).
 
 DECAES.jl is written in the open-source [Julia programming language](https://julialang.org/).
@@ -17,11 +17,10 @@ The [examples repository](https://github.com/jondeuce/mwiexamples) additionally 
 
 ## Installation
 
-In Julia v1.3 you can install DECAES.jl from the Pkg REPL:
+In Julia v1.3 or later you can install DECAES.jl from the Pkg REPL:
 ```
-pkg> add https://github.com/jondeuce/DECAES.jl.git
+pkg> add DECAES
 ```
-which will track the `master` branch of the package.
 
 ## Command Line Interface
 
@@ -30,7 +29,7 @@ The CLI takes as input `.nii`, `.nii.gz`, or `.mat` files and performs one or bo
 
 * **Note:** if your data is in DICOM or PAR/REC format, the [freely available `dcm2niix` tool](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage) is able to convert both [DICOM](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#General_Usage) and [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) files into NIfTI format
 
-There are two equivalent ways use the CLI, assuming DECAES.jl is already installed:
+There are two equivalent ways to use the CLI, assuming DECAES.jl is already installed:
 
 **1. Helper script:** Create a script called e.g. `decaes.jl` with the following contents:
 
@@ -42,15 +41,15 @@ main() # call CLI entrypoint function
 This script can then be invoked from the command line as follows:
 
 ```bash
-$ export JULIA_NUM_THREADS=4
+$ export JULIA_NUM_THREADS=4 # set JULIA_NUM_THREADS > 1 to enable parallel processing
 $ julia decaes.jl <COMMAND LINE ARGS>
 ```
 
-**2. Julia `-e` flag:** The contents of the above script can be written directly at the command line using the `-e` flag (`-e` for "evaluate"):
+**2. Julia `-e` flag:** The contents of the above script can be written directly at the command line using the `-e` (for "evaluate") flag:
 
 ```bash
 $ export JULIA_NUM_THREADS=4
-$ julia -e 'using DECAES; main()' <COMMAND LINE ARGS>
+$ julia -e 'using DECAES; main()' -- <COMMAND LINE ARGS>
 ```
 
 ## Documentation
@@ -64,7 +63,7 @@ Find package documentation at the above link, which includes:
 
 ## Examples repository
 
-See the [examples repository](https://github.com/jondeuce/mwiexamples) for a walk-through guide for using the CLI, including example MWI data, as well as a script for calling the CLI from MATLAB.
+See the [examples repository](https://github.com/jondeuce/mwiexamples) for a walk-through guide for using the CLI, including example CPMG data for performing MWI, as well as a script for calling the CLI from MATLAB.
 
 # Benchmarks
 
@@ -78,47 +77,52 @@ The Julia implementation uses DECAES.jl.
 
 | Toolbox                | Parallelism        | Image Size             | T2-Distribution | Speedup   | Total Time   | Speedup   |
 | :---:                  | :---:              | :---:                  | :---:           | :---:     | :---:        | :---:     |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 175x140x1x56           | 00h:03m:03s     |    -      | 00h:03m:04s  |    -      |
-| DECAES.jl              | 1 thread           | 175x140x1x56           | 00h:00m:14s     | **13X**   | 00h:00m:27s  | **6.8X**  |
-| DECAES.jl              | 4 threads          | 175x140x1x56           | 00h:00m:04s     | **46X**   | 00h:00m:19s  | **9.7X**  |
-| DECAES.jl              | 8 threads          | 175x140x1x56           | 00h:00m:03s     | **61X**   | 00h:00m:16s  | **12X**   |
-|                        |                    |                        |                 |           |              |           |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 175x140x8x56           | 00h:19m:56s     | -         | 00h:20m:02s  | -         |
-| DECAES.jl              | 1 thread           | 175x140x8x56           | 00h:01m:54s     | **10X**   | 00h:02m:11s  | **9.2X**  |
-| DECAES.jl              | 4 threads          | 175x140x8x56           | 00h:00m:42s     | **28X**   | 00h:00m:59s  | **20X**   |
-| DECAES.jl              | 8 threads          | 175x140x8x56           | 00h:00m:26s     | **46X**   | 00h:00m:41s  | **29X**   |
-|                        |                    |                        |                 |           |              |           |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x48x48          | 02h:53m:13s     | -         | 02h:54m:24s  | -         |
-| DECAES.jl              | 8 threads          | 240x240x48x48          | 00h:04m:25s     | **39X**   | 00h:05m:03s  | **35X**   |
-|                        |                    |                        |                 |           |              |           |
 | MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x48x48 + mask   | 01h:29m:35s     | -         | 01h:30m:37s  | -         |
-| DECAES.jl              | 4 threads          | 240x240x48x48 + mask   | 00h:02m:11s     | **41X**   | 00h:02m:46s  | **33X**   |
-| DECAES.jl              | 8 threads          | 240x240x48x48 + mask   | 00h:01m:47s     | **50X**   | 00h:02m:15s  | **40X**   |
-|                        |                    |                        |                 |           |              |           |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x113x56         | 09h:35m:17s     | -         | 09h:39m:33s  | -         |
-| DECAES.jl              | 8 threads          | 240x240x113x56         | 00h:14m:36s     | **39X**   | 00h:16m:40s  | **35X**   |
+| DECAES.jl              | 4 threads          | 240x240x48x48 + mask   | 00h:01m:35s     | **57X**   | 00h:02m:34s  | **35X**   |
+| DECAES.jl              | 8 threads          | 240x240x48x48 + mask   | 00h:01m:24s     | **64X**   | 00h:02m:14s  | **41X**   |
 |                        |                    |                        |                 |           |              |           |
 | MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x113x56 + mask  | 02h:25m:19s     | -         | 02h:27m:52s  | -         |
-| DECAES.jl              | 4 threads          | 240x240x113x56 + mask  | 00h:04m:15s     | **30X**   | 00h:05m:07s  | **29X**   |
-| DECAES.jl              | 8 threads          | 240x240x113x56 + mask  | 00h:02m:59s     | **49X**   | 00h:03m:49s  | **39X**   |
+| DECAES.jl              | 4 threads          | 240x240x113x56 + mask  | 00h:02m:34s     | **57X**   | 00h:04m:00s  | **37X**   |
+| DECAES.jl              | 8 threads          | 240x240x113x56 + mask  | 00h:02m:20s     | **62X**   | 00h:03m:38s  | **41X**   |
+|                        |                    |                        |                 |           |              |           |
+| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x48x48          | 02h:53m:13s     | -         | 02h:54m:24s  | -         |
+| DECAES.jl              | 8 threads          | 240x240x48x48          | 00h:03m:35s     | **48X**   | 00h:04m:11s  | **42X**   |
+|                        |                    |                        |                 |           |              |           |
+| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x113x56         | 09h:35m:17s     | -         | 09h:39m:33s  | -         |
+| DECAES.jl              | 8 threads          | 240x240x113x56         | 00h:11m:49s     | **49X**   | 00h:12m:36s  | **46X**   |
 
 </center>
+
+<!--
+Benchmarks for small datasets from the [examples repository](https://github.com/jondeuce/mwiexamples)
+| Toolbox                | Parallelism        | Image Size             | T2-Distribution | Speedup   | Total Time   | Speedup   |
+| :---:                  | :---:              | :---:                  | :---:           | :---:     | :---:        | :---:     |
+| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 175x140x1x56           | 00h:03m:03s     |    -      | 00h:03m:04s  |    -      |
+| DECAES.jl              | 1 thread           | 175x140x1x56           | 00h:00m:13s     | **14X**   | 00h:00m:30s  | **6.1X**  |
+| DECAES.jl              | 4 threads          | 175x140x1x56           | 00h:00m:07s     | **26X**   | 00h:00m:26s  | **7.1X**  |
+| DECAES.jl              | 8 threads          | 175x140x1x56           | 00h:00m:05s     | **37X**   | 00h:00m:23s  | **8.0X**  |
+|                        |                    |                        |                 |           |              |           |
+| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 175x140x8x56           | 00h:19m:56s     | -         | 00h:20m:02s  | -         |
+| DECAES.jl              | 1 thread           | 175x140x8x56           | 00h:01m:28s     | **14X**   | 00h:01m:46s  | **11X**   |
+| DECAES.jl              | 4 threads          | 175x140x8x56           | 00h:00m:26s     | **46X**   | 00h:00m:46s  | **26X**   |
+| DECAES.jl              | 8 threads          | 175x140x8x56           | 00h:00m:23s     | **52X**   | 00h:00m:43s  | **28X**   |
+-->
 
 **Processor:** 2.10GHz Intel Xeon Gold 6130 with 16 CPU cores/32 threads:
 
 <center>
 
-| Toolbox                | Parallelism        | Image Size             | T2-Distribution | Speedup   | Total Time      | Speedup   |
-| :---:                  | :---:              | :---:                  | :---:           | :---:     | :---:           | :---:     |
-| DECAES.jl              | 1 threads          | 240x240x48x48 + mask   | 00h:13m:13s     | -         | 00h:13m:41s     | -         |
-| DECAES.jl              | 16 threads         | 240x240x48x48 + mask   | 00h:01m:30s     | 8.8X      | 00h:01m:58s     | 7.0X      |
-| DECAES.jl              | 28 threads         | 240x240x48x48 + mask   | **00h:01m:14s** | **11X**   | **00h:01m:41s** | **8.1X**  |
-| DECAES.jl              | 32 threads         | 240x240x48x48 + mask   | 00h:01m:21s     | 9.8X      | 00h:01m:49s     | 7.5X      |
-|                        |                    |                        |                 |           |                 |           |
-| DECAES.jl              | 1 threads          | 240x240x113x56 + mask  | 00h:22m:57s     | -         | 00h:23m:46s     | -         |
-| DECAES.jl              | 16 threads         | 240x240x113x56 + mask  | 00h:02m:47s     | 8.2X      | 00h:03m:37s     | 6.6X      |
-| DECAES.jl              | 28 threads         | 240x240x113x56 + mask  | **00h:02m:14s** | **10X**   | **00h:02m:58s** | **8.0X**  |
-| DECAES.jl              | 32 threads         | 240x240x113x56 + mask  | 00h:02m:20s     | 9.8X      | 00h:03m:06s     | 7.7X      |
+| Toolbox                | Parallelism        | Image Size             | T2-Distribution | Total Time  |
+| :---:                  | :---:              | :---:                  | :---:           | :---:       |
+| DECAES.jl              | 4 threads          | 240x240x48x48 + mask   | 04m:01s         | 04m:14s     |
+| DECAES.jl              | 8 threads          | 240x240x48x48 + mask   | 02m:13s         | 02m:28s     |
+| DECAES.jl              | 16 threads         | 240x240x48x48 + mask   | 01m:11s         | 01m:24s     |
+| DECAES.jl              | 32 threads         | 240x240x48x48 + mask   | 00m:57s         | 01m:09s     |
+|                        |                    |                        |                 |             |
+| DECAES.jl              | 4 threads          | 240x240x113x56 + mask  | 05m:56s         | 06m:25s     |
+| DECAES.jl              | 8 threads          | 240x240x113x56 + mask  | 03m:45s         | 04m:21s     |
+| DECAES.jl              | 16 threads         | 240x240x113x56 + mask  | 02m:09s         | 02m:37s     |
+| DECAES.jl              | 32 threads         | 240x240x113x56 + mask  | 01m:40s         | 02m:09s     |
 
 </center>
 

@@ -1,6 +1,6 @@
 # Command Line Interface
 
-DECAES.jl provides a command line interface (CLI) for calling the main analysis functions: [`T2mapSEcorr`](@ref) for computing $T_2$-distributions, and [`T2partSEcorr`](@ref) for computing $T_2$-parts analysis, such as computing the myelin water fraction.
+DECAES.jl provides a command line interface (CLI) for calling the main analysis functions: [`T2mapSEcorr`](@ref) for computing $T_2$-distributions, and [`T2partSEcorr`](@ref) for running $T_2$-parts analysis on the resulting $T_2$-distributions for computing measures such as the myelin water fraction.
 
 ## Using the CLI
 
@@ -19,10 +19,10 @@ Run this script from the command line using `julia` as follows:
 $ julia decaes.jl image.nii <COMMAND LINE ARGS>
 ```
 
-**2. Julia `-e` flag:** The contents of the above script can equivalently be passed directly to Julia using the `-e` flag (`-e` for "evaluate"):
+**2. Julia `-e` flag:** The contents of the above script can equivalently be passed directly to Julia using the `-e` (for "evaluate") flag:
 
 ```bash
-$ julia -e 'using DECAES; main()' image.nii <COMMAND LINE ARGS>
+$ julia -e 'using DECAES; main()' -- image.nii <COMMAND LINE ARGS>
 ```
 
 Either way of calling the CLI forwards the arguments `<COMMAND LINE ARGS>` to the entrypoint function [`main`](@ref).
@@ -35,7 +35,7 @@ For the remainder of this section, we will make use of the `decaes.jl` script fr
 Multithreaded parallel processing can be enabled by setting the `JULIA_NUM_THREADS` environment variable as follows:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
+println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads()) # set JULIA_NUM_THREADS > 1 to enable parallel processing") # hide
 println("\$ julia decaes.jl image.nii <COMMAND LINE ARGS>") # hide
 ```
 
@@ -54,6 +54,9 @@ The input image (`image.nii` above) must be one of two file types:
 2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`. **Note:** `.mat` files saved in the oldest format `v4` are not supported, but all newer formats (`v6`, `v7`, and `v7.3`) are supported. See [MAT.jl](https://github.com/JuliaIO/MAT.jl) for more information
 
 All output files are saved as `.mat` files in format `v7.3`. 
+
+!!! note
+    If your data is in DICOM or PAR/REC format, the [freely available `dcm2niix` tool](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage) is able to convert both [DICOM](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#General_Usage) and [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) files into NIfTI format
 
 ## Arguments
 
@@ -169,7 +172,7 @@ println("\$ julia decaes.jl image1.nii image2.mat --T2map --T2part --mask mask1.
 ```
 
 !!! note
-    If input images have been manually masked such that they are e.g. zero outside regions of interest, a mask need not be passed.
+    If input images have been manually masked such that they are zero outside regions of interest, a mask need not be passed.
     The `--Threshold` parameter of [`T2mapSEcorr`](@ref) controls a first echo intensity cutoff threshold (default value 200.0), below which voxels are automatically skipped during processing.
 
 ### Automatic brain masking with BET
@@ -231,19 +234,19 @@ println("\$ julia decaes.jl @/path/to/settings.txt") # hide
 
 ## Legacy options
 
-During the MATLAB port to Julia, some algorithms were replaced with mathematically identical but computationally more efficient algorithms which may cause small differences in output parameter maps, and some default options were changed.
+During the MATLAB port to Julia, some algorithms were replaced with mathematically identical but computationally more efficient algorithms which may cause small differences in output parameter maps, and some default options were changed as well.
 
 For example, the flip angle optimization procedure requires finding the root of a cubic spline.
 In MATLAB this was performed by evaluating the spline on a very fine mesh and choosing the value nearest zero.
-During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by an efficient spline rootfinding method.
+During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by an efficient rootfinding method tailored for cubic splines.
 
 The differences due to algorithmic changes like the one above are quite small.
-For example, most tests will pass when using a relative tolerance of ``10^{-3}``, and almost all tests pass with a relative tolerance of ``10^{-2}``.
+For example, most tests in the DECAES test suite will pass when using a relative tolerance of ``10^{-3}``, and almost all tests pass with a relative tolerance of ``10^{-2}``.
 That is to say that nearly all outputs are identical to 3 or more significant digits, which includes $T_2$-distributions, MWF maps, etc.
 
 The `--legacy` flag is available if *exact* reproducibility is required compared to the MATLAB version.
 This will ensure that all outputs match to nearly machine precision (a relative tolerance of ``10^{-10}`` is used during testing).
-Note however that the `--legacy` flag may cause a significant slowdown in processing time due to less efficient internal algorithms being used, and is therefore not recommended unless absolutely necessary.
+Note however that the `--legacy` flag may cause a significant slowdown in processing time due to less efficient algorithms being used internally, and is therefore not recommended unless absolutely necessary.
 Differences due to changes in default parameters can always be overridden by passing in the desired value explicitly (e.g. `--SPWin 0.014 0.040`) without the need for the `--legacy` flag.
 
 **Default options with the `--legacy` flag**
