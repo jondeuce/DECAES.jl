@@ -4,6 +4,7 @@ using LinearAlgebra, SpecialFunctions, Statistics, Random
 using ArgParse, Logging, LoggingExtras
 import Optim, Dierckx, Polynomials, PolynomialRoots
 import MAT, NIfTI
+import LoopVectorization
 using Parameters: @with_kw, @with_kw_noshow, @unpack
 using StaticArrays: SVector, SizedVector, SA
 using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!

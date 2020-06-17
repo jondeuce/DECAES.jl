@@ -28,6 +28,7 @@
 module NNLS
 
 using LinearAlgebra
+using ..LoopVectorization
 
 export nnls,
        nnls!,
@@ -52,10 +53,10 @@ function construct_householder!(u::AbstractVector{T}, up::T)::T where {T}
 
     cl = maximum(abs, u)
     @assert cl > 0
-    clinv = 1 / cl
+    clinvsq = 1 / cl^2
     sm = zero(T)
-    @inbounds for ui in u
-        sm += (ui * clinv)^2
+    @avx for i in eachindex(u)
+        sm += clinvsq * u[i]^2
     end
     cl *= sqrt(sm)
     @inbounds u1 = u[1]
@@ -90,14 +91,14 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
         b = 1 / b
 
         sm = c[1] * up
-        @simd for i in 2:m
-            @inbounds sm += c[i] * u[i]
+        @avx for i in 2:m
+            sm += c[i] * u[i]
         end
-        @inbounds if sm != 0
+        if sm != 0
             sm *= b
-            c[1] += sm * up
-            @simd for i in 2:m
-                @inbounds c[i] += sm * u[i]
+            @inbounds c[1] += sm * up
+            @avx for i in 2:m
+                c[i] += sm * u[i]
             end
         end
     end
@@ -146,13 +147,14 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
 function solve_triangular_system!(zz, A, idx, nsetp, jj)
-    @inbounds for l in 1:nsetp
+    ip = nsetp
+    @inbounds jj = idx[ip]
+    @inbounds zz[ip] /= A[ip, jj]
+    @inbounds for l in 2:nsetp
         ip = nsetp + 1 - l
-        if l != 1
-            @inbounds zz1 = zz[ip + 1]
-            @simd for ii in 1:ip
-                @inbounds zz[ii] -= A[ii, jj] * zz1
-            end
+        zz1 = zz[ip + 1]
+        @avx for ii in 1:ip
+            zz[ii] -= A[ii, jj] * zz1
         end
         jj = idx[ip]
         zz[ip] /= A[ip, jj]
@@ -235,6 +237,8 @@ struct UnsafeVectorView{T} <: AbstractVector{T}
 end
 
 UnsafeVectorView(parent::DenseArray{T}, start_ind::Integer, len::Integer) where {T} = UnsafeVectorView{T}(start_ind - 1, len, pointer(parent))
+Base.pointer(v::UnsafeVectorView{T}) where {T} = v.ptr + sizeof(T) * v.offset
+Base.strides(v::UnsafeVectorView) = (1,)
 Base.size(v::UnsafeVectorView) = (v.len,)
 Base.getindex(v::UnsafeVectorView, idx) = unsafe_load(v.ptr, idx + v.offset)
 Base.setindex!(v::UnsafeVectorView, value, idx) = unsafe_store!(v.ptr, value, idx + v.offset)
@@ -324,7 +328,7 @@ function nnls!(
     idx .= 1:n
 
     iz2 = n
-    iz1 = one(TI)
+    iz1 = 1
     iz = zero(TI)
     j = zero(TI)
     jj = zero(TI)
@@ -346,8 +350,8 @@ function nnls!(
         @inbounds for i in iz1:iz2
             idxi = idx[i]
             sm = zero(T)
-            @simd for l in (nsetp + 1):m
-                @inbounds sm += A[l, idxi] * b[l]
+            @avx for l in (nsetp + 1):m
+                sm += A[l, idxi] * b[l]
             end
             w[idxi] = sm
         end
@@ -373,8 +377,8 @@ function nnls!(
             up = construct_householder!(
                  fastview(A, Ainds[nsetp + 1, j], m - nsetp), up)
             unorm = zero(T)
-            @simd for l in 1:nsetp
-                @inbounds unorm += A[l, j]^2
+            @avx for l in 1:nsetp
+                unorm += A[l, j]^2
             end
             unorm = sqrt(unorm)
 
@@ -413,8 +417,8 @@ function nnls!(
 
         idx[iz] = idx[iz1]
         idx[iz1] = j
-        iz1 += one(TI)
-        nsetp += one(TI)
+        iz1 += 1
+        nsetp += 1
 
         if iz1 <= iz2
             @inbounds for jz in iz1:iz2
@@ -427,7 +431,7 @@ function nnls!(
         end
 
         if nsetp != m
-            @inbounds for l in (nsetp + 1):m
+            @avx for l in (nsetp + 1):m
                 A[l, j] = 0
             end
         end
@@ -453,7 +457,7 @@ function nnls!(
             # SEE IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE.
             # IF NOT COMPUTE ALPHA.
             alpha = convert(T, 2)
-            @inbounds for ip in one(TI):nsetp
+            @inbounds for ip in 1:nsetp
                 l = idx[ip]
                 if zz[ip] <= 0
                     t = -x[l] / (zz[ip] - x[l])
@@ -472,7 +476,7 @@ function nnls!(
 
             # OTHERWISE USE ALPHA WHICH WILL BE BETWEEN 0 AND 1 TO
             # INTERPOLATE BETWEEN THE OLD X AND THE NEW ZZ.
-            @inbounds for ip in one(TI):nsetp
+            @inbounds for ip in 1:nsetp
                 l = idx[ip]
                 x[l] = x[l] + alpha * (zz[ip] - x[l])
             end
@@ -485,14 +489,14 @@ function nnls!(
                 x[i] = 0
 
                 if jj != nsetp
-                    jj += one(TI)
+                    jj += 1
                     @inbounds for j in jj:nsetp
                         ii = idx[j]
                         idx[j - 1] = ii
                         cc, ss, sig = orthogonal_rotmat(A[j - 1, ii], A[j, ii])
                         A[j - 1, ii] = sig
                         A[j, ii] = 0
-                        @inbounds for l in one(TI):n
+                        @inbounds for l in 1:n
                             if l != ii
                                 # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
                                 temp = A[j - 1, l]
@@ -508,8 +512,8 @@ function nnls!(
                     end
                 end
 
-                nsetp -= one(TI)
-                iz1 -= one(TI)
+                nsetp -= 1
+                iz1 -= 1
                 idx[iz1] = i
 
                 # SEE IF THE REMAINING COEFFS IN SET P ARE FEASIBLE.  THEY SHOULD
@@ -518,7 +522,7 @@ function nnls!(
                 # THAT ARE NONPOSITIVE WILL BE SET TO ZERO
                 # AND MOVED FROM SET P TO SET Z.
                 allfeasible = true
-                @inbounds for jj in one(TI):nsetp
+                @inbounds for jj in 1:nsetp
                     i = idx[jj]
                     if x[i] <= 0
                         allfeasible = false
@@ -552,8 +556,8 @@ function nnls!(
 
     sm = zero(T)
     if nsetp < m
-        @simd for i in (nsetp + 1):m
-            @inbounds sm += b[i]^2
+        @avx for i in (nsetp + 1):m
+            sm += b[i]^2
         end
     else
         w .= 0

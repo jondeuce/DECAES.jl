@@ -47,9 +47,9 @@ See also:
     @assert 0.0 < TE
 
     vTEparam::Union{Tuple{T,T,Int}, Nothing} = nothing
-    @assert vTEparam isa Nothing || begin
-        TE1 = vTEparam[1]; TE2 = vTEparam[2]; nTE1 = vTEparam[3]
-        TE1 < TE2 && nTE1 < nTE && TE1 * round(Int, TE2/TE1) ≈ TE2
+    @assert isnothing(vTEparam) || begin
+        TE1, TE2, nTE1 = vTEparam
+        0.0 < TE1 < TE2 && nTE1 < nTE && round(Int, TE2/TE1) ≈ TE2/TE1
     end
     @assert isnothing(vTEparam) || error("Variable TE is not implemented")
 
@@ -84,7 +84,7 @@ See also:
     @assert Reg ∈ ("no", "chi2", "lcurve")
 
     SetFlipAngle::Union{T,Nothing} = nothing
-    @assert SetFlipAngle isa Nothing || 0.0 < SetFlipAngle <= 180.0
+    @assert isnothing(SetFlipAngle) || 0.0 < SetFlipAngle <= 180.0
 
     SaveResidualNorm::Bool = false
 
@@ -152,7 +152,7 @@ See also:
     @assert MPWin[1] < MPWin[2]
 
     Sigmoid::Union{T,Nothing} = nothing
-    @assert Sigmoid isa Nothing || Sigmoid > 0
+    @assert isnothing(Sigmoid) || Sigmoid > 0
 
     Silent::Bool = false
 end

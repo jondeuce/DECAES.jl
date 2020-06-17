@@ -106,7 +106,7 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     # Run analysis in parallel
     global_buffer.loop_start_time[] = tic()
     indices = filter(I -> image[I,1] >= opts.Threshold, CartesianIndices(opts.MatrixSize))
-    tforeach(indices) do I
+    tforeach(indices; blocksize = 64) do I
         thread_buffer = thread_buffers[Threads.threadid()]
         voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
         update_progress!(global_buffer, thread_buffers, opts)
@@ -247,9 +247,8 @@ end
 # EPG decay curve fitting
 # =========================================================
 function epg_decay_curve_work(o::T2mapOptions{T}) where {T}
-    return isnothing(o.vTEparam) ?
-        EPGdecaycurve_work(T, o.nTE) :
-        EPGdecaycurve_vTE_work(T, o.vTEparam...)
+    return EPGdecaycurve_work(T, o.nTE)
+    # return EPGdecaycurve_vTE_work(T, o.vTEparam...) #TODO update if vTEparam is implemented
 end
 
 function init_epg_decay_basis!(thread_buffer, o::T2mapOptions)
@@ -279,13 +278,9 @@ function epg_decay_basis!(decay_curve_work, decay_basis::AbstractMatrix{T}, flip
     # Compute the NNLS basis over T2 space
     @timeit_debug TIMER() "EPGdecaycurve!" begin
         @inbounds for j in 1:o.nT2
-            if !isnothing(o.vTEparam)
-                EPGdecaycurve_vTE!(decay_curve_work, o.nTE, flip_angle, o.vTEparam..., T2_times[j], o.T1, o.RefConAngle)
-            else
-                # decay_curve = view(decay_basis, :, j) #TODO
-                decay_curve = NNLS.fastview(decay_basis, 1+(j-1)*o.nTE, o.nTE)
-                EPGdecaycurve!(decay_curve, decay_curve_work, flip_angle, o.TE, T2_times[j], o.T1, o.RefConAngle)
-            end
+            decay_curve = NNLS.fastview(decay_basis, 1+(j-1)*o.nTE, o.nTE)
+            EPGdecaycurve!(decay_curve, decay_curve_work, flip_angle, o.TE, T2_times[j], o.T1, o.RefConAngle)
+            # EPGdecaycurve_vTE!(decay_curve_work, o.nTE, flip_angle, o.vTEparam..., T2_times[j], o.T1, o.RefConAngle) #TODO update if vTEparam is implemented
         end
     end
 

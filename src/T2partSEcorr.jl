@@ -94,11 +94,13 @@ function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOpti
     @inbounds @simd for j in 1:length(dist)
         Σ_dist += dist[j]
     end
-    @inbounds for (j,sp) in enumerate(sp_range)
+    @inbounds @simd for j in 1:length(sp_range)
+        sp = sp_range[j]
         dot_sp    += dist[sp] * logT2_times_sp[j]
         Σ_dist_sp += dist[sp]
     end
-    @inbounds for (j,mp) in enumerate(mp_range)
+    @inbounds @simd for j in 1:length(mp_range)
+        mp = mp_range[j]
         dot_mp    += dist[mp] * logT2_times_mp[j]
         Σ_dist_mp += dist[mp]
     end
