@@ -86,7 +86,7 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     image = DECAES.mock_image(nTE = 32 + rand(0:1))
 
     make_settings_perms = [false, true]
-    file_suffix_perms = [".mat", ".nii", ".nii.gz"]
+    file_suffix_perms = [".mat", ".nii", ".nii.gz"] # Note: no PAR/REC or XML/REC, since we can't write to them
     iters = (cli_params_perms, make_settings_perms, file_suffix_perms)
     nloop = max(length.(iters)...)
     repeat_until(x) = Iterators.take(Iterators.cycle(x), nloop)

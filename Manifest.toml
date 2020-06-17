@@ -39,6 +39,11 @@ git-tree-sha1 = "5d55b9486590fdda5905c275bb21ce1f0754020f"
 uuid = "e1450e63-4bb3-523b-b2a4-4ffa8c0fd77d"
 version = "1.0.0"
 
+[[CEnum]]
+git-tree-sha1 = "215a9aa4a1f23fbd05b92769fdd62559488d70e9"
+uuid = "fa961155-64e5-5f13-b03f-caf6b980ea82"
+version = "0.4.1"
+
 [[CodecZlib]]
 deps = ["TranscodingStreams", "Zlib_jll"]
 git-tree-sha1 = "ded953804d019afa9a3f98981d99b33e3db7b6da"
@@ -173,6 +178,12 @@ git-tree-sha1 = "11555ad4a66a93e2268364f2ea11139634f9dda3"
 uuid = "d8418881-c3e1-53bb-8760-2df7ec849ed5"
 version = "1.2.0"
 
+[[LLVM]]
+deps = ["CEnum", "Libdl", "Printf", "Unicode"]
+git-tree-sha1 = "dd3f584c3dbefe39b2a8fbafa1a3b77e31e21255"
+uuid = "929cbde3-209d-540e-8aea-75f648917ca0"
+version = "1.5.1"
+
 [[LibGit2]]
 deps = ["Printf"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
@@ -185,6 +196,12 @@ deps = ["Libdl", "Pkg"]
 git-tree-sha1 = "e5256a3b0ebc710dbd6da0c0b212164a3681037f"
 uuid = "94ce4f54-9a6c-5748-9c1c-f9c7231a4531"
 version = "1.16.0+2"
+
+[[LightXML]]
+deps = ["Libdl", "XML2_jll"]
+git-tree-sha1 = "e129d9391168c677cd4800f5c0abb1ed8cb3794f"
+uuid = "9c8b4983-aa76-5018-a973-4c85ecc9e179"
+version = "0.9.0"
 
 [[LineSearches]]
 deps = ["LinearAlgebra", "NLSolversBase", "NaNMath", "Parameters", "Printf", "Test"]
@@ -438,10 +455,10 @@ version = "1.0.1"
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
 
 [[VectorizationBase]]
-deps = ["CpuId", "LinearAlgebra"]
-git-tree-sha1 = "a7eeff8fae4f11bd1ec140169ae2b10e26adf673"
+deps = ["CpuId", "LLVM", "LinearAlgebra"]
+git-tree-sha1 = "dda42c864581454234b6b9c8e7f441ebbcaa70cc"
 uuid = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
-version = "0.12.6"
+version = "0.12.7"
 
 [[XML2_jll]]
 deps = ["Libdl", "Libiconv_jll", "Pkg", "Zlib_jll"]

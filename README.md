@@ -25,9 +25,19 @@ pkg> add DECAES
 ## Command Line Interface
 
 This toolbox provides a command line interface (CLI) for processing from the terminal.
-The CLI takes as input `.nii`, `.nii.gz`, or `.mat` files and performs one or both of T2-distribution computation and T2-parts analysis, the latter of which performs post-processing of the T2-distribution to calculate parameters such as the MWF or LWF.
+The CLI takes image files as inputs and performs one or both of T2-distribution computation and T2-parts analysis, the latter of which performs post-processing of the T2-distribution to calculate parameters such as the MWF or LWF.
+The input image must be one of the following file types:
 
-* **Note:** if your data is in DICOM or PAR/REC format, the [freely available `dcm2niix` tool](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage) is able to convert both [DICOM](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#General_Usage) and [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) files into NIfTI format
+1. [NIfTI file](https://nifti.nimh.nih.gov/) with extension `.nii`, or [gzip](https://www.gzip.org/) compressed NIfTI file with extension `.nii.gz`
+2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`
+3. Philips [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) file pair with extensions `.par` (or `.PAR`) and `.rec` (or `.REC`)
+4. Philips XML/REC file pair with extensions `.xml` (or `.XML`) and `.rec` (or `.REC`)
+
+All output files are saved as `.mat` files in format `v7.3`.
+
+* **Note:** if your data is in DICOM format, the [freely available `dcm2niix` tool](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage) is able to convert [DICOM](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#General_Usage) files into NIfTI format.
+
+### Basic usage
 
 There are two equivalent ways to use the CLI, assuming DECAES.jl is already installed:
 

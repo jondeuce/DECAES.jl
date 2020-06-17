@@ -49,14 +49,17 @@ This is highly recommended to speed up computation time, but is not strictly req
 
 ## File types
 
-The input image (`image.nii` above) must be one of two file types:
-1. [NIfTI file](https://nifti.nimh.nih.gov/) with extension `.nii`, or [gzip](https://www.gzip.org/) compressed NIfTI file with extension `.nii.gz`. See [NIfTI.jl](https://github.com/JuliaIO/NIfTI.jl) for more information
-2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`. **Note:** `.mat` files saved in the oldest format `v4` are not supported, but all newer formats (`v6`, `v7`, and `v7.3`) are supported. See [MAT.jl](https://github.com/JuliaIO/MAT.jl) for more information
+Input files must be one of the following file types:
+
+1. [NIfTI file](https://nifti.nimh.nih.gov/) with extension `.nii`, or [gzip](https://www.gzip.org/) compressed NIfTI file with extension `.nii.gz`. See [NIfTI.jl](https://github.com/JuliaIO/NIfTI.jl) for more information.
+2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`. **Note:** `.mat` files saved in the oldest format `v4` are not supported, but all newer formats (`v6`, `v7`, and `v7.3`) are supported. See [MAT.jl](https://github.com/JuliaIO/MAT.jl) for more information.
+3. Philips [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) file pair with extensions `.par` (or `.PAR`) and `.rec` (or `.REC`).
+4. Philips XML/REC file pair with extensions `.xml` (or `.XML`) and `.rec` (or `.REC`).
 
 All output files are saved as `.mat` files in format `v7.3`. 
 
 !!! note
-    If your data is in DICOM or PAR/REC format, the [freely available `dcm2niix` tool](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage) is able to convert both [DICOM](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#General_Usage) and [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) files into NIfTI format
+    If your data is in DICOM format, the [freely available `dcm2niix` tool](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage) is able to convert [DICOM](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#General_Usage) files into NIfTI format
 
 ## Arguments
 
@@ -73,8 +76,13 @@ DECAES.ArgParse.show_help(DECAES.ARGPARSE_SETTINGS; exit_when_done = false) # hi
 
 !!! note
     If desired, the $T_2$-distribution computation and the $T_2$-parts analysis may be performed separately:
-    * When the `--T2map` flag is passed, or both `--T2map` and `--T2part` flags are passed, input arrays should be 4D with data as (row, column, slice, echo)
-    * When only the `--T2part` flag is passed, input arrays should be 4D with data as (row, column, slice, $T_2$ bin)
+    * When the `--T2map` flag is passed, or both `--T2map` and `--T2part` flags are passed, input image arrays should be 4D with data as (row, column, slice, echo)
+    * When only the `--T2part` flag is passed, input image arrays should be 4D with data as (row, column, slice, $T_2$ bin)
+
+!!! note
+    * Input files are interpreted as 4D arrays (or 3D arrays for mask files) when loaded; ensure that the underlying data is stored with the first three dimensions as (row, column, slice), and the last dimension as echo (or $T_2$ bin, or omitted for mask files)
+    * NIfTI and PAR/XML/REC image files are coerced into the appropriate dimension; errors or unexpected behaviour may occur if the data is not stored with the correct dimensions
+    * MATLAB image files are searched for arrays with the appropriate dimension; the first such array that is found is used, otherwise an error will occur. **Multiple 3D/4D arrays should not be stored in the same `.mat` file)**
 
 ## Examples
 
@@ -95,6 +103,7 @@ function callmain(args...)
     end
     nothing
 end
+callmain(imfile, "--T2map", "--T2part", "--dry", "--quiet") # precompile
 ```
 
 Suppose you have a multi spin-echo image file `image.nii` which you would like to perform $T_2$ analysis on.
@@ -124,12 +133,8 @@ Multiple input files (possibly of different file types) can be passed in the obv
 
 ```@example
 println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image1.nii image2.mat image3.nii.gz --T2map --T2part") # hide
+println("\$ julia decaes.jl image1.nii image2.mat image3.nii.gz image4.par --T2map --T2part") # hide
 ```
-
-!!! note
-    `.nii` and `.nii.gz` input image files are assumed to be 4D when loaded; an error will occur if they are not 4D.
-    For `.mat` files, the first 4D array which is found within the `.mat` file is used (multiple 4D arrays should not be stored in the same `.mat` file); an error will occur if no 4D image is found.
 
 ### [Specify output folder](@id outfolder)
 
@@ -173,7 +178,7 @@ println("\$ julia decaes.jl image1.nii image2.mat --T2map --T2part --mask mask1.
 
 !!! note
     If input images have been manually masked such that they are zero outside regions of interest, a mask need not be passed.
-    The `--Threshold` parameter of [`T2mapSEcorr`](@ref) controls a first echo intensity cutoff threshold (default value 200.0), below which voxels are automatically skipped during processing.
+    The `--Threshold` parameter of [`T2mapSEcorr`](@ref) controls a first echo intensity cutoff threshold (default value 200.0), below which voxels are automatically skipped during processing
 
 ### Automatic brain masking with BET
 
@@ -197,7 +202,7 @@ println("\$ julia decaes.jl image.nii --T2map --T2part --bet --betpath /path/to/
 Note that `bet` arguments must be passed as a single string to `--betargs`, separated by spaces, as shown above.
 
 !!! note
-    If a mask file is passed using the `--mask` flag, the `--bet` flag will be ignored and the mask file will be used.
+    If a mask file is passed using the `--mask` flag, the `--bet` flag will be ignored and the mask file will be used
 
 ### Settings files
 
@@ -234,8 +239,7 @@ println("\$ julia decaes.jl @/path/to/settings.txt") # hide
 
 ## Legacy options
 
-During the MATLAB port to Julia, some algorithms were replaced with mathematically identical but computationally more efficient algorithms which may cause small differences in output parameter maps, and some default options were changed as well.
-
+During the MATLAB port to Julia, some algorithms were replaced with computationally more efficient algorithms which may cause small differences in output parameter maps, and some default options were changed as well.
 For example, the flip angle optimization procedure requires finding the root of a cubic spline.
 In MATLAB this was performed by evaluating the spline on a very fine mesh and choosing the value nearest zero.
 During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by an efficient rootfinding method tailored for cubic splines.
@@ -243,6 +247,7 @@ During profiling it was found that this was a time consuming operation, and ther
 The differences due to algorithmic changes like the one above are quite small.
 For example, most tests in the DECAES test suite will pass when using a relative tolerance of ``10^{-3}``, and almost all tests pass with a relative tolerance of ``10^{-2}``.
 That is to say that nearly all outputs are identical to 3 or more significant digits, which includes $T_2$-distributions, MWF maps, etc.
+It should be emphasized, though, that these differences arise from improved algorithms and are therefore likely to be small improvements.
 
 The `--legacy` flag is available if *exact* reproducibility is required compared to the MATLAB version.
 This will ensure that all outputs match to nearly machine precision (a relative tolerance of ``10^{-10}`` is used during testing).

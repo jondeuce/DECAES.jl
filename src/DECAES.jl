@@ -3,15 +3,18 @@ module DECAES
 using LinearAlgebra, SpecialFunctions, Statistics, Random
 using ArgParse, Logging, LoggingExtras
 import Optim, Dierckx, Polynomials, PolynomialRoots
-import MAT, NIfTI
+import MAT, NIfTI, LightXML
 import LoopVectorization
 using Parameters: @with_kw, @with_kw_noshow, @unpack
 using StaticArrays: SVector, SizedVector, SA
 using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
 using SIMD: Vec, FloatingTypes, shufflevector
 
-include("nnls.jl")
+include("NNLS.jl")
 using .NNLS
+
+include("ParXRec.jl")
+import .ParXRec
 
 include("types.jl")
 include("utils.jl")
@@ -24,7 +27,7 @@ include("T2partSEcorr.jl")
 include("main.jl")
 
 # Global constants and settings computed during precompilation
-const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz")
+const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz", ".par", ".xml", ".rec")
 const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
 
 const ARGPARSE_SETTINGS = create_argparse_settings(legacy = false)

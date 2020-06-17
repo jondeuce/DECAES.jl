@@ -266,24 +266,30 @@ end
 
 function load_image(filename, ::Val{dim} = Val(4)) where {dim}
     image = if endswith(filename, ".mat")
-        data = MAT.matread(filename)
-        
         # Load first `dim`-dimensional array which is found, or throw an error if none are found
+        data = MAT.matread(filename)
         key = findfirst(x -> x isa AbstractArray{T,dim} where {T}, data)
         if isnothing(key)
             error("No 4D array was found in the input file: $filename")
         end
         data[key]
-    elseif endswith(filename, ".nii") || endswith(filename, ".nii.gz")
-        data = NIfTI.niread(filename)
-        
+
+    elseif any(endswith.(filename, (".nii", ".nii.gz")))
         # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned
         #   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
+        # Loaded data is coerced to a `dim`-dimensional array
+        data = NIfTI.niread(filename)
         if data.header.scl_slope == 0
             data.raw[ntuple(_ -> Colon(), dim)...] # Return raw data
         else
             data[ntuple(_ -> Colon(), dim)...] # Return scaled data (getindex from the NIfTI package handles scaling)
         end
+
+    elseif any(endswith.(lowercase(filename), (".par", ".xml", ".rec")))
+        # Load PAR/REC or XML/REC file, coercing resulting data into a `dim`-dimensional array
+        _, data = ParXRec.parxrec(filename)
+        data[ntuple(_ -> Colon(), dim)...]
+
     else
         error("Currently, only $ALLOWED_FILE_SUFFIXES_STRING files are supported")
     end

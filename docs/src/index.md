@@ -78,6 +78,6 @@ Depth = 1
 
 ## Acknowledgements
 
-* Porting to Julia was done by Jonathan Doucette (email: jdoucette@phas.ubc.ca) in November 2019. This work was funded by NSERC (016-05371) and CIHR (RN382474-418628) (PI Alexander Rauscher, University of British Columbia)
-* Christian Kames (email: ckames@phas.ubc.ca) contributed to optimizing the Julia port for both speed and memory efficiency
-* Original MATLAB code was written by Thomas Prasloski (email: tprasloski@gmail.com). Modifications to the MATLAB code were made by Vanessa Wiggermann to enable processing on various MATLAB versions in February 2019. The Julia port is based on this modified version.
+* Porting to Julia was done by Jonathan Doucette (email: jdoucette@physics.ubc.ca) in November 2019. This work was funded by NSERC (016-05371) and CIHR (RN382474-418628) under PI Alexander Rauscher at the University of British Columbia
+* Christian Kames (email: ckames@physics.ubc.ca) contributed to optimizing the Julia port for both speed and memory efficiency, as well as writing the PAR/XML/REC file reader used internally
+* Original MATLAB code was written by Thomas Prasloski (email: tprasloski@gmail.com). Modifications to the MATLAB code were made by Vanessa Wiggermann to enable processing on various MATLAB versions in February 2019. The Julia port is based on this modified version
