@@ -1,10 +1,10 @@
 # Command Line Interface
 
-DECAES.jl provides a command line interface (CLI) for calling the main analysis functions: [`T2mapSEcorr`](@ref) for computing $T_2$-distributions, and [`T2partSEcorr`](@ref) for running $T_2$-parts analysis on the resulting $T_2$-distributions for computing measures such as the myelin water fraction.
+DECAES provides a command line interface (CLI) for calling the main analysis functions: [`T2mapSEcorr`](@ref) for computing $T_2$-distributions, and [`T2partSEcorr`](@ref) for running $T_2$-parts analysis on the resulting $T_2$-distributions for computing measures such as the myelin water fraction.
 
 ## Using the CLI
 
-Assuming you have [DECAES.jl installed](@ref installation), there are two equivalent ways to use the CLI:
+Assuming you have [DECAES installed](@ref installation), there are two equivalent ways to use the CLI:
 
 **1. Helper script:** Create a simple Julia script which calls the entrypoint function [`main`](@ref) provided by this package. For example, save the following code in a Julia script called `decaes.jl`:
 
@@ -160,7 +160,7 @@ println("\$ julia decaes.jl image.nii --T2map --T2part --TE 0.008 --nT2 60 --T2R
 
 ### [Passing image masks](@id passmasks)
 
-Image masks can be passed into DECAES.jl using the `--mask` flag:
+Image masks can be passed into DECAES using the `--mask` flag:
 
 ```@example
 println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide

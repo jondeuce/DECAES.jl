@@ -6,7 +6,7 @@
 # 
 #   https://github.com/jondeuce/NonNegLeastSquares.jl/blob/master/src/NonNegLeastSquares.jl
 # 
-# This is a temporary measure to get DECAES.jl up and running.
+# This is a temporary measure to get DECAES up and running.
 # Depending on the unregistered package at the above link repeatedly leads to the following error:
 # 
 #   ERROR: Unsatisfiable requirements detected for package NonNegLeastSquares [e5310699]:
