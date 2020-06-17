@@ -45,6 +45,18 @@ git-tree-sha1 = "5d55b9486590fdda5905c275bb21ce1f0754020f"
 uuid = "e1450e63-4bb3-523b-b2a4-4ffa8c0fd77d"
 version = "1.0.0"
 
+[[CMake]]
+deps = ["BinDeps"]
+git-tree-sha1 = "50a8b41d2c562fccd9ab841085fc7d1e2706da82"
+uuid = "631607c0-34d2-5d66-819e-eb0f9aa2061a"
+version = "1.2.0"
+
+[[CMakeWrapper]]
+deps = ["BinDeps", "CMake", "Libdl", "Parameters", "Test"]
+git-tree-sha1 = "cd82e6082a144e2425bcba6e5fdf5b404401c8e4"
+uuid = "d5fb7624-851a-54ee-a528-d3f3bac0b4a0"
+version = "0.2.4"
+
 [[CodecZlib]]
 deps = ["TranscodingStreams", "Zlib_jll"]
 git-tree-sha1 = "ded953804d019afa9a3f98981d99b33e3db7b6da"
@@ -307,9 +319,9 @@ version = "1.0.0"
 
 [[Polynomials]]
 deps = ["Intervals", "LinearAlgebra", "RecipesBase"]
-git-tree-sha1 = "8cc11cbb9dcb4d33a00d87bcab8e283d3a9409c7"
+git-tree-sha1 = "111ec00e7638bdd1a64e0cfb876fbf0e9c51a3b5"
 uuid = "f27b6e38-b328-58d1-80ce-0feddd5e7a45"
-version = "1.0.0"
+version = "1.1.0"
 
 [[PositiveFactorizations]]
 deps = ["LinearAlgebra", "Test"]
