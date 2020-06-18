@@ -13,24 +13,22 @@ function main(command_line_args::Vector{String} = ARGS)
     opts = parse_args(command_line_args, ARGPARSE_SETTINGS; as_symbols = true)
     
     # If --legacy flag was passed, re-parse inputs since default values are --legacy dependent
-    if opts[:legacy] == true
+    if opts[:legacy]
         opts = parse_args(command_line_args, ARGPARSE_SETTINGS_LEGACY; as_symbols = true)
     end
 
     # Unpack parsed flags, overriding appropriate options fields
-    @unpack T2map, T2part, quiet, dry = opts
-    @unpack bet, betpath, betargs = opts
     t2map_kwargs = get_parsed_args_subset(opts, T2MAP_FIELDTYPES)
     t2part_kwargs = get_parsed_args_subset(opts, T2PART_FIELDTYPES)
 
     # Override --Silent flag with --quiet flag, if set
-    if quiet
+    if opts[:quiet]
         t2map_kwargs[:Silent] = true
         t2part_kwargs[:Silent] = true
     end
 
     # If not performing T2-mapping, infer nT2 from input T2 distribution
-    if !T2map
+    if !opts[:T2map]
         delete!(t2part_kwargs, :nT2)
     end
 
@@ -39,7 +37,7 @@ function main(command_line_args::Vector{String} = ARGS)
         @unpack inputfile, outputfolder, maskfile = info
 
         # Make output path
-        choppedinputfile, filesuffix = chop_allowed_suffix(basename(inputfile))
+        choppedinputfile = chop_allowed_suffix(basename(inputfile))
         mkpath(outputfolder)
 
         # Set logger to output to both console and log file
@@ -49,12 +47,12 @@ function main(command_line_args::Vector{String} = ARGS)
                 try
                     # Starting message/starting time
                     t_start = tic()
-                    if !quiet
+                    if !opts[:quiet]
                         @info "Starting with $(Threads.nthreads()) threads"
                     end
 
                     # Save settings files
-                    if !dry
+                    if !opts[:dry]
                         settingsfiles = filter(s -> startswith(s, "@"), command_line_args)
                         map(settingsfiles) do settingsfile
                             src = settingsfile[2:end] # drop "@" character
@@ -67,68 +65,65 @@ function main(command_line_args::Vector{String} = ARGS)
                     image = @showtime(
                         load_image(inputfile),
                         "Loading input file: $inputfile",
-                        !quiet)
+                        !opts[:quiet])
 
                     # Apply mask
                     if !isnothing(maskfile)
                         @showtime(
                             try_apply_maskfile!(image, maskfile),
                             "Applying mask from file: '$maskfile'",
-                            !quiet)
-                    elseif bet
+                            !opts[:quiet])
+                    elseif opts[:bet]
                         @showtime(
-                            try_apply_bet!(image, betpath, betargs),
-                            "Making and applying BET mask with args: '$betargs'",
-                            !quiet)
+                            try_apply_bet!(image, opts[:betpath], opts[:betargs]),
+                            "Making and applying BET mask with args: '$(opts[:betargs])'",
+                            !opts[:quiet])
                     end
 
-                    # Results variables
-                    local maps, dist, parts
-
-                    if T2map
+                    if opts[:T2map]
                         # Compute T2 distribution from input 4D multi-echo image
-                        maps, dist = @showtime(T2mapSEcorr(image; t2map_kwargs...), "Running T2mapSEcorr on file: $inputfile", !quiet)
+                        maps, dist = @showtime(T2mapSEcorr(image; t2map_kwargs...), "Running T2mapSEcorr on file: $inputfile", !opts[:quiet])
 
                         # Save results to .mat files
                         savefile = joinpath(outputfolder, choppedinputfile * ".t2dist.mat")
-                        if !dry
+                        if !opts[:dry]
                             @showtime(
                                 MAT.matwrite(savefile, Dict("dist" => dist)),
                                 "Saving T2 distribution to file: $savefile",
-                                !quiet)
+                                !opts[:quiet])
                         end
 
                         savefile = joinpath(outputfolder, choppedinputfile * ".t2maps.mat")
-                        if !dry
+                        if !opts[:dry]
                             @showtime(
                                 MAT.matwrite(savefile, maps),
                                 "Saving T2 parameter maps to file: $savefile",
-                                !quiet)
+                                !opts[:quiet])
                         end
                     else
                         # Input image is the T2 distribution
                         dist = image
                     end
 
-                    if T2part
+                    if opts[:T2part]
                         # Analyze T2 distribution to produce parameter maps
                         parts = @showtime(
                             T2partSEcorr(dist; t2part_kwargs...),
                             "Running T2partSEcorr",
-                            !quiet)
+                            !opts[:quiet])
 
                         # Save results to .mat file
                         savefile = joinpath(outputfolder, choppedinputfile * ".t2parts.mat")
-                        if !dry
+                        if !opts[:dry]
                             @showtime(
                                 MAT.matwrite(savefile, parts),
                                 "Saving T2 parts maps to file: $savefile",
-                                !quiet)
+                                !opts[:quiet])
                         end
                     end
 
                     # Done message
-                    if !quiet
+                    if !opts[:quiet]
                         println(stdout, "")
                         @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"
                         println(stdout, "")
@@ -213,15 +208,10 @@ function create_argparse_settings(;legacy = false)
 end
 
 function get_file_info(opts)
-    @unpack input, output, mask = opts    
+    @unpack input, output, mask = opts
 
     # Read in input files
-    inputfiles = String[]
-    for path in input
-        if is_allowed_suffix(path)
-            push!(inputfiles, path)
-        end
-    end
+    inputfiles = String[path for path in input if is_allowed_suffix(path)]
 
     if isempty(inputfiles)
         msg = if !isempty(input) && isfile(input[1])
@@ -265,7 +255,7 @@ function get_file_info(opts)
 end
 
 function load_image(filename, ::Val{dim} = Val(4)) where {dim}
-    image = if endswith(filename, ".mat")
+    image = if maybe_get_suffix(filename) == ".mat"
         # Load first `dim`-dimensional array which is found, or throw an error if none are found
         data = MAT.matread(filename)
         key = findfirst(x -> x isa AbstractArray{T,dim} where {T}, data)
@@ -274,7 +264,7 @@ function load_image(filename, ::Val{dim} = Val(4)) where {dim}
         end
         data[key]
 
-    elseif any(endswith.(filename, (".nii", ".nii.gz")))
+    elseif maybe_get_suffix(filename) ∈ (".nii", ".nii.gz")
         # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned
         #   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
         # Loaded data is coerced to a `dim`-dimensional array
@@ -285,7 +275,7 @@ function load_image(filename, ::Val{dim} = Val(4)) where {dim}
             data[ntuple(_ -> Colon(), dim)...] # Return scaled data (getindex from the NIfTI package handles scaling)
         end
 
-    elseif any(endswith.(lowercase(filename), (".par", ".xml", ".rec")))
+    elseif maybe_get_suffix(filename) ∈ (".par", ".xml", ".rec")
         # Load PAR/REC or XML/REC file, coercing resulting data into a `dim`-dimensional array
         _, data = ParXRec.parxrec(filename)
         data[ntuple(_ -> Colon(), dim)...]
@@ -311,7 +301,7 @@ function try_apply_maskfile!(image, maskfile)
     return image
 end
 
-function make_bet_mask(image, betpath, betargs)
+function make_bet_mask(image::Array{T,3}, betpath, betargs) where {T}
     # Split betargs, and ensure that "-m" (make binary mask) is among args
     args = convert(Vector{String}, filter!(!isempty, split(betargs, " ")))
     if "-m" ∉ args
@@ -323,7 +313,7 @@ function make_bet_mask(image, betpath, betargs)
         tempbase = basename(tempname())
         nifti_imagefile = joinpath(temppath, tempbase * ".nii")
         nifti_maskfile = joinpath(temppath, tempbase * ".bet")
-        niwrite(nifti_imagefile, NIVolume(image)) # create nifti file for bet
+        NIfTI.niwrite(nifti_imagefile, NIfTI.NIVolume(image)) # create nifti file for bet
         run(Cmd([
             betpath;
             nifti_imagefile;
@@ -339,6 +329,8 @@ function make_bet_mask(image, betpath, betargs)
 
     return mask
 end
+make_bet_mask(image::Array{T,4}, args...; kwargs...) where {T} =
+    make_bet_mask(image[:,:,:,1], args...; kwargs...) # use first echo
 
 function try_apply_bet!(image, betpath, betargs)
     try
@@ -360,17 +352,18 @@ _strip_union_nothing(::Type{Union{T, Nothing}}) where {T} = T
 _strip_union_nothing(T::Type) = T
 _get_tuple_type(::Type{Union{Tup, Nothing}}) where {Tup <: Tuple} = Tup
 _get_tuple_type(::Type{Tup}) where {Tup <: Tuple} = Tup
+_maybe_get_first(f, xs) = findfirst(f, xs) |> I -> isnothing(I) ? nothing : xs[I]
 
-is_allowed_suffix(filename) = any(endswith.(filename, ALLOWED_FILE_SUFFIXES))
-filter_allowed_suffix(filenames) = filter(is_allowed_suffix, filenames)
+maybe_get_suffix(filename) = _maybe_get_first(ext -> endswith(lowercase(filename), ext), ALLOWED_FILE_SUFFIXES) # case-insensitive
+is_allowed_suffix(filename) = !isnothing(maybe_get_suffix(filename))
 
 function chop_allowed_suffix(filename::AbstractString)
-    for suffix in ALLOWED_FILE_SUFFIXES
-        if endswith(filename, suffix)
-            return filename[1:end-length(suffix)], suffix
-        end
+    ext = maybe_get_suffix(filename)
+    if !isnothing(ext)
+        return filename[1:end-length(ext)]
+    else
+        error("Currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported")
     end
-    error("Currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported")
 end
 
 function sorted_arg_table_entries(options...)
