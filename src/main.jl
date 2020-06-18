@@ -301,7 +301,7 @@ function try_apply_maskfile!(image, maskfile)
     return image
 end
 
-function make_bet_mask(image, betpath, betargs)
+function make_bet_mask(image::Array{T,3}, betpath, betargs) where {T}
     # Split betargs, and ensure that "-m" (make binary mask) is among args
     args = convert(Vector{String}, filter!(!isempty, split(betargs, " ")))
     if "-m" ∉ args
@@ -313,7 +313,7 @@ function make_bet_mask(image, betpath, betargs)
         tempbase = basename(tempname())
         nifti_imagefile = joinpath(temppath, tempbase * ".nii")
         nifti_maskfile = joinpath(temppath, tempbase * ".bet")
-        NIfTI.niwrite(nifti_imagefile, NIfTI.NIVolume(image[:,:,:])) # create nifti file for bet
+        NIfTI.niwrite(nifti_imagefile, NIfTI.NIVolume(image)) # create nifti file for bet
         run(Cmd([
             betpath;
             nifti_imagefile;
@@ -329,6 +329,8 @@ function make_bet_mask(image, betpath, betargs)
 
     return mask
 end
+make_bet_mask(image::Array{T,4}, args...; kwargs...) where {T} =
+    make_bet_mask(image[:,:,:,1], args...; kwargs...) # use first echo
 
 function try_apply_bet!(image, betpath, betargs)
     try
