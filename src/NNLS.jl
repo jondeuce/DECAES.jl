@@ -28,7 +28,7 @@
 module NNLS
 
 using LinearAlgebra
-using ..LoopVectorization
+# using ..LoopVectorization
 
 export nnls,
        nnls!,
@@ -55,7 +55,7 @@ function construct_householder!(u::AbstractVector{T}, up::T)::T where {T}
     @assert cl > 0
     clinvsq = 1 / cl^2
     sm = zero(T)
-    @avx for i in eachindex(u)
+    @simd for i in eachindex(u) #@avx
         sm += clinvsq * u[i]^2
     end
     cl *= sqrt(sm)
@@ -91,13 +91,13 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
         b = 1 / b
 
         sm = c[1] * up
-        @avx for i in 2:m
+        @simd for i in 2:m #@avx
             sm += c[i] * u[i]
         end
         if sm != 0
             sm *= b
             @inbounds c[1] += sm * up
-            @avx for i in 2:m
+            @simd for i in 2:m #@avx
                 c[i] += sm * u[i]
             end
         end
@@ -153,7 +153,7 @@ function solve_triangular_system!(zz, A, idx, nsetp, jj)
     @inbounds for l in 2:nsetp
         ip = nsetp + 1 - l
         zz1 = zz[ip + 1]
-        @avx for ii in 1:ip
+        @simd for ii in 1:ip #@avx
             zz[ii] -= A[ii, jj] * zz1
         end
         jj = idx[ip]
@@ -350,7 +350,7 @@ function nnls!(
         @inbounds for i in iz1:iz2
             idxi = idx[i]
             sm = zero(T)
-            @avx for l in (nsetp + 1):m
+            @simd for l in (nsetp + 1):m #@avx
                 sm += A[l, idxi] * b[l]
             end
             w[idxi] = sm
@@ -377,7 +377,7 @@ function nnls!(
             up = construct_householder!(
                  fastview(A, Ainds[nsetp + 1, j], m - nsetp), up)
             unorm = zero(T)
-            @avx for l in 1:nsetp
+            @simd for l in 1:nsetp #@avx
                 unorm += A[l, j]^2
             end
             unorm = sqrt(unorm)
@@ -431,7 +431,7 @@ function nnls!(
         end
 
         if nsetp != m
-            @avx for l in (nsetp + 1):m
+            @simd for l in (nsetp + 1):m #@avx
                 A[l, j] = 0
             end
         end
@@ -556,7 +556,7 @@ function nnls!(
 
     sm = zero(T)
     if nsetp < m
-        @avx for i in (nsetp + 1):m
+        @simd for i in (nsetp + 1):m #@avx
             sm += b[i]^2
         end
     else

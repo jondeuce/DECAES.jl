@@ -233,6 +233,8 @@ function _spline_opt_legacy(spl::Dierckx.Spline1D)
 
     return @ntuple(x, y)
 end
+_spline_opt_legacy(X::AbstractVector, Y::AbstractVector) = _spline_opt_legacy(_make_spline(X, Y))
+
 function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     knots = Dierckx.get_knots(spl)
     Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
@@ -244,7 +246,7 @@ function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     end
     return @ntuple(x, y)
 end
-_spline_opt_legacy(X::AbstractVector, Y::AbstractVector) = _spline_opt_legacy(_make_spline(X, Y))
+_spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector) = _spline_opt_legacy_slow(_make_spline(X, Y))
 
 # Root finding through fitting a spline to data (X, Y)
 function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
@@ -295,6 +297,8 @@ function _spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
 
     return x
 end
+_spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_root_legacy(_make_spline(X, Y), value)
+
 function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     knots = Dierckx.get_knots(spl)
     Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
@@ -306,7 +310,7 @@ function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     end
     return x
 end
-_spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_root_legacy(_make_spline(X, Y), value)
+_spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_root_legacy_slow(_make_spline(X, Y), value)
 
 # Perform global optimization over a function `f` which may be evaluated only
 # on elements of a discrete vector `X` using surrogate spline functions.

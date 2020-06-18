@@ -11,7 +11,7 @@ See also:
 function main(command_line_args::Vector{String} = ARGS)
     # Parse command line arguments
     opts = parse_args(command_line_args, ARGPARSE_SETTINGS; as_symbols = true)
-    
+
     # If --legacy flag was passed, re-parse inputs since default values are --legacy dependent
     if opts[:legacy]
         opts = parse_args(command_line_args, ARGPARSE_SETTINGS_LEGACY; as_symbols = true)

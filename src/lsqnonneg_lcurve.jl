@@ -64,8 +64,13 @@ function lsqnonneg_lcurve!(work, C::AbstractMatrix{T}, d::AbstractVector{T}) whe
 
     # Find mu by minimizing the function G(mu) (GCV method)
     @timeit_debug TIMER() "L-curve Optimization" begin
-        opt_result = Optim.optimize(μ -> lcurve_GCV(μ, C, d, work), eps(T), T(0.1), Optim.Brent(); rel_tol = T(1e-6))
-        mu = Optim.minimizer(opt_result)
+        opt = NLopt.Opt(:LN_BOBYQA, 1)
+        opt.lower_bounds  = [sqrt(eps(T))]
+        opt.upper_bounds  = [T(0.1)]
+        opt.xtol_rel      = sqrt(eps(T))
+        opt.min_objective = (μ, ∇μ) -> lcurve_GCV(μ[1], C, d, work)
+        minf, minx, ret   = NLopt.optimize(opt, [T(1e-2)])
+        mu = minx[1]
     end
 
     # Compute the regularized solution
