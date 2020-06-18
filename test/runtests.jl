@@ -91,7 +91,7 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     nloop = max(length.(iters)...)
     repeat_until(x) = Iterators.take(Iterators.cycle(x), nloop)
 
-    for ((param, valuelist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), paramval in valuelist
+    for ((param, valuelist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), paramval in valuelist, legacy in [false] #TODO
         # Default flag/value pairs for `nothing` values; `nothing` is always default if allowable, therefore no flag/val is passed
         cliparamflag = []
         cliparamval = []
@@ -104,11 +104,11 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
         end
 
         # Run T2map and T2part through Julia API for comparison
-        t2map_args  = param ∈ fieldnames(T2mapOptions)  ? Dict(param => paramval) : Dict{Symbol,Any}()
-        t2part_args = param ∈ fieldnames(T2partOptions) ? Dict(param => paramval) : Dict{Symbol,Any}()
+        t2map_args  = Dict{Symbol,Any}(param ∈ fieldnames(T2mapOptions)  ? param => paramval : ())
+        t2part_args = Dict{Symbol,Any}(param ∈ fieldnames(T2partOptions) ? param => paramval : ())
 
-        t2map, t2dist = T2mapSEcorr(image; Silent = true, t2map_args...)
-        t2part = T2partSEcorr(t2dist; Silent = true, t2part_args...)
+        t2map, t2dist = T2mapSEcorr(image; t2map_args..., legacy = legacy, Silent = true)
+        t2part = T2partSEcorr(t2dist; t2part_args..., legacy = legacy, Silent = true)
 
         # Run CLI with both --T2map and --T2part flags
         mktempdir() do path
@@ -118,8 +118,10 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             write_image(input_fname, image)
 
             # Run main function
-            args = [input_fname, cliparamflag..., cliparamval..., "--output", path, "--quiet", "--T2map", "--T2part"]
-            # println("*  T2mapSEcorr CLI test with args: " * join(args, " "))
+            args = [input_fname, "--output", path, "--T2map", "--T2part", cliparamflag..., cliparamval..., "--quiet"]
+            legacy && push!(args, "--legacy") #TODO
+
+            # println("\n*  T2mapSEcorr CLI test with args: " * join(args, " "))
             run_main(args, make_settings_file)
 
             # Read in outputs and compare
@@ -249,8 +251,8 @@ function matlab_tests()
 
         for (param,valuelist) in t2map_params_perms, paramval in valuelist
             # The MATLAB implementation of the L-Curve method uses an internal call to `fminbnd`
-            # with a tolerance of 1e-3, and therefore the Julia outputs would only match to a
-            # tolerance of 1e-3. Additionally, there is a typo in the `G(mu,C_g,d_g)` subfunction:
+            # with a tolerance of 1e-3, and therefore the Julia outputs would only match to at best
+            # a tolerance of 1e-3. Additionally, there is a typo in the `G(mu,C_g,d_g)` subfunction:
             #   - Numerator should be ||A*x_mu - b||^2, not ||A*x_mu - b||
             #   - See e.g. equation (1.4) in Fenu, C. et al., 2017, GCV for Tikhonov regularization by partial SVD (https://doi.org/10.1007/s10543-017-0662-0)
             # There is also a small error in methodology:

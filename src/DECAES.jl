@@ -2,9 +2,8 @@ module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
 using ArgParse, Logging, LoggingExtras
-import Optim, Dierckx, Polynomials, PolynomialRoots
+import NLopt, Dierckx, Polynomials, PolynomialRoots
 import MAT, NIfTI, LightXML
-import LoopVectorization
 using Parameters: @with_kw, @with_kw_noshow, @unpack
 using StaticArrays: SVector, SizedVector, SA
 using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
@@ -43,7 +42,7 @@ export EPGdecaycurve, EPGdecaycurve!, EPGdecaycurve_work
 export lsqnonneg, lsqnonneg_reg, lsqnonneg_lcurve
 export main
 
-include("precompile.jl")
-_precompile_()
+# include("precompile.jl")
+# _precompile_()
 
 end

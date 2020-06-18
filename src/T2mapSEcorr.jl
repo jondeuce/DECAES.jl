@@ -105,7 +105,7 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
 
     # Run analysis in parallel
     global_buffer.loop_start_time[] = tic()
-    indices = filter(I -> image[I,1] >= opts.Threshold, CartesianIndices(opts.MatrixSize))
+    indices = filter(I -> image[I,1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
     tforeach(indices; blocksize = 64) do I
         thread_buffer = thread_buffers[Threads.threadid()]
         voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
@@ -171,7 +171,7 @@ end
 # =========================================================
 function voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts::T2mapOptions, I::CartesianIndex)
     # Skip low signal voxels
-    @inbounds if image[I,1] < opts.Threshold
+    @inbounds if !(image[I,1] > opts.Threshold)
         return nothing
     end
 
@@ -401,7 +401,7 @@ end
 function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
     buffer = (
         curr_count       = Ref(0),
-        total_count      = sum(≥(o.Threshold), @views(image[:,:,:,1])),
+        total_count      = sum(>(o.Threshold), @views(image[:,:,:,1])),
         T2_times         = logrange(o.T2Range..., o.nT2),
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
         flip_angles      = range(o.MinRefAngle, T(180); length = o.nRefAngles),
@@ -431,7 +431,7 @@ function global_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
         done_printing   = Ref(false),
         trigger_print   = Threads.Atomic{Bool}(false),
         print_message   = Ref(""),
-        total_count     = sum(≥(o.Threshold), @views(image[:,:,:,1])),
+        total_count     = sum(>(o.Threshold), @views(image[:,:,:,1])),
         running_stats   = RunningLinReg{Float64}(),
     )
     return buffer
