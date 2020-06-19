@@ -170,8 +170,8 @@ end
 # For direct comparison of results with the MATLAB version, the brute force
 # version is implimented and can be used by setting the LEGACY flag.
 const LEGACY = Ref(false)
-spline_opt(args...)  = LEGACY[] ? _spline_opt_legacy(args...)  : _spline_opt(args...)
-spline_root(args...) = LEGACY[] ? _spline_root_legacy(args...) : _spline_root(args...)
+spline_opt(args...)  = LEGACY[] ? _spline_opt_legacy_slow(args...)  : _spline_opt(args...)
+spline_root(args...) = LEGACY[] ? _spline_root_legacy_slow(args...) : _spline_root(args...)
 
 function _make_spline(X, Y)
     # @assert length(X) == length(Y) && length(X) > 1
@@ -235,6 +235,8 @@ function _spline_opt_legacy(spl::Dierckx.Spline1D)
 end
 _spline_opt_legacy(X::AbstractVector, Y::AbstractVector) = _spline_opt_legacy(_make_spline(X, Y))
 
+# Similar to above, but removes the extra trick and instead performs
+# exactly what the MATLAB implementation does
 function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     knots = Dierckx.get_knots(spl)
     Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
@@ -299,6 +301,8 @@ function _spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
 end
 _spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_root_legacy(_make_spline(X, Y), value)
 
+# Similar to above, but removes the extra trick and instead performs
+# exactly what the MATLAB implementation does
 function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     knots = Dierckx.get_knots(spl)
     Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version

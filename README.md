@@ -31,8 +31,8 @@ The input image must be one of the following file types:
 
 1. [NIfTI file](https://nifti.nimh.nih.gov/) with extension `.nii`, or [gzip](https://www.gzip.org/) compressed NIfTI file with extension `.nii.gz`
 2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`
-3. Philips [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) file pair with extensions `.par` (or `.PAR`) and `.rec` (or `.REC`)
-4. Philips XML/REC file pair with extensions `.xml` (or `.XML`) and `.rec` (or `.REC`)
+3. Philips [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) file pair with extensions `.par` and `.rec` (or `.PAR` and `.REC`)
+4. Philips XML/REC file pair with extensions `.xml` and `.rec` (or `.XML` and `.REC`)
 
 All output files are saved as `.mat` files in format `v7.3`.
 

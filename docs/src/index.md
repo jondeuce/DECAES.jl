@@ -16,8 +16,7 @@ Depth = 2
 ## Introduction
 
 DECAES provides tools for decomposing multi-exponential signals which arise from multi spin-echo magnetic resonance imaging (MRI) scans into exponential components.
-The main decomposition method used is a regularized nonnegative inverse Laplace transform-based technique.
-This method involves solving the regularized nonnegative least squares (NNLS) inverse problem
+The main decomposition method used is an inverse Laplace transform-based technique which involves solving the regularized nonnegative least squares (NNLS) inverse problem
 
 ```math
 X = \mathrm{argmin}_{x \ge 0} ||Cx - d||_2^2 + \mu^2 ||x||_2^2
@@ -43,7 +42,7 @@ pkg> add DECAES
 Once the package is finished installing, type the backspace key to exit the package manager REPL mode (the `julia>` prompt should reappear).
 Exit Julia using the keyboard shortcut `Ctrl+D`, or by typing `exit()`.
 
-## [Updating](@id updating)
+## [Updating DECAES](@id updating)
 
 To update DECAES to the latest version, start `julia` from the command line, type `]` to enter the package manager REPL mode, and enter the following:
 
@@ -51,7 +50,7 @@ To update DECAES to the latest version, start `julia` from the command line, typ
 pkg> update DECAES
 ```
 
-## Myelin Water Imaging
+## Myelin water imaging
 
 Myelin water imaging (MWI) is an MRI technique used to visualize the myelin water contained within the sheaths of myelinated axons within the body, such as within the brain's white matter.
 

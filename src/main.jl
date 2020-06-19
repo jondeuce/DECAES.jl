@@ -207,6 +207,64 @@ function create_argparse_settings(;legacy = false)
     return settings
 end
 
+function sorted_arg_table_entries(
+        @nospecialize(t2map_opts),
+        @nospecialize(t2part_opts)
+    )
+    fields, types, values = Symbol[], Type[], Any[]
+    for o in [t2map_opts, t2part_opts], (f,T) in zip(fieldnames(typeof(o)), fieldtypes(typeof(o)))
+        push!(fields, f); push!(types, T); push!(values, getfield(o, f))
+    end
+    args = []
+    defaults = collect(zip(fields, values, types))
+    sort!(defaults; by = tup -> uppercase(string(first(tup)))) # sort alphabetically
+    for (k, v, T) in defaults
+        (k === :nTE || k === :MatrixSize) && continue # Skip automatically determined parameters
+        (k === :vTEparam || k == :legacy) && continue # Skip printing
+        push!(args, "--" * string(k))
+        if T <: Bool
+            push!(args, Dict(:action => ifelse(v, :store_false, :store_true)))
+        elseif T <: Union{<:Tuple, Nothing}
+            nargs = length(fieldtypes(_get_tuple_type(T)))
+            if isnothing(v)
+                push!(args, Dict(:nargs => nargs, :default => v))
+            else
+                push!(args, Dict(:nargs => nargs, :default => [v...]))
+            end
+        else
+            push!(args, Dict(:default => v))
+        end
+    end
+    return args
+end
+
+function get_parsed_args_subset(
+        @nospecialize(opts), # ::Dict{Symbol,Any}
+        @nospecialize(subset_fieldtypes), # ::Dict{Symbol,Type}
+    )
+    kwargs = deepcopy(opts)
+    for (k,v) in kwargs
+        if k ∉ keys(subset_fieldtypes)
+            delete!(kwargs, k)
+            continue
+        end
+        if v isa AbstractString # parse v to appropriate type, which may not be String
+            T = subset_fieldtypes[k]
+            if !(T <: AbstractString)
+                kwargs[k] = _parse_or_convert(_strip_union_nothing(T), v)
+            end
+        elseif v isa AbstractVector # convert AbstractVector v to appropriate Tuple type
+            if isempty(v)
+                delete!(kwargs, k) # default v = nothing for a Tuple type results in an empty vector
+            else
+                T = _get_tuple_type(subset_fieldtypes[k])
+                kwargs[k] = tuple(_parse_or_convert.(fieldtypes(T), v)...) # each element should be individually parsed
+            end
+        end
+    end
+    return kwargs
+end
+
 function get_file_info(opts)
     @unpack input, output, mask = opts
 
@@ -364,56 +422,4 @@ function chop_allowed_suffix(filename::AbstractString)
     else
         error("Currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported")
     end
-end
-
-function sorted_arg_table_entries(options...)
-    fields, types, values = Symbol[], Type[], Any[]
-    for o in options, (f,T) in zip(fieldnames(typeof(o)), fieldtypes(typeof(o)))
-        push!(fields, f); push!(types, T); push!(values, getfield(o, f))
-    end
-    args = []
-    defaults = collect(zip(fields, values, types))
-    sort!(defaults; by = tup -> uppercase(string(first(tup)))) # sort alphabetically
-    for (k, v, T) in defaults
-        (k === :nTE || k === :MatrixSize) && continue # Skip automatically determined parameters
-        (k === :vTEparam || k == :legacy) && continue # Skip printing
-        push!(args, "--" * string(k))
-        if T <: Bool
-            push!(args, Dict(:action => ifelse(v, :store_false, :store_true)))
-        elseif T <: Union{<:Tuple, Nothing}
-            nargs = length(fieldtypes(_get_tuple_type(T)))
-            if isnothing(v)
-                push!(args, Dict(:nargs => nargs, :default => v))
-            else
-                push!(args, Dict(:nargs => nargs, :default => [v...]))
-            end
-        else
-            push!(args, Dict(:default => v))
-        end
-    end
-    return args
-end
-
-function get_parsed_args_subset(opts::Dict{Symbol,Any}, subset_fieldtypes::Dict{Symbol,Type})
-    kwargs = deepcopy(opts)
-    for (k,v) in kwargs
-        if k ∉ keys(subset_fieldtypes)
-            delete!(kwargs, k)
-            continue
-        end
-        if v isa AbstractString # parse v to appropriate type, which may not be String
-            T = subset_fieldtypes[k]
-            if !(T <: AbstractString)
-                kwargs[k] = _parse_or_convert(_strip_union_nothing(T), v)
-            end
-        elseif v isa AbstractVector # convert AbstractVector v to appropriate Tuple type
-            if isempty(v)
-                delete!(kwargs, k) # default v = nothing for a Tuple type results in an empty vector
-            else
-                T = _get_tuple_type(subset_fieldtypes[k])
-                kwargs[k] = tuple(_parse_or_convert.(fieldtypes(T), v)...) # each element should be individually parsed
-            end
-        end
-    end
-    return kwargs
 end

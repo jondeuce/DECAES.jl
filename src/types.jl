@@ -25,11 +25,13 @@ This struct collects keyword arguments passed to `T2mapSEcorr`, performs checks 
 - `SaveResidualNorm`: `true`/`false` option to include a 3D array of the ``\\ell^2``-norms of the residuals from the NNLS fits in the output maps dictionary (Default: `false`)
 - `SaveDecayCurve`:   `true`/`false` option to include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary (Default: `false`)
 - `SaveRegParam`:     `true`/`false` option to include 3D arrays of the regularization parameters ``\\mu`` and resulting ``\\chi^2``-factors in the output maps dictionary (Default: `false`)
-- `SaveNNLSBasis`:    `true`/`false` option to include a 4D array of NNLS basis matrices in the output maps dictionary (Default: `false`)
+- `SaveNNLSBasis`:    `true`/`false` option to include a 5D (or 2D if `SetFlipAngle` is used) array of NNLS basis matrices in the output maps dictionary (Default: `false`)
+- `Silent`:           suppress printing to the console (Default: `false`)
+
 !!! note
-    The 4D array that is saved when `SaveNNLSBasis` is set to `true` has dimensions `MatrixSize x nTE x nT2`,
+    The 5D array that is saved when `SaveNNLSBasis` is set to `true` has dimensions `MatrixSize x nTE x nT2`,
     and therefore is typically extremely large; by default, it is `nT2 = 40` times the size of the input image.
-- `Silent`:         suppress printing to the console (Default: `false`)
+    However, if the flip angle is fixed via `SetFlipAngle`, the unique `nTE x nT2` 2D basis matrix is returned.
 
 See also:
 * [`T2mapSEcorr`](@ref)
@@ -106,7 +108,7 @@ function _show_string(o::T2mapOptions)
     fields = fields[sortperm(uppercase.(string.([fields...])))] # sort alphabetically, ignoring case
     padlen = 1 + maximum(f -> length(string(f)), fields)
     for f in fields
-        (f == :legacy || f == :vTEparam) && continue # skip
+        (f == :vTEparam) && continue # skip
         print(io, "\n$(lpad(rpad(f, padlen), padlen + 4)): $(getfield(o,f))")
     end
     return String(take!(io))
@@ -166,7 +168,6 @@ function _show_string(o::T2partOptions)
     fields = fields[sortperm(uppercase.(string.([fields...])))] # sort alphabetically
     padlen = 1 + maximum(f -> length(string(f)), fields)
     for f in fields
-        (f == :legacy) && continue
         print(io, "\n$(lpad(rpad(f, padlen), padlen + 4)): $(getfield(o,f))")
     end
     return String(take!(io))
