@@ -1,3 +1,19 @@
+module Main
+
+if isdefined(Base, :Experimental) && isdefined(Base.Experimental, Symbol("@optlevel"))
+    @eval Base.Experimental.@optlevel 0
+end
+
+include("ParXRec.jl")
+import .ParXRec, MAT, NIfTI
+using ArgParse, Logging, LoggingExtras
+
+import ..T2mapOptions, ..T2partOptions, ..T2mapSEcorr, ..T2partSEcorr
+import ..@unpack, ..@showtime, ..tic, ..toc
+
+export MAT, NIfTI, ParXRec
+export main, load_image
+
 """
     main(command_line_args = ARGS)
 
@@ -11,11 +27,6 @@ See also:
 function main(command_line_args::Vector{String} = ARGS)
     # Parse command line arguments
     opts = parse_args(command_line_args, ARGPARSE_SETTINGS; as_symbols = true)
-
-    # If --legacy flag was passed, re-parse inputs since default values are --legacy dependent
-    if opts[:legacy]
-        opts = parse_args(command_line_args, ARGPARSE_SETTINGS_LEGACY; as_symbols = true)
-    end
 
     # Unpack parsed flags, overriding appropriate options fields
     t2map_kwargs = get_parsed_args_subset(opts, T2MAP_FIELDTYPES)
@@ -34,103 +45,28 @@ function main(command_line_args::Vector{String} = ARGS)
 
     # Get input file list and output folder list
     for info in get_file_info(opts)
-        @unpack inputfile, outputfolder, maskfile = info
-
         # Make output path
-        choppedinputfile = chop_allowed_suffix(basename(inputfile))
-        mkpath(outputfolder)
+        mkpath(info[:outputfolder])
+
+        # Save settings files
+        if !opts[:dry]
+            map(filter(s -> startswith(s, "@"), command_line_args)) do settingsfile
+                src = settingsfile[2:end] # drop "@" character
+                dst = joinpath(info[:outputfolder], info[:choppedinputfile] * "." * basename(src))
+                cp(src, dst; force = true)
+            end
+        end
 
         # Set logger to output to both console and log file
-        logfile = joinpath(outputfolder, choppedinputfile * ".log")
+        logfile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".log")
+
         open(logfile, "w+") do io
             with_logger(TeeLogger(ConsoleLogger(stdout), ConsoleLogger(io))) do
                 try
-                    # Starting message/starting time
-                    t_start = tic()
-                    if !opts[:quiet]
-                        @info "Starting with $(Threads.nthreads()) threads"
-                    end
-
-                    # Save settings files
-                    if !opts[:dry]
-                        settingsfiles = filter(s -> startswith(s, "@"), command_line_args)
-                        map(settingsfiles) do settingsfile
-                            src = settingsfile[2:end] # drop "@" character
-                            dst = joinpath(outputfolder, choppedinputfile * "." * basename(src))
-                            cp(src, dst; force = true)
-                        end
-                    end
-
-                    # Load image(s)
-                    image = @showtime(
-                        load_image(inputfile),
-                        "Loading input file: $inputfile",
-                        !opts[:quiet])
-
-                    # Apply mask
-                    if !isnothing(maskfile)
-                        @showtime(
-                            try_apply_maskfile!(image, maskfile),
-                            "Applying mask from file: '$maskfile'",
-                            !opts[:quiet])
-                    elseif opts[:bet]
-                        @showtime(
-                            try_apply_bet!(image, opts[:betpath], opts[:betargs]),
-                            "Making and applying BET mask with args: '$(opts[:betargs])'",
-                            !opts[:quiet])
-                    end
-
-                    if opts[:T2map]
-                        # Compute T2 distribution from input 4D multi-echo image
-                        maps, dist = @showtime(T2mapSEcorr(image; t2map_kwargs...), "Running T2mapSEcorr on file: $inputfile", !opts[:quiet])
-
-                        # Save results to .mat files
-                        savefile = joinpath(outputfolder, choppedinputfile * ".t2dist.mat")
-                        if !opts[:dry]
-                            @showtime(
-                                MAT.matwrite(savefile, Dict("dist" => dist)),
-                                "Saving T2 distribution to file: $savefile",
-                                !opts[:quiet])
-                        end
-
-                        savefile = joinpath(outputfolder, choppedinputfile * ".t2maps.mat")
-                        if !opts[:dry]
-                            @showtime(
-                                MAT.matwrite(savefile, maps),
-                                "Saving T2 parameter maps to file: $savefile",
-                                !opts[:quiet])
-                        end
-                    else
-                        # Input image is the T2 distribution
-                        dist = image
-                    end
-
-                    if opts[:T2part]
-                        # Analyze T2 distribution to produce parameter maps
-                        parts = @showtime(
-                            T2partSEcorr(dist; t2part_kwargs...),
-                            "Running T2partSEcorr",
-                            !opts[:quiet])
-
-                        # Save results to .mat file
-                        savefile = joinpath(outputfolder, choppedinputfile * ".t2parts.mat")
-                        if !opts[:dry]
-                            @showtime(
-                                MAT.matwrite(savefile, parts),
-                                "Saving T2 parts maps to file: $savefile",
-                                !opts[:quiet])
-                        end
-                    end
-
-                    # Done message
-                    if !opts[:quiet]
-                        println(stdout, "")
-                        @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"
-                        println(stdout, "")
-                    end
+                    _main(info, opts, t2map_kwargs, t2part_kwargs)
                 catch e
                     println(stdout, "")
-                    @warn "Error during processing of file: $inputfile"
+                    @warn "Error during processing of file: $(info[:inputfile])"
                     println(stdout, "")
                     @warn sprint(showerror, e, catch_backtrace())
                 end
@@ -141,7 +77,95 @@ function main(command_line_args::Vector{String} = ARGS)
     return nothing
 end
 
-function create_argparse_settings(;legacy = false)
+function _main(
+        info::Dict,
+        opts::Dict,
+        t2map_kwargs::Dict,
+        t2part_kwargs::Dict
+    )
+
+    # Starting message/starting time
+    t_start = tic()
+    if !opts[:quiet]
+        @info "Starting with $(Threads.nthreads()) threads"
+    end
+
+    # Load image(s)
+    image = @showtime(
+        load_image(info[:inputfile]),
+        "Loading input file: $(info[:inputfile])",
+        !opts[:quiet])
+
+    # Apply mask
+    if !isnothing(info[:maskfile])
+        @showtime(
+            try_apply_maskfile!(image, info[:maskfile]),
+            "Applying mask from file: '$(info[:maskfile])'",
+            !opts[:quiet])
+    elseif opts[:bet]
+        @showtime(
+            try_apply_bet!(image, opts[:betpath], opts[:betargs]),
+            "Making and applying BET mask with args: '$(opts[:betargs])'",
+            !opts[:quiet])
+    end
+
+    # Compute T2 distribution from input 4D multi-echo image
+    if opts[:T2map]
+        maps, dist = @showtime(
+            T2mapSEcorr(image; t2map_kwargs...),
+            "Running T2mapSEcorr on file: $(info[:inputfile])",
+            !opts[:quiet])
+
+        # Save T2-distribution to .mat file
+        savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2dist.mat")
+        if !opts[:dry]
+            @showtime(
+                MAT.matwrite(savefile, Dict("dist" => dist)),
+                "Saving T2 distribution to file: $savefile",
+                !opts[:quiet])
+        end
+
+        # Save T2-maps to .mat file
+        savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2maps.mat")
+        if !opts[:dry]
+            @showtime(
+                MAT.matwrite(savefile, maps),
+                "Saving T2 parameter maps to file: $savefile",
+                !opts[:quiet])
+        end
+    else
+        # Input image is the T2 distribution
+        dist = image
+    end
+
+    # Analyze T2 distribution to produce parameter maps
+    if opts[:T2part]
+        parts = @showtime(
+            T2partSEcorr(dist; t2part_kwargs...),
+            "Running T2partSEcorr",
+            !opts[:quiet])
+
+        # Save T2-parts to .mat file
+        savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2parts.mat")
+        if !opts[:dry]
+            @showtime(
+                MAT.matwrite(savefile, parts),
+                "Saving T2 parts maps to file: $savefile",
+                !opts[:quiet])
+        end
+    end
+
+    # Done message
+    if !opts[:quiet]
+        println(stdout, "")
+        @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"
+        println(stdout, "")
+    end
+
+    return nothing
+end
+
+function create_argparse_settings(;legacy = false, add_defaults = false)
     settings = ArgParseSettings(
         prog = "",
         fromfile_prefix_chars = "@",
@@ -155,7 +179,7 @@ function create_argparse_settings(;legacy = false)
             help = "one or more input filenames. Valid file types are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
             required = true
             nargs = '+' # At least one input is required
-        "--mask"
+        "--mask", "-m"
             help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. The number of mask files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
             nargs = '+' # At least one input is required
         "--output", "-o"
@@ -166,7 +190,7 @@ function create_argparse_settings(;legacy = false)
         "--T2part"
             help = "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi spin-echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Output T2 parts are saved as a MAT file with extension .t2parts.mat"
             action = :store_true
-        "--quiet"
+        "--quiet", "-q"
             help = "suppress printing to the terminal. Note: 1) errors are not silenced, and 2) this flag overrides the --Silent flag in T2mapSEcorr"
             action = :store_true
         "--dry"
@@ -183,7 +207,7 @@ function create_argparse_settings(;legacy = false)
     )
     t2map_opts = T2mapOptions{Float64}(nTE = 32, MatrixSize = (1,1,1), legacy = legacy)
     t2part_opts = T2partOptions{Float64}(nT2 = t2map_opts.nT2, MatrixSize = (1,1,1), legacy = legacy)
-    opts_args = sorted_arg_table_entries(t2map_opts, t2part_opts)
+    opts_args = sorted_arg_table_entries(t2map_opts, t2part_opts; add_defaults = add_defaults)
     add_arg_table!(settings, opts_args...)
 
     add_arg_group!(settings,
@@ -209,7 +233,8 @@ end
 
 function sorted_arg_table_entries(
         @nospecialize(t2map_opts),
-        @nospecialize(t2part_opts)
+        @nospecialize(t2part_opts);
+        add_defaults = false
     )
     fields, types, values = Symbol[], Type[], Any[]
     for o in [t2map_opts, t2part_opts], (f,T) in zip(fieldnames(typeof(o)), fieldtypes(typeof(o)))
@@ -220,19 +245,23 @@ function sorted_arg_table_entries(
     sort!(defaults; by = tup -> uppercase(string(first(tup)))) # sort alphabetically
     for (k, v, T) in defaults
         (k === :nTE || k === :MatrixSize) && continue # Skip automatically determined parameters
-        (k === :vTEparam || k == :legacy) && continue # Skip printing
+        (k === :vTEparam || k == :legacy) && continue # vTEparam not implemented; legacy grouped with main ArgParse settings
         push!(args, "--" * string(k))
         if T <: Bool
-            push!(args, Dict(:action => ifelse(v, :store_false, :store_true)))
+            if add_defaults
+                push!(args, Dict{Symbol,Any}(:action => ifelse(v, :store_false, :store_true)))
+            else
+                push!(args, Dict{Symbol,Any}(:action => :store_const, :constant => !v, :default => nothing))
+            end
         elseif T <: Union{<:Tuple, Nothing}
             nargs = length(fieldtypes(_get_tuple_type(T)))
-            if isnothing(v)
-                push!(args, Dict(:nargs => nargs, :default => v))
-            else
-                push!(args, Dict(:nargs => nargs, :default => [v...]))
-            end
+            props = Dict{Symbol,Any}(
+                :nargs   => nargs,
+                :default => (add_defaults && !isnothing(v)) ? [v...] : nothing,
+            )
+            push!(args, props)
         else
-            push!(args, Dict(:default => v))
+            push!(args, Dict{Symbol,Any}(:default => add_defaults ? v : nothing))
         end
     end
     return args
@@ -248,15 +277,21 @@ function get_parsed_args_subset(
             delete!(kwargs, k)
             continue
         end
-        if v isa AbstractString # parse v to appropriate type, which may not be String
+        if isnothing(v)
+            # Nothing values are always default; skip them
+            delete!(kwargs, k)
+        elseif v isa AbstractString
+            # Parse v to appropriate type, as determined by subset_fieldtypes
             T = subset_fieldtypes[k]
             if !(T <: AbstractString)
                 kwargs[k] = _parse_or_convert(_strip_union_nothing(T), v)
             end
-        elseif v isa AbstractVector # convert AbstractVector v to appropriate Tuple type
+        elseif v isa AbstractVector
             if isempty(v)
-                delete!(kwargs, k) # default v = nothing for a Tuple type results in an empty vector
+                # Empty vectors correspond to settings not set by user
+                delete!(kwargs, k)
             else
+                # Convert AbstractVector v to appropriate Tuple type
                 T = _get_tuple_type(subset_fieldtypes[k])
                 kwargs[k] = tuple(_parse_or_convert.(fieldtypes(T), v)...) # each element should be individually parsed
             end
@@ -265,7 +300,7 @@ function get_parsed_args_subset(
     return kwargs
 end
 
-function get_file_info(opts)
+function get_file_info(@nospecialize(opts))
     @unpack input, output, mask = opts
 
     # Read in input files
@@ -305,6 +340,7 @@ function get_file_info(opts)
             :inputfile => inputfile,
             :outputfolder => outputfolder,
             :maskfile => maskfile,
+            :choppedinputfile => chop_allowed_suffix(basename(inputfile)),
         )
         push!(info, d)
     end
@@ -423,3 +459,19 @@ function chop_allowed_suffix(filename::AbstractString)
         error("Currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported")
     end
 end
+
+####
+#### Global constants
+####
+
+const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz", ".par", ".xml", ".rec")
+const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
+
+const T2MAP_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2mapOptions{Float64}) .=> fieldtypes(T2mapOptions{Float64}))
+const T2PART_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2partOptions{Float64}) .=> fieldtypes(T2partOptions{Float64}))
+
+const ARGPARSE_SETTINGS = create_argparse_settings(legacy = false, add_defaults = false)
+const ARGPARSE_SETTINGS_DECAES = create_argparse_settings(legacy = false, add_defaults = true)
+const ARGPARSE_SETTINGS_LEGACY = create_argparse_settings(legacy = true, add_defaults = true)
+
+end # module Main

@@ -60,7 +60,7 @@ Available command line arguments are broken into four categories:
 
 ```@example
 using DECAES # hide
-DECAES.ArgParse.show_help(DECAES.ARGPARSE_SETTINGS; exit_when_done = false) # hide
+DECAES.Main.ArgParse.show_help(DECAES.Main.ARGPARSE_SETTINGS_DECAES; exit_when_done = false) # hide
 ```
 
 !!! note
@@ -266,5 +266,5 @@ Differences due to changes in default parameters can always be overridden by pas
 
 ```@example
 using DECAES # hide
-DECAES.ArgParse.show_help(DECAES.ARGPARSE_SETTINGS_LEGACY; exit_when_done = false) # hide
+DECAES.Main.ArgParse.show_help(DECAES.Main.ARGPARSE_SETTINGS_LEGACY; exit_when_done = false) # hide
 ```

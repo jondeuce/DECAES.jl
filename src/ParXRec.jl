@@ -1,6 +1,6 @@
 module ParXRec
 
-using ..LightXML
+using LightXML
 
 export parxrec, parrec, xmlrec, SeriesInfo, ImageInfo, RecHdr
 

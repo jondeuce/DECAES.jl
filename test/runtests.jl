@@ -10,22 +10,125 @@ function write_image(filename, image)
     end
 end
 
-# Call main function with arguments "args", optionally writing args to file first
-function run_main(args, make_settings_file = false)
+# Call main function on image file `image`
+function run_main(image, args; make_settings_file)
+
+    # Write input image to file for reading
+    inputfilename = args[1]
+    outputpath = args[3]
+    inputfilebasename = joinpath(outputpath, "input")
+    write_image(inputfilename, image)
+
+    # Run main, possibly writing CLI args to settings file first
     if make_settings_file
-        # Write input args to a temporary file and read in the args
-        mktempdir() do temppath
-            settings_file = joinpath(temppath, "settings.txt")
-            open(settings_file, "w") do file
-                println(file, join(args, "\n"))
-            end
-            main(["@" * settings_file])
+        settings_file = joinpath(outputpath, "settings.txt")
+        open(settings_file, "w") do file
+            println(file, join(args, "\n"))
         end
+        main(["@" * settings_file])
     else
-        # Run main with args directly
         main(args)
     end
-    return nothing
+
+    # Check that only requested files were created
+    t2maps_file, t2dist_file, t2parts_file, settings_file = inputfilebasename .* (".t2maps.mat", ".t2dist.mat", ".t2parts.mat", ".settings.txt")
+    T2map, T2part = ("--T2map" ∈ args), ("--T2part" ∈ args)
+
+    @test !xor(T2map,  isfile(t2maps_file))
+    @test !xor(T2map,  isfile(t2dist_file))
+    @test !xor(T2part, isfile(t2parts_file))
+    @test !xor(make_settings_file, isfile(settings_file))
+
+    t2maps  = T2map  ? DECAES.MAT.matread(t2maps_file) : nothing
+    t2dist  = T2map  ? DECAES.MAT.matread(t2dist_file)["dist"] : nothing
+    t2parts = T2part ? DECAES.MAT.matread(t2parts_file) : nothing
+
+    return DECAES.@ntuple(t2maps, t2dist, t2parts)
+end
+
+function construct_args(paramdict;
+        argstype,
+        inputfilename = nothing,
+        outputpath = nothing,
+        quiet::Bool = true,
+        legacy::Bool = false,
+        T2map::Bool = true,
+        T2part::Bool = true,
+    )
+
+    if argstype === :cli
+        #### CLI
+
+        args = [inputfilename, "--output", outputpath]
+        T2map  && push!(args, "--T2map")
+        T2part && push!(args, "--T2part")
+        quiet  && push!(args, "--quiet")
+        legacy && push!(args, "--legacy")
+
+        for (param, paramval) in paramdict
+            # Default flag/value pairs for `nothing` values; `nothing` is always default if allowable, therefore no flag/val is passed
+            if !isnothing(paramval)
+                push!(args, "--" * string(param)) # CLI flags are prepended with "--"
+                append!(args,
+                    paramval isa Tuple ? [string(x) for x in paramval] : # Pass each arg separately
+                    paramval isa Bool  ? [] : # No arg necessary, flag only
+                    [string(paramval)] # Pass string
+                )
+            end
+        end
+
+        return args
+
+    elseif argstype === :mat
+        #### MATLAB
+
+        @assert legacy
+        t2map_args  = T2map  ? Dict{Symbol,Any}() : nothing
+        t2part_args = T2part ? Dict{Symbol,Any}() : nothing
+
+        for (param, paramval) in paramdict
+            T2map  && (param ∈ fieldnames(T2mapOptions))  && jl_to_mat_param!(t2map_args,  param, paramval)
+            T2part && (param ∈ fieldnames(T2partOptions)) && jl_to_mat_param!(t2part_args, param, paramval)
+        end
+
+        return t2map_args, t2part_args
+
+    elseif argstype === :jl
+        #### Julia
+
+        t2map_args  = T2map  ? Dict{Symbol,Any}(:legacy => legacy, :Silent => quiet) : nothing
+        t2part_args = T2part ? Dict{Symbol,Any}(:legacy => legacy, :Silent => quiet) : nothing
+
+        for (param, paramval) in paramdict
+            T2map  && (param ∈ fieldnames(T2mapOptions))  && setindex!(t2map_args, paramval, param)
+            T2part && (param ∈ fieldnames(T2partOptions)) && setindex!(t2part_args, paramval, param)
+        end
+
+        return t2map_args, t2part_args
+    end
+end
+
+function jl_to_mat_param!(opts, param, paramval)
+
+    # T2mapSEcorr parameters which aren't in the MATLAB API
+    new_t2map_params = Set{Symbol}([
+        :SaveResidualNorm,
+        :SaveDecayCurve,
+        :SaveNNLSBasis,
+        :Silent,
+    ])
+
+    if param == :SaveRegParam # renamed parameter
+        opts[:Save_regparam] = ifelse(paramval, "yes", "no")
+    elseif param == :nRefAngles # renamed parameter
+        opts[:nAngles] = paramval
+    elseif param == :RefConAngle # renamed parameter
+        opts[:RefCon] = paramval
+    elseif param ∉ new_t2map_params # skip Julia-only parameters
+        opts[param] = paramval
+    end
+
+    return opts
 end
 
 field_error_string(x, y) = "max val = $(maximum(abs, y)), max diff = $(maximum(abs, x.-y)), rel diff = $(maximum(abs, (x.-y)./y))"
@@ -91,71 +194,53 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     nloop = max(length.(iters)...)
     repeat_until(x) = Iterators.take(Iterators.cycle(x), nloop)
 
-    for ((param, valuelist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), paramval in valuelist, legacy in [false] #TODO
-        # Default flag/value pairs for `nothing` values; `nothing` is always default if allowable, therefore no flag/val is passed
-        cliparamflag = []
-        cliparamval = []
-        if !isnothing(paramval)
-            cliparamflag = ["--" * string(param)] # CLI flags are prepended with "--"
-            cliparamval =
-                paramval isa Tuple ? [string(x) for x in paramval] : # Pass each arg separately
-                paramval isa Bool  ? [] : # No arg necessary, flag only
-                [string(paramval)] # Pass string
-        end
+    for ((param, valuelist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), paramval in valuelist, legacy in [false, true] #TODO
+        paramdict = Dict{Symbol,Any}(param => paramval)
+        quiet = !(legacy && (param === :nRefAngles))
+        construct_args_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => quiet, :legacy => legacy, :T2map => true, :T2part => true)
+        construct_args_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => quiet, :legacy => legacy, :T2map => true, :T2part => true)
 
         # Run T2map and T2part through Julia API for comparison
-        t2map_args  = Dict{Symbol,Any}(param ∈ fieldnames(T2mapOptions)  ? param => paramval : ())
-        t2part_args = Dict{Symbol,Any}(param ∈ fieldnames(T2partOptions) ? param => paramval : ())
-
-        t2map, t2dist = T2mapSEcorr(image; t2map_args..., legacy = legacy, Silent = true)
-        t2part = T2partSEcorr(t2dist; t2part_args..., legacy = legacy, Silent = true)
+        jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; construct_args_kwargs_jl...)
+        t2map, t2dist = T2mapSEcorr(image; jl_t2map_kwargs...)
+        t2part = T2partSEcorr(t2dist; jl_t2part_kwargs...)
 
         # Run CLI with both --T2map and --T2part flags
         mktempdir() do path
-            # Write input image to file for reading
-            input_basename = joinpath(path, "input")
-            input_fname = input_basename * file_suffix
-            write_image(input_fname, image)
+            construct_args_kwargs_cli[:outputpath] = path
+            construct_args_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
+            cli_t2map_args = construct_args(paramdict; construct_args_kwargs_cli...)
 
-            # Run main function
-            args = [input_fname, "--output", path, "--T2map", "--T2part", cliparamflag..., cliparamval..., "--quiet"]
-            legacy && push!(args, "--legacy") #TODO
-
-            # println("\n*  T2mapSEcorr CLI test with args: " * join(args, " "))
-            run_main(args, make_settings_file)
-
-            # Read in outputs and compare
-            t2maps_file, t2dist_file, t2parts_file, settings_file =
-                input_basename .* (".t2maps.mat", ".t2dist.mat", ".t2parts.mat", ".settings.txt")
-            @test isfile(t2maps_file);  t2maps_cli  = DECAES.MAT.matread(t2maps_file)
-            @test isfile(t2dist_file);  t2dist_cli  = DECAES.MAT.matread(t2dist_file)["dist"]
-            @test isfile(t2parts_file); t2parts_cli = DECAES.MAT.matread(t2parts_file)
-            @test !xor(make_settings_file, isfile(settings_file))
-
-            test_compare_t2map((t2map, t2dist), (t2maps_cli, t2dist_cli); rtol = 1e-14)
-            test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
+            t2maps_cli, t2dist_cli, t2parts_cli = run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
+            t2map_passed = test_compare_t2map((t2map, t2dist), (t2maps_cli, t2dist_cli); rtol = 1e-14)
+            t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
+            if !(t2map_passed && t2part_passed)
+                println("\n ------------------------------- \n") #TODO
+                @show paramdict #TODO
+                @show jl_t2map_kwargs #TODO
+                @show jl_t2part_kwargs #TODO
+                @show cli_t2map_args #TODO
+                println("\n ------------------------------- \n") #TODO
+            end
         end
 
         # Run CLI with --T2part flag only
         mktempdir() do path
-            # Write input t2dist to .mat file for reading
-            input_basename = joinpath(path, "input")
-            input_fname = input_basename * file_suffix
-            write_image(input_fname, t2dist)
+            construct_args_kwargs_cli[:outputpath] = path
+            construct_args_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
+            construct_args_kwargs_cli[:T2map] = false
+            cli_t2part_args = construct_args(paramdict; construct_args_kwargs_cli...)
 
-            # Run main function
-            args = [input_fname, cliparamflag..., cliparamval..., "--output", path, "--quiet", "--T2part"]
-            # println("* T2partSEcorr CLI test with args: " * join(args, " "))
-            run_main(args, make_settings_file)
-
-            # Read in outputs and compare
-            t2maps_file, t2dist_file, t2parts_file, settings_file =
-                input_basename .* (".t2maps.mat", ".t2dist.mat", ".t2parts.mat", ".settings.txt")
-            @test isfile(t2parts_file); t2parts_cli = DECAES.MAT.matread(t2parts_file)
-            @test !isfile(t2maps_file) && !isfile(t2dist_file)
-            @test !xor(make_settings_file, isfile(settings_file))
-
-            test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
+            t2maps_cli, t2dist_cli, t2parts_cli = run_main(t2dist, cli_t2part_args; make_settings_file = make_settings_file)
+            t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
+            if !t2part_passed
+                println("\n ------------------------------- \n") #TODO
+                @show paramdict #TODO
+                @show jl_t2map_kwargs #TODO
+                @show jl_t2part_kwargs #TODO
+                @show cli_t2part_args #TODO
+                println("\n ------------------------------- \n") #TODO
+            end
         end
     end
 end
@@ -168,88 +253,59 @@ end
 #   default MATLAB path.
 # ================================================================================
 
-const RUN_MATLAB_TESTS = Ref(true)
+# Helper functions
+matlabify(x::AbstractString) = String(x)
+matlabify(x::AbstractArray) = Float64.(x)
+matlabify(x::Tuple) = [Float64.(x)...]
+matlabify(x::Bool) = x
+matlabify(x) = map(Float64, x)
+matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k,v) in kwargs])
 
-# Try loading MATLAB.jl
-try
-    @eval using MATLAB
-catch e
-    @warn "Failed to load Julia package MATLAB.jl; skipping UBCMWF MATLAB tests"
-    @warn sprint(showerror, e, catch_backtrace())
-    RUN_MATLAB_TESTS[] = false
-end
+mfile_exists(fname) = MATLAB.mxcall(:exist, 1, fname) == 2
 
-# Check that MATLAB path is correctly set
-if RUN_MATLAB_TESTS[]
-    mfile_exists(fname) = MATLAB.mxcall(:exist, 1, fname) == 2
+mxT2mapSEcorr(image, maxCores = 6; kwargs...) =
+    MATLAB.mxcall(:T2map_SEcorr_nechoes_2019, 2, image, maxCores, matlabify(kwargs)...)
 
-    if !mfile_exists("T2map_SEcorr_nechoes_2019") || !mfile_exists("T2part_SEcorr_2019")
-        @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
-            "Modify your default MATLAB path to include these files. For example, add a command such as" *
-            "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
-            "to your startup.m file using the appropriate path for your file system. Then, try testing again."
-        RUN_MATLAB_TESTS[] = false
-    end
-end
+mxT2partSEcorr(image; kwargs...) =
+    MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
+
+# Arbitrary non-default T2mapSEcorr options for testing
+const mat_t2map_params_perms = Dict{Symbol, Vector{Any}}(
+    :TE               => [9e-3],
+    :T1               => [1.1],
+    :Threshold        => [250.0],
+    :Chi2Factor       => [1.03],
+    :nT2              => [30, 59], # Include odd number
+    :T2Range          => [(8e-3, 1.0)],
+    :RefConAngle      => [175.0],
+    :MinRefAngle      => [60.0],
+    :nRefAngles       => [7, 12],
+    :Reg              => ["no", "chi2", "lcurve"],
+    :SetFlipAngle     => [178.0],
+    :SaveResidualNorm => [false, true],
+    :SaveDecayCurve   => [false, true],
+    :SaveRegParam     => [false, true],
+    :SaveNNLSBasis    => [false, true],
+)
+
+# Arbitrary non-default T2partSEcorr options for testing
+const mat_t2part_params_perms = Dict{Symbol, Vector{Any}}(
+    :T2Range    => [(11e-3, 1.5)],
+    :SPWin      => [(12e-3, 28e-3)],
+    :MPWin      => [(35e-3, 150e-3)],
+    :Sigmoid    => [1.5],
+)
 
 function matlab_tests()
-
-    # Helper functions
-    matlabify(x::AbstractString) = String(x)
-    matlabify(x::AbstractArray) = Float64.(x)
-    matlabify(x::Tuple) = [Float64.(x)...]
-    matlabify(x::Bool) = x
-    matlabify(x) = map(Float64, x)
-    matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k,v) in kwargs])
-
-    mxT2mapSEcorr(image, maxCores = 6; kwargs...) =
-        MATLAB.mxcall(:T2map_SEcorr_nechoes_2019, 2, image, maxCores, matlabify(kwargs)...)
-
-    mxT2partSEcorr(image; kwargs...) =
-        MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
-
-    # T2mapSEcorr parameters which aren't in the MATLAB API
-    new_t2map_params = Set{Symbol}([
-        :SaveResidualNorm,
-        :SaveDecayCurve,
-        :SaveNNLSBasis,
-        :Silent,
-    ])
-
-    # Arbitrary non-default T2mapSEcorr options for testing
-    t2map_params_perms = Dict{Symbol, Vector{Any}}(
-        :TE               => [9e-3],
-        :T1               => [1.1],
-        :Threshold        => [250.0],
-        :Chi2Factor       => [1.03],
-        :nT2              => [30, 59], # Include odd number
-        :T2Range          => [(8e-3, 1.0)],
-        :RefConAngle      => [175.0],
-        :MinRefAngle      => [60.0],
-        :nRefAngles       => [7, 12],
-        :Reg              => ["no", "chi2", "lcurve"],
-        :SetFlipAngle     => [178.0],
-        :SaveResidualNorm => [false, true],
-        :SaveDecayCurve   => [false, true],
-        :SaveRegParam     => [false, true],
-        :SaveNNLSBasis    => [false, true],
-    )
-
-    # Arbitrary non-default T2partSEcorr options for testing
-    t2part_params_perms = Dict{Symbol, Vector{Any}}(
-        :T2Range    => [(11e-3, 1.5)],
-        :SPWin      => [(12e-3, 28e-3)],
-        :MPWin      => [(35e-3, 150e-3)],
-        :Sigmoid    => [1.5],
-    )
-
     # Relative tolerance threshold for legacy algorithms to match MATLAB version
     default_rtol = 1e-10
 
     @testset "T2mapSEcorr" begin
         image = DECAES.mock_image(nTE = 32 + rand(0:1))
+        construct_args_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => true, :T2map => true, :T2part => true)
+        construct_args_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => true, :legacy => true, :T2map => true, :T2part => true)
 
-        for (param,valuelist) in t2map_params_perms, paramval in valuelist
+        for (param,valuelist) in mat_t2map_params_perms, paramval in valuelist
             # The MATLAB implementation of the L-Curve method uses an internal call to `fminbnd`
             # with a tolerance of 1e-3, and therefore the Julia outputs would only match to at best
             # a tolerance of 1e-3. Additionally, there is a typo in the `G(mu,C_g,d_g)` subfunction:
@@ -266,23 +322,13 @@ function matlab_tests()
                 # rtol = 1e-3
             end
 
-            jl_kwargs = Dict{Symbol,Any}(:SaveRegParam => true, :legacy => true, :Silent => true) # default settings
-            jl_kwargs[param] = paramval
-
-            mat_kwargs = Dict{Symbol,Any}(:Save_regparam => "yes") # default settings
-            if param == :SaveRegParam # renamed parameter
-                mat_kwargs[:Save_regparam] = ifelse(paramval, "yes", "no") # renamed parameter
-            elseif param == :nRefAngles # renamed parameter
-                mat_kwargs[:nAngles] = paramval
-            elseif param == :RefConAngle # renamed parameter
-                mat_kwargs[:RefCon] = paramval
-            elseif param ∉ new_t2map_params # skip Julia-only parameters
-                mat_kwargs[param] = paramval
-            end
+            paramdict = Dict{Symbol,Any}(param => paramval)
+            jl_t2map_kwargs,  _ = construct_args(paramdict; construct_args_kwargs_jl...)
+            mat_t2map_kwargs, _ = construct_args(paramdict; construct_args_kwargs_mat...)
 
             # Run T2mapSEcorr
-            t2map_out_jl  = T2mapSEcorr(image; jl_kwargs...)
-            t2map_out_mat = mxT2mapSEcorr(image; mat_kwargs...)
+            t2map_out_jl  = T2mapSEcorr(image; jl_t2map_kwargs...)
+            t2map_out_mat = mxT2mapSEcorr(image; mat_t2map_kwargs...)
             allpassed = test_compare_t2map(t2map_out_jl, t2map_out_mat; rtol = rtol)
             !allpassed && println("t2map failed: $param = $paramval")
         end
@@ -290,21 +336,38 @@ function matlab_tests()
 
     @testset "T2partSEcorr" begin
         T2dist = DECAES.mock_T2_dist()
+        construct_args_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => true, :T2map => false, :T2part => true)
+        construct_args_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => true, :legacy => true, :T2map => false, :T2part => true)
 
-        for (param,valuelist) in t2part_params_perms, paramval in valuelist
+        for (param,valuelist) in mat_t2part_params_perms, paramval in valuelist
             # Run T2partSEcorr
-            jl_kwargs  = Dict{Symbol,Any}(param => paramval, :legacy => true, :Silent => true)
-            mat_kwargs = Dict{Symbol,Any}(param => paramval)
-            t2part_jl  = T2partSEcorr(T2dist; jl_kwargs...)
-            t2part_mat = mxT2partSEcorr(T2dist; mat_kwargs...)
+            paramdict = Dict{Symbol,Any}(param => paramval)
+            _, jl_t2part_kwargs  = construct_args(paramdict; construct_args_kwargs_jl...)
+            _, mat_t2part_kwargs = construct_args(paramdict; construct_args_kwargs_mat...)
+
+            t2part_jl  = T2partSEcorr(T2dist; jl_t2part_kwargs...)
+            t2part_mat = mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
             allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
             !allpassed && println("t2part failed: $param = $paramval")
         end
     end
 end
 
-if RUN_MATLAB_TESTS[]
-    matlab_tests()
+# Try loading MATLAB.jl and running tests
+try
+    @eval using MATLAB
+
+    if mfile_exists("T2map_SEcorr_nechoes_2019") && mfile_exists("T2part_SEcorr_2019")
+        matlab_tests()
+    else
+        @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
+            "Modify your default MATLAB path to include these files. For example, add a command such as" *
+            "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
+            "to your startup.m file using the appropriate path for your file system. Then, try testing again."
+    end
+catch e
+    @warn "Failed to load Julia package MATLAB.jl; skipping UBCMWF MATLAB tests"
+    @warn sprint(showerror, e, catch_backtrace())
 end
 
 nothing
