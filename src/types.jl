@@ -45,29 +45,29 @@ See also:
     nTE::Int
     @assert nTE >= 4
 
-    TE = 0.010 # seconds
-    @assert 0.0 < TE
+    TE # seconds
+    @assert TE > 0.0
 
     vTEparam::Union{Tuple{T,T,Int}, Nothing} = nothing
-    @assert isnothing(vTEparam) || begin
-        TE1, TE2, nTE1 = vTEparam
-        0.0 < TE1 < TE2 && nTE1 < nTE && round(Int, TE2/TE1) ≈ TE2/TE1
-    end
     @assert isnothing(vTEparam) || error("Variable TE is not implemented")
+    # @assert isnothing(vTEparam) || begin
+    #     TE1, TE2, nTE1 = vTEparam
+    #     0.0 < TE1 < TE2 && nTE1 < nTE && round(Int, TE2/TE1) ≈ TE2/TE1
+    # end
 
     T1 = 1.0 # seconds
-    @assert 0.0 < T1
+    @assert T1 > 0.0
 
-    Threshold = 200.0 # magnitude signal intensity
+    Threshold = !legacy ? 0.0 : 200.0 # first echo signal intensity cutoff
     @assert Threshold >= 0.0
 
     Chi2Factor = 1.02
-    @assert Chi2Factor > 1
+    @assert Chi2Factor > 1.0
 
-    nT2::Int = 40
-    @assert 10 <= nT2 <= 120
+    nT2::Int
+    @assert nT2 >= 2
 
-    T2Range::NTuple{2,T} = !legacy ? (0.01, 2.0) : (0.015, 2.0) # seconds
+    T2Range::NTuple{2,T} # seconds
     @assert 0.0 < T2Range[1] < T2Range[2]
 
     RefConAngle = 180.0 # degrees
@@ -86,7 +86,7 @@ See also:
     @assert Reg ∈ ("no", "chi2", "lcurve")
 
     SetFlipAngle::Union{T,Nothing} = nothing
-    @assert isnothing(SetFlipAngle) || 0.0 < SetFlipAngle <= 180.0
+    @assert isnothing(SetFlipAngle) || 0.0 <= SetFlipAngle <= 180.0
 
     SaveResidualNorm::Bool = false
 
@@ -144,13 +144,13 @@ See also:
     nT2::Int
     @assert nT2 > 1
 
-    T2Range::NTuple{2,T} = !legacy ? (10e-3, 2.0) : (15e-3, 2.0) # seconds
+    T2Range::NTuple{2,T} # seconds
     @assert 0.0 < T2Range[1] < T2Range[2]
 
-    SPWin::NTuple{2,T} = !legacy ? (10e-3, 25e-3) : (14e-3, 40e-3) # seconds
+    SPWin::NTuple{2,T} # seconds
     @assert SPWin[1] < SPWin[2]
 
-    MPWin::NTuple{2,T} = !legacy ? (25e-3, 200e-3) : (40e-3, 200e-3) # seconds
+    MPWin::NTuple{2,T} # seconds
     @assert MPWin[1] < MPWin[2]
 
     Sigmoid::Union{T,Nothing} = nothing

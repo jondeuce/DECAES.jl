@@ -117,7 +117,7 @@ function callmain(args...)
     end
     nothing
 end
-callmain(imfile, "--T2map", "--T2part", "--dry", "--quiet") # precompile
+callmain(imfile, "--T2map", "--T2part", "--dry", "--quiet", "--TE", "10e-3", "--nT2", "40", "--T2Range", "10e-3", "2.0", "--SPWin", "10e-3", "40e-3", "--MPWin", "40e-3", "200.0e-3") # precompile
 ```
 
 Suppose you have a multi spin-echo image file `image.nii` which you would like to perform $T_2$ analysis on.
@@ -125,13 +125,13 @@ We can call [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) on the file `image.
 
 ```@example
 println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image.nii --T2map --T2part") # hide
+println("\$ julia decaes.jl image.nii --T2map --T2part --TE 10e-3 --nT2 40 --T2Range 10e-3 2.0 --SPWin 10e-3 40e-3 --MPWin 40e-3 200.0e-3") # hide
 ```
 
 After a few seconds, the script should begin running with the following messages appearing as the script progresses (note that real images will take longer to process than this toy example):
 
 ```@example callmain
-callmain(imfile, "--T2map", "--T2part") # hide
+callmain(imfile, "--T2map", "--T2part", "--TE", "10e-3", "--nT2", "40", "--T2Range", "10e-3", "2.0", "--SPWin", "10e-3", "40e-3", "--MPWin", "40e-3", "200.0e-3") # hide
 ```
 
 ### [Multiple input files](@id multiinput)

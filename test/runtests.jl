@@ -1,6 +1,24 @@
 using DECAES
 using Test
 
+# Arbitrary default required parameters used during testing
+const default_paramdict = Dict{Symbol,Any}(
+    :TE => 8e-3,
+    :nT2 => 42,
+    :T2Range => (12e-3, 1.8),
+    :SPWin => (12e-3, 37e-3),
+    :MPWin => (37e-3, 650e-3),
+)
+
+# Legacy settings which previously had defaults
+const legacy_default_paramdict = Dict{Symbol,Any}(
+    :TE => 10e-3,
+    :nT2 => 40,
+    :T2Range => (15e-3, 2.0),
+    :SPWin => (14e-3, 40e-3),
+    :MPWin => (40e-3, 200e-3),
+)
+
 # Write 4D image to disk
 function write_image(filename, image)
     if endswith(filename, ".mat")
@@ -56,6 +74,15 @@ function construct_args(paramdict;
         T2part::Bool = true,
     )
 
+    if legacy
+        # Add legacy default options to paramdict
+        for (k,v) in legacy_default_paramdict
+            if k ∉ keys(paramdict)
+                paramdict[k] = v
+            end
+        end
+    end
+
     if argstype === :cli
         #### CLI
 
@@ -86,9 +113,13 @@ function construct_args(paramdict;
         t2map_args  = T2map  ? Dict{Symbol,Any}() : nothing
         t2part_args = T2part ? Dict{Symbol,Any}() : nothing
 
+        # Only these params are used within MATLAB (possibly spelled differently)
+        mat_t2map_params  = [:Chi2Factor, :MinRefAngle, :nRefAngles, :nT2, :RefConAngle, :Reg, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
+        mat_t2part_params = [:T2Range, :SPWin, :MPWin, :Sigmoid]
+
         for (param, paramval) in paramdict
-            T2map  && (param ∈ fieldnames(T2mapOptions))  && jl_to_mat_param!(t2map_args,  param, paramval)
-            T2part && (param ∈ fieldnames(T2partOptions)) && jl_to_mat_param!(t2part_args, param, paramval)
+            T2map  && (param ∈ mat_t2map_params)  && jl_to_mat_param!(t2map_args,  param, paramval)
+            T2part && (param ∈ mat_t2part_params) && jl_to_mat_param!(t2part_args, param, paramval)
         end
 
         return t2map_args, t2part_args
@@ -124,6 +155,10 @@ function jl_to_mat_param!(opts, param, paramval)
         opts[:nAngles] = paramval
     elseif param == :RefConAngle # renamed parameter
         opts[:RefCon] = paramval
+    elseif param == :SPWin # renamed parameter
+        opts[:spwin] = paramval
+    elseif param == :MPWin # renamed parameter
+        opts[:mpwin] = paramval
     elseif param ∉ new_t2map_params # skip Julia-only parameters
         opts[param] = paramval
     end
@@ -179,10 +214,10 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     :T1               => [0.95],
     :T2Range          => [(16e-3, 1.8)],
     :TE               => [8e-3, 11e-3],
-    :Threshold        => [0.0, Inf], # Include zero and infinite (i.e. either all voxels included or skipped)
+    :Threshold        => [125_000.0, Inf], # Include non-zero and infinite (i.e. either some or all voxels skipped)
     :nRefAngles       => [9, 10], # Include odd number
     :nRefAnglesMin    => [4, 5], # Include odd number
-    :nT2              => [40, 45], # Include odd number
+    :nT2              => [2, 47], # Include odd number
 )
 
 @testset "CLI" begin
@@ -194,52 +229,53 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     nloop = max(length.(iters)...)
     repeat_until(x) = Iterators.take(Iterators.cycle(x), nloop)
 
-    for ((param, valuelist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), paramval in valuelist, legacy in [false, true] #TODO
-        paramdict = Dict{Symbol,Any}(param => paramval)
-        quiet = !(legacy && (param === :nRefAngles))
-        construct_args_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => quiet, :legacy => legacy, :T2map => true, :T2part => true)
-        construct_args_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => quiet, :legacy => legacy, :T2map => true, :T2part => true)
+    for ((param, valuelist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), paramval in valuelist, legacy in [false, true]
+        paramdict = deepcopy(default_paramdict)
+        paramdict[param] = paramval
+
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => legacy, :T2map => true, :T2part => true)
+        settings_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => true, :legacy => legacy, :T2map => true, :T2part => true)
 
         # Run T2map and T2part through Julia API for comparison
-        jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; construct_args_kwargs_jl...)
+        jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
         t2map, t2dist = T2mapSEcorr(image; jl_t2map_kwargs...)
         t2part = T2partSEcorr(t2dist; jl_t2part_kwargs...)
 
         # Run CLI with both --T2map and --T2part flags
         mktempdir() do path
-            construct_args_kwargs_cli[:outputpath] = path
-            construct_args_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
-            cli_t2map_args = construct_args(paramdict; construct_args_kwargs_cli...)
+            settings_kwargs_cli[:outputpath] = path
+            settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
+            cli_t2map_args = construct_args(paramdict; settings_kwargs_cli...)
 
             t2maps_cli, t2dist_cli, t2parts_cli = run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
             t2map_passed = test_compare_t2map((t2map, t2dist), (t2maps_cli, t2dist_cli); rtol = 1e-14)
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !(t2map_passed && t2part_passed)
-                println("\n ------------------------------- \n") #TODO
-                @show paramdict #TODO
-                @show jl_t2map_kwargs #TODO
-                @show jl_t2part_kwargs #TODO
-                @show cli_t2map_args #TODO
-                println("\n ------------------------------- \n") #TODO
+                println("\n ------------------------------- \n")
+                @show paramdict
+                @show jl_t2map_kwargs
+                @show jl_t2part_kwargs
+                @show cli_t2map_args
+                println("\n ------------------------------- \n")
             end
         end
 
         # Run CLI with --T2part flag only
         mktempdir() do path
-            construct_args_kwargs_cli[:outputpath] = path
-            construct_args_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
-            construct_args_kwargs_cli[:T2map] = false
-            cli_t2part_args = construct_args(paramdict; construct_args_kwargs_cli...)
+            settings_kwargs_cli[:outputpath] = path
+            settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
+            settings_kwargs_cli[:T2map] = false
+            cli_t2part_args = construct_args(paramdict; settings_kwargs_cli...)
 
             t2maps_cli, t2dist_cli, t2parts_cli = run_main(t2dist, cli_t2part_args; make_settings_file = make_settings_file)
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !t2part_passed
-                println("\n ------------------------------- \n") #TODO
-                @show paramdict #TODO
-                @show jl_t2map_kwargs #TODO
-                @show jl_t2part_kwargs #TODO
-                @show cli_t2part_args #TODO
-                println("\n ------------------------------- \n") #TODO
+                println("\n ------------------------------- \n")
+                @show paramdict
+                @show jl_t2map_kwargs
+                @show jl_t2part_kwargs
+                @show cli_t2part_args
+                println("\n ------------------------------- \n")
             end
         end
     end
@@ -275,7 +311,7 @@ const mat_t2map_params_perms = Dict{Symbol, Vector{Any}}(
     :T1               => [1.1],
     :Threshold        => [250.0],
     :Chi2Factor       => [1.03],
-    :nT2              => [30, 59], # Include odd number
+    :nT2              => [10, 59], # Include odd number
     :T2Range          => [(8e-3, 1.0)],
     :RefConAngle      => [175.0],
     :MinRefAngle      => [60.0],
@@ -302,8 +338,8 @@ function matlab_tests()
 
     @testset "T2mapSEcorr" begin
         image = DECAES.mock_image(nTE = 32 + rand(0:1))
-        construct_args_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => true, :T2map => true, :T2part => true)
-        construct_args_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => true, :legacy => true, :T2map => true, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => true, :T2map => true, :T2part => true)
+        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => true, :legacy => true, :T2map => true, :T2part => true)
 
         for (param,valuelist) in mat_t2map_params_perms, paramval in valuelist
             # The MATLAB implementation of the L-Curve method uses an internal call to `fminbnd`
@@ -322,9 +358,10 @@ function matlab_tests()
                 # rtol = 1e-3
             end
 
-            paramdict = Dict{Symbol,Any}(param => paramval)
-            jl_t2map_kwargs,  _ = construct_args(paramdict; construct_args_kwargs_jl...)
-            mat_t2map_kwargs, _ = construct_args(paramdict; construct_args_kwargs_mat...)
+            paramdict = deepcopy(legacy_default_paramdict)
+            paramdict[param] = paramval
+            jl_t2map_kwargs,  _ = construct_args(paramdict; settings_kwargs_jl...)
+            mat_t2map_kwargs, _ = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2mapSEcorr
             t2map_out_jl  = T2mapSEcorr(image; jl_t2map_kwargs...)
@@ -336,14 +373,15 @@ function matlab_tests()
 
     @testset "T2partSEcorr" begin
         T2dist = DECAES.mock_T2_dist()
-        construct_args_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => true, :T2map => false, :T2part => true)
-        construct_args_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => true, :legacy => true, :T2map => false, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => true, :T2map => false, :T2part => true)
+        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => true, :legacy => true, :T2map => false, :T2part => true)
 
         for (param,valuelist) in mat_t2part_params_perms, paramval in valuelist
             # Run T2partSEcorr
-            paramdict = Dict{Symbol,Any}(param => paramval)
-            _, jl_t2part_kwargs  = construct_args(paramdict; construct_args_kwargs_jl...)
-            _, mat_t2part_kwargs = construct_args(paramdict; construct_args_kwargs_mat...)
+            paramdict = deepcopy(legacy_default_paramdict)
+            paramdict[param] = paramval
+            _, jl_t2part_kwargs  = construct_args(paramdict; settings_kwargs_jl...)
+            _, mat_t2part_kwargs = construct_args(paramdict; settings_kwargs_mat...)
 
             t2part_jl  = T2partSEcorr(T2dist; jl_t2part_kwargs...)
             t2part_mat = mxT2partSEcorr(T2dist; mat_t2part_kwargs...)

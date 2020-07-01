@@ -373,7 +373,7 @@ end
 ####
 
 # Mock CPMG image
-function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2,2), nTE = 32); kwargs...) where {T}
+function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40); kwargs...) where {T}
     oldseed = Random.seed!(0)
 
     @unpack MatrixSize, TE, nTE = T2mapOptions(o; kwargs...)
@@ -395,5 +395,5 @@ function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2
 end
 
 # Mock T2 distribution, computed with default parameters
-mock_T2_dist(o::T2mapOptions = T2mapOptions{Float64}(MatrixSize = (2,2,2), nTE = 32, nT2 = 40); kwargs...) =
+mock_T2_dist(o::T2mapOptions = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40); kwargs...) =
     T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]

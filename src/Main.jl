@@ -205,8 +205,8 @@ function create_argparse_settings(;legacy = false, add_defaults = false)
         "T2mapSEcorr/T2partSEcorr arguments",
         "internal arguments",
     )
-    t2map_opts = T2mapOptions{Float64}(nTE = 32, MatrixSize = (1,1,1), legacy = legacy)
-    t2part_opts = T2partOptions{Float64}(nT2 = t2map_opts.nT2, MatrixSize = (1,1,1), legacy = legacy)
+    t2map_opts = T2mapOptions{Float64}(MatrixSize = (1,1,1), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40, legacy = legacy)
+    t2part_opts = T2partOptions{Float64}(MatrixSize = (1,1,1), nT2 = 40, T2Range = (10e-3, 2.0), SPWin = (10e-3, 40e-3), MPWin = (40e-3, 200.0e-3), legacy = legacy)
     opts_args = sorted_arg_table_entries(t2map_opts, t2part_opts; add_defaults = add_defaults)
     add_arg_table!(settings, opts_args...)
 
@@ -236,17 +236,27 @@ function sorted_arg_table_entries(
         @nospecialize(t2part_opts);
         add_defaults = false
     )
+    required_fields = (:MatrixSize, :nTE, :nT2, :TE, :T2Range, :SPWin, :MPWin)
     fields, types, values = Symbol[], Type[], Any[]
     for o in [t2map_opts, t2part_opts], (f,T) in zip(fieldnames(typeof(o)), fieldtypes(typeof(o)))
-        push!(fields, f); push!(types, T); push!(values, getfield(o, f))
+        push!(fields, f)
+        push!(types, T)
+        if f ∈ required_fields
+            push!(values, nothing) # automatically determined or required parameters
+        else
+            push!(values, getfield(o, f)) # default parameters
+        end
     end
+
+    defaults = collect(zip(fields, values, types)) |> triplets -> vcat(
+        [triplets[findfirst(first.(triplets) .== f)] for f in required_fields], # required fields first
+        sort(filter(t -> t[1] ∉ required_fields, triplets); by = tup -> uppercase(string(first(tup)))), # followed by remaining fields alphabetically
+    )
+
     args = []
-    defaults = collect(zip(fields, values, types))
-    sort!(defaults; by = tup -> uppercase(string(first(tup)))) # sort alphabetically
-    for (k, v, T) in defaults
-        (k === :nTE || k === :MatrixSize) && continue # Skip automatically determined parameters
-        (k === :vTEparam || k == :legacy) && continue # vTEparam not implemented; legacy grouped with main ArgParse settings
-        push!(args, "--" * string(k))
+    for (f, v, T) in defaults
+        (f === :vTEparam || f == :legacy) && continue # vTEparam not implemented; legacy grouped with main ArgParse settings
+        push!(args, "--" * string(f))
         if T <: Bool
             if add_defaults
                 push!(args, Dict{Symbol,Any}(:action => ifelse(v, :store_false, :store_true)))
@@ -263,7 +273,21 @@ function sorted_arg_table_entries(
         else
             push!(args, Dict{Symbol,Any}(:default => add_defaults ? v : nothing))
         end
+        if f === :MatrixSize
+            args[end][:help] = "Required parameter; inferred from first three dimensions of input image"
+        elseif f === :nTE
+            args[end][:help] = "Required parameter; inferred from fourth dimension of input image if --T2map is passed"
+        elseif f === :nT2
+            args[end][:help] = "Required parameter; inferred from fourth dimension of input image if --T2part (and not --T2map) is passed"
+        elseif f === :TE
+            args[end][:help] = "Required parameter when --T2map is passed"
+        elseif f === :T2Range
+            args[end][:help] = "Required parameter when --T2map or --T2part is passed"
+        elseif f === :SPWin || f === :MPWin
+            args[end][:help] = "Required parameter when --T2part is passed"
+        end
     end
+
     return args
 end
 
