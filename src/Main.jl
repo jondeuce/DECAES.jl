@@ -32,12 +32,6 @@ function main(command_line_args::Vector{String} = ARGS)
     t2map_kwargs = get_parsed_args_subset(opts, T2MAP_FIELDTYPES)
     t2part_kwargs = get_parsed_args_subset(opts, T2PART_FIELDTYPES)
 
-    # Override --Silent flag with --quiet flag, if set
-    if opts[:quiet]
-        t2map_kwargs[:Silent] = true
-        t2part_kwargs[:Silent] = true
-    end
-
     # If not performing T2-mapping, infer nT2 from input T2 distribution
     if !opts[:T2map]
         delete!(t2part_kwargs, :nT2)
@@ -45,8 +39,24 @@ function main(command_line_args::Vector{String} = ARGS)
 
     # Get input file list and output folder list
     for info in get_file_info(opts)
+        # Main processing
+        function _call_main(logger)
+            with_logger(logger) do
+                try
+                    _main(info, opts, t2map_kwargs, t2part_kwargs)
+                catch e
+                    !opts[:quiet] && println(stderr, "")
+                    @warn "Error during processing of file: $(info[:inputfile])"
+                    !opts[:quiet] && println(stderr, "")
+                    @warn sprint(showerror, e, catch_backtrace())
+                end
+            end
+        end
+
         # Make output path
-        mkpath(info[:outputfolder])
+        if !opts[:dry]
+            mkpath(info[:outputfolder])
+        end
 
         # Save settings files
         if !opts[:dry]
@@ -57,20 +67,17 @@ function main(command_line_args::Vector{String} = ARGS)
             end
         end
 
-        # Set logger to output to both console and log file
-        logfile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".log")
-
-        open(logfile, "w+") do io
-            with_logger(TeeLogger(ConsoleLogger(stdout), ConsoleLogger(io))) do
-                try
-                    _main(info, opts, t2map_kwargs, t2part_kwargs)
-                catch e
-                    println(stdout, "")
-                    @warn "Error during processing of file: $(info[:inputfile])"
-                    println(stdout, "")
-                    @warn sprint(showerror, e, catch_backtrace())
-                end
+        # Call main function
+        if !opts[:dry]
+            logfile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".log")
+            open(logfile, "w+") do io
+                # Set logger to output to log file, and optionally to console as well
+                logger = opts[:quiet] ? ConsoleLogger(io) : TeeLogger(ConsoleLogger(), ConsoleLogger(io))
+                _call_main(logger)
             end
+        else
+            logger = opts[:quiet] ? NullLogger() : ConsoleLogger()
+            _call_main(logger)
         end
     end
 
@@ -86,9 +93,7 @@ function _main(
 
     # Starting message/starting time
     t_start = tic()
-    if !opts[:quiet]
-        @info "Starting with $(Threads.nthreads()) threads"
-    end
+    @info "Starting with $(Threads.nthreads()) threads"
 
     # Load image(s)
     image = @showtime(
@@ -156,11 +161,9 @@ function _main(
     end
 
     # Done message
-    if !opts[:quiet]
-        println(stdout, "")
-        @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"
-        println(stdout, "")
-    end
+    !opts[:quiet] && println(stderr, "")
+    @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"
+    !opts[:quiet] && println(stderr, "")
 
     return nothing
 end
@@ -191,7 +194,7 @@ function create_argparse_settings(;legacy = false, add_defaults = false)
             help = "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi spin-echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Output T2 parts are saved as a MAT file with extension .t2parts.mat"
             action = :store_true
         "--quiet", "-q"
-            help = "suppress printing to the terminal. Note: 1) errors are not silenced, and 2) this flag overrides the --Silent flag in T2mapSEcorr"
+            help = "suppress printing to the terminal. Note: all terminal output, including errors and warnings, is still printed to the log file"
             action = :store_true
         "--dry"
             help = "execute dry run of processing without saving any results"

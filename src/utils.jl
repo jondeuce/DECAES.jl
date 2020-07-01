@@ -151,11 +151,11 @@ end
 # Macro for timing arbitrary code snippet and printing time
 macro showtime(ex, msg, verb)
     quote
-        $(esc(verb)) && println(stdout, "")
-        $(esc(verb)) && @info $(esc(msg)) * " ..."
+        $(esc(verb)) && println(stderr, "")
+        @info $(esc(msg)) * " ..."
         local val
         local t = @elapsed val = $(esc(ex))
-        $(esc(verb)) && @info "Done ($(round(t; digits = 2)) seconds)"
+        @info "Done ($(round(t; digits = 2)) seconds)"
         val
     end
 end

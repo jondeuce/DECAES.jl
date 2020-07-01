@@ -1,5 +1,6 @@
 using DECAES
 using Test
+using Logging
 
 # Arbitrary default required parameters used during testing
 const default_paramdict = Dict{Symbol,Any}(
@@ -28,8 +29,21 @@ function write_image(filename, image)
     end
 end
 
+# https://discourse.julialang.org/t/redirect-stdout-and-stderr/13424/3
+function redirect_to_tempfiles(f)
+    open(tempname() * ".log", "w") do out
+        open(tempname() * ".err", "w") do err
+            redirect_stdout(out) do
+                redirect_stderr(err) do
+                    f()
+                end
+            end
+        end
+    end
+end
+
 # Call main function on image file `image`
-function run_main(image, args; make_settings_file)
+function run_main(image, args; make_settings_file::Bool)
 
     # Write input image to file for reading
     inputfilename = args[1]
@@ -86,10 +100,10 @@ function construct_args(paramdict;
     if argstype === :cli
         #### CLI
 
-        args = [inputfilename, "--output", outputpath]
+        args = [inputfilename, rand(["--output", "-o"]), outputpath]
         T2map  && push!(args, "--T2map")
         T2part && push!(args, "--T2part")
-        quiet  && push!(args, "--quiet")
+        quiet  && push!(args, rand(["--quiet", "-q"]))
         legacy && push!(args, "--legacy")
 
         for (param, paramval) in paramdict
@@ -127,8 +141,8 @@ function construct_args(paramdict;
     elseif argstype === :jl
         #### Julia
 
-        t2map_args  = T2map  ? Dict{Symbol,Any}(:legacy => legacy, :Silent => quiet) : nothing
-        t2part_args = T2part ? Dict{Symbol,Any}(:legacy => legacy, :Silent => quiet) : nothing
+        t2map_args  = T2map  ? Dict{Symbol,Any}(:legacy => legacy) : nothing
+        t2part_args = T2part ? Dict{Symbol,Any}(:legacy => legacy) : nothing
 
         for (param, paramval) in paramdict
             T2map  && (param ∈ fieldnames(T2mapOptions))  && setindex!(t2map_args, paramval, param)
@@ -221,8 +235,6 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
 )
 
 @testset "CLI" begin
-    image = DECAES.mock_image(nTE = 32 + rand(0:1))
-
     make_settings_perms = [false, true]
     file_suffix_perms = [".mat", ".nii", ".nii.gz"] # Note: no PAR/REC or XML/REC, since we can't write to them
     iters = (cli_params_perms, make_settings_perms, file_suffix_perms)
@@ -230,16 +242,21 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     repeat_until(x) = Iterators.take(Iterators.cycle(x), nloop)
 
     for ((param, valuelist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), paramval in valuelist, legacy in [false, true]
+        image = DECAES.mock_image(nTE = rand([4,5,20,67]))
         paramdict = deepcopy(default_paramdict)
         paramdict[param] = paramval
 
-        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => legacy, :T2map => true, :T2part => true)
-        settings_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => true, :legacy => legacy, :T2map => true, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
+        settings_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
 
         # Run T2map and T2part through Julia API for comparison
         jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
-        t2map, t2dist = T2mapSEcorr(image; jl_t2map_kwargs...)
-        t2part = T2partSEcorr(t2dist; jl_t2part_kwargs...)
+        t2map, t2dist = with_logger(NullLogger()) do
+            T2mapSEcorr(image; jl_t2map_kwargs...)
+        end
+        t2part = with_logger(NullLogger()) do
+            T2partSEcorr(t2dist; jl_t2part_kwargs...)
+        end
 
         # Run CLI with both --T2map and --T2part flags
         mktempdir() do path
@@ -247,7 +264,9 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
             cli_t2map_args = construct_args(paramdict; settings_kwargs_cli...)
 
-            t2maps_cli, t2dist_cli, t2parts_cli = run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
+            t2maps_cli, t2dist_cli, t2parts_cli = redirect_to_tempfiles() do
+                run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
+            end
             t2map_passed = test_compare_t2map((t2map, t2dist), (t2maps_cli, t2dist_cli); rtol = 1e-14)
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !(t2map_passed && t2part_passed)
@@ -267,7 +286,9 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             settings_kwargs_cli[:T2map] = false
             cli_t2part_args = construct_args(paramdict; settings_kwargs_cli...)
 
-            t2maps_cli, t2dist_cli, t2parts_cli = run_main(t2dist, cli_t2part_args; make_settings_file = make_settings_file)
+            t2maps_cli, t2dist_cli, t2parts_cli = redirect_to_tempfiles() do
+                run_main(t2dist, cli_t2part_args; make_settings_file = make_settings_file)
+            end
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !t2part_passed
                 println("\n ------------------------------- \n")
@@ -337,9 +358,8 @@ function matlab_tests()
     default_rtol = 1e-10
 
     @testset "T2mapSEcorr" begin
-        image = DECAES.mock_image(nTE = 32 + rand(0:1))
-        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => true, :T2map => true, :T2part => true)
-        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => true, :legacy => true, :T2map => true, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
+        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
 
         for (param,valuelist) in mat_t2map_params_perms, paramval in valuelist
             # The MATLAB implementation of the L-Curve method uses an internal call to `fminbnd`
@@ -364,27 +384,37 @@ function matlab_tests()
             mat_t2map_kwargs, _ = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2mapSEcorr
-            t2map_out_jl  = T2mapSEcorr(image; jl_t2map_kwargs...)
-            t2map_out_mat = mxT2mapSEcorr(image; mat_t2map_kwargs...)
+            image = DECAES.mock_image(nTE = rand([4,5,20,67]))
+            t2map_out_jl = with_logger(NullLogger()) do
+                T2mapSEcorr(image; jl_t2map_kwargs...)
+            end
+            t2map_out_mat = redirect_to_tempfiles() do
+                mxT2mapSEcorr(image; mat_t2map_kwargs...)
+            end
             allpassed = test_compare_t2map(t2map_out_jl, t2map_out_mat; rtol = rtol)
             !allpassed && println("t2map failed: $param = $paramval")
         end
     end
 
     @testset "T2partSEcorr" begin
-        T2dist = DECAES.mock_T2_dist()
-        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => true, :legacy => true, :T2map => false, :T2part => true)
-        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => true, :legacy => true, :T2map => false, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
+        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
 
         for (param,valuelist) in mat_t2part_params_perms, paramval in valuelist
-            # Run T2partSEcorr
             paramdict = deepcopy(legacy_default_paramdict)
             paramdict[param] = paramval
+            delete!(paramdict, :nT2) # inferred
             _, jl_t2part_kwargs  = construct_args(paramdict; settings_kwargs_jl...)
             _, mat_t2part_kwargs = construct_args(paramdict; settings_kwargs_mat...)
 
-            t2part_jl  = T2partSEcorr(T2dist; jl_t2part_kwargs...)
-            t2part_mat = mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
+            # Run T2partSEcorr
+            T2dist = DECAES.mock_T2_dist(nT2 = rand([5,19,20,40,60])) #rand([4,5,40,41]))
+            t2part_jl = with_logger(NullLogger()) do
+                T2partSEcorr(T2dist; jl_t2part_kwargs...)
+            end
+            t2part_mat = redirect_to_tempfiles() do
+                mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
+            end
             allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
             !allpassed && println("t2part failed: $param = $paramval")
         end

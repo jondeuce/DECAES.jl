@@ -7,12 +7,12 @@ This struct collects keyword arguments passed to `T2mapSEcorr`, performs checks 
 # Arguments
 - `MatrixSize`:       size of first 3 dimensions of input 4D image. This argument is has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`
 - `nTE`:              number of echoes in input signal. This argument is has no default, but is inferred automatically as `size(image, 4)` when calling `T2mapSEcorr(image; kwargs...)`
-- `TE`:               interecho spacing (Default: `10e-3`, Units: seconds)
+- `TE`:               interecho spacing. This argument has no default (Units: seconds)
 - `T1`:               assumed value of T1 (Default: `1.0`, Units: seconds)
-- `Threshold`:        first echo intensity cutoff for empty voxels (Default: `200.0`)
+- `Threshold`:        first echo intensity cutoff for empty voxels (Default: `0.0`)
 - `Chi2Factor`:       constraint on ``\\chi^2`` used for regularization when `Reg == "chi2"` (Default: `1.02`)
-- `nT2`:              number of T2 times to use (Default: `40`)
-- `T2Range`:          min and max T2 values (Default: `(10e-3, 2.0)`, Units: seconds)
+- `nT2`:              number of T2 times to use. This argument has no default
+- `T2Range`:          tuple of min and max T2 values. This argument has no default (Units: seconds)
 - `RefConAngle`:      refocusing pulse control angle (Default: `180.0`, Units: degrees)
 - `MinRefAngle`:      minimum refocusing angle for flip angle optimization (Default: `50.0`, Units: degrees)
 - `nRefAngles`:       during flip angle optimization, goodness of fit is checked for up to `nRefAngles` angles in the range `[MinRefAngle, 180]`. The optimal angle is then determined through interpolation from these samples (Default: `32`)
@@ -29,8 +29,7 @@ This struct collects keyword arguments passed to `T2mapSEcorr`, performs checks 
 - `Silent`:           suppress printing to the console (Default: `false`)
 
 !!! note
-    The 5D array that is saved when `SaveNNLSBasis` is set to `true` has dimensions `MatrixSize x nTE x nT2`,
-    and therefore is typically extremely large; by default, it is `nT2 = 40` times the size of the input image.
+    The 5D array that is saved when `SaveNNLSBasis` is set to `true` has dimensions `MatrixSize x nTE x nT2`, and therefore is typically extremely large.
     However, if the flip angle is fixed via `SetFlipAngle`, the unique `nTE x nT2` 2D basis matrix is returned.
 
 See also:
@@ -99,7 +98,7 @@ See also:
     Silent::Bool = false
 end
 T2mapOptions(args...; kwargs...) = T2mapOptions{Float64}(args...; kwargs...)
-T2mapOptions(image::Array{T,4}; kwargs...) where {T} = T2mapOptions{T}(;MatrixSize = size(image)[1:3], nTE = size(image)[4], kwargs...)
+T2mapOptions(image::Array{T,4}; kwargs...) where {T} = T2mapOptions{T}(;kwargs..., MatrixSize = size(image)[1:3], nTE = size(image)[4])
 
 function _show_string(o::T2mapOptions)
     io = IOBuffer()
@@ -125,10 +124,10 @@ This struct collects keyword arguments passed to `T2partSEcorr`, performs checks
 # Arguments
 - `MatrixSize`: size of first 3 dimensions of input 4D T2 distribution. This argument is has no default, but is inferred automatically as `size(T2distribution)[1:3]` when calling `T2partSEcorr(T2distribution; kwargs...)`
 - `nT2`:        number of T2 values in distribution. This argument is has no default, but is inferred automatically as `size(T2distribution, 4)` when calling `T2partSEcorr(T2distribution; kwargs...)`
-- `T2Range`:    min and max T2 values of distribution (Default: `(10e-3, 2.0)`, Units: seconds)
-- `SPWin`:      min and max T2 values of the short peak window (Default: `(10e-3, 25e-3)`, Units: seconds)
-- `MPWin`:      min and max T2 values of the middle peak window (Default: `(25e-3, 200e-3)`, Units: seconds)
-- `Sigmoid`:    apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small pool window cutoff time.
+- `T2Range`:    tuple of min and max T2 values of distribution. This argument has no default (Units: seconds)
+- `SPWin`:      tuple of min and max T2 values of the short peak window. This argument has no default (Units: seconds)
+- `MPWin`:      tuple of min and max T2 values of the middle peak window. This argument has no default (Units: seconds)
+- `Sigmoid`:    apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small peak window cutoff time.
                 `Sigmoid` is the delta-T2 parameter, which is the distance in seconds on either side of the `SPWin` upper limit where the sigmoid curve reaches 10% and 90% (Default: `nothing`, Units: seconds)
 - `Silent`:     suppress printing to the console (Default: `false`)
 
@@ -142,7 +141,7 @@ See also:
     @assert all(MatrixSize .>= 1)
 
     nT2::Int
-    @assert nT2 > 1
+    @assert nT2 >= 2
 
     T2Range::NTuple{2,T} # seconds
     @assert 0.0 < T2Range[1] < T2Range[2]
@@ -159,7 +158,7 @@ See also:
     Silent::Bool = false
 end
 T2partOptions(args...; kwargs...) = T2partOptions{Float64}(args...; kwargs...)
-T2partOptions(image::Array{T,4}; kwargs...) where {T} = T2partOptions{T}(;MatrixSize = size(image)[1:3], nT2 = size(image)[4], kwargs...)
+T2partOptions(image::Array{T,4}; kwargs...) where {T} = T2partOptions{T}(;kwargs..., MatrixSize = size(image)[1:3], nT2 = size(image)[4])
 
 function _show_string(o::T2partOptions)
     io = IOBuffer()

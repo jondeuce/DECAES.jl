@@ -450,7 +450,7 @@ function nnls!(
             if iter > max_iter
                 work.mode = 3
                 terminated = true
-                println("NNLS quitting on iteration count")
+                # println("NNLS quitting on iteration count")
                 break
             end
 
