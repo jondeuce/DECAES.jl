@@ -144,13 +144,13 @@ $ julia decaes.jl image.nii --T2map --T2part --TE 10e-3 --nT2 40 --T2Range 10e-3
 └     Threshold        : 0.0
 [ Info: [  0%] -- Elapsed Time: 00h:00m:00s -- Estimated Time Remaining: --h:--m:--s
 [ Info: [100%] -- Elapsed Time: 00h:00m:06s -- Estimated Time Remaining: 00h:00m:00s
-[ Info: Done (6.63 seconds)
+[ Info: Done (6.91 seconds)
 
 [ Info: Saving T2 distribution to file: image.t2dist.mat ...
-[ Info: Done (0.38 seconds)
+[ Info: Done (0.46 seconds)
 
 [ Info: Saving T2 parameter maps to file: image.t2maps.mat ...
-[ Info: Done (0.15 seconds)
+[ Info: Done (0.18 seconds)
 
 [ Info: Running T2partSEcorr ...
 ┌ Info: T2-part analysis settings:
@@ -162,12 +162,12 @@ $ julia decaes.jl image.nii --T2map --T2part --TE 10e-3 --nT2 40 --T2Range 10e-3
 │     Silent     : false
 │     SPWin      : (0.01, 0.04)
 └     T2Range    : (0.01, 2.0)
-[ Info: Done (0.06 seconds)
+[ Info: Done (0.07 seconds)
 
 [ Info: Saving T2 parts maps to file: image.t2parts.mat ...
 [ Info: Done (0.0 seconds)
 
-[ Info: Finished (7.39 seconds)</code></pre><h3 id="settingsfiles-1"><a class="docs-heading-anchor" href="#settingsfiles-1">Settings files</a><a class="docs-heading-anchor-permalink" href="#settingsfiles-1" title="Permalink"></a></h3><p>As there are several required parameters, it is convenient to store settings for DECAES in a settings file. Using the same options from the <a href="#defaultoptions-1">previous section</a>, we create a file <code>settings.txt</code> with the following contents:</p><pre><code class="language-none">/path/to/image.nii
+[ Info: Finished (7.78 seconds)</code></pre><h3 id="settingsfiles-1"><a class="docs-heading-anchor" href="#settingsfiles-1">Settings files</a><a class="docs-heading-anchor-permalink" href="#settingsfiles-1" title="Permalink"></a></h3><p>As there are several required parameters, it is convenient to store settings for DECAES in a settings file. Using the same options from the <a href="#defaultoptions-1">previous section</a>, we create a file <code>settings.txt</code> with the following contents:</p><pre><code class="language-none">/path/to/image.nii
 --T2map
 --T2part
 --TE
@@ -303,4 +303,4 @@ BET arguments:
                         the binary mask and will be added to the list
                         of arguments if not provided. (default: &quot;-m -n
                         -f 0.25 -R&quot;)
-  --betpath BETPATH     path to BET executable. (default: &quot;bet&quot;)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../ref/">API Reference »</a></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> on <span class="colophon-date" title="Wednesday 1 July 2020 22:49">Wednesday 1 July 2020</span>. Using Julia version 1.3.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+  --betpath BETPATH     path to BET executable. (default: &quot;bet&quot;)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../ref/">API Reference »</a></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> on <span class="colophon-date" title="Thursday 2 July 2020 20:24">Thursday 2 July 2020</span>. Using Julia version 1.3.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
