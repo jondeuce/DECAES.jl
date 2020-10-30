@@ -81,11 +81,11 @@ end
 struct EPGWork_Vec{T, ETL, MzType<:AbstractVector{Vec{2,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
     Mz::MzType
     decay_curve::DCType
-    function EPGWork_Vec(T, ETL::Int)
-        Mz = SizedVector{3*ETL,Vec{2,T}}(zeros(Vec{2,T}, 3*ETL))
-        dc = SizedVector{ETL,T}(zeros(T, ETL))
-        new{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
-    end
+end
+function EPGWork_Vec(T, ETL::Int)
+    Mz = SizedVector{3*ETL,Vec{2,T}}(zeros(Vec{2,T}, 3*ETL))
+    dc = SizedVector{ETL,T}(zeros(T, ETL))
+    EPGWork_Vec{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
 end
 
 @inline function epg_setup!(decay_curve::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, o::EPGOptions{T,ETL}) where {T,ETL}
@@ -187,21 +187,21 @@ end
 struct EPGWork_Cplx{T, ETL, MzType<:AbstractVector{Complex{T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
     Mz::MzType
     decay_curve::DCType
-    function EPGWork_Cplx(T, ETL::Int)
-        Mz = SizedVector{3*ETL,Complex{T}}(zeros(Complex{T}, 3*ETL))
-        dc = SizedVector{ETL,T}(zeros(T, ETL))
-        new{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
-    end
+end
+function EPGWork_Cplx(T, ETL::Int)
+    Mz = SizedVector{3*ETL,Complex{T}}(zeros(Complex{T}, 3*ETL))
+    dc = SizedVector{ETL,T}(zeros(T, ETL))
+    EPGWork_Cplx{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
 end
 
 struct EPGWork_Cplx_Vec_Unrolled{T, ETL, MzType<:AbstractVector{Complex{T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
     Mz::MzType
     decay_curve::DCType
-    function EPGWork_Cplx_Vec_Unrolled(T, ETL::Int)
-        Mz = SizedVector{3*ETL,Complex{T}}(zeros(Complex{T}, 3*ETL))
-        dc = SizedVector{ETL,T}(zeros(T, ETL))
-        new{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
-    end
+end
+function EPGWork_Cplx_Vec_Unrolled(T, ETL::Int)
+    Mz = SizedVector{3*ETL,Complex{T}}(zeros(Complex{T}, 3*ETL))
+    dc = SizedVector{ETL,T}(zeros(T, ETL))
+    EPGWork_Cplx_Vec_Unrolled{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
 end
 
 @inline function epg_setup!(
