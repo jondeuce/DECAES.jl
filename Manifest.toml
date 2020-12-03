@@ -372,9 +372,9 @@ version = "1.1.1"
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 
 [[SIMD]]
-git-tree-sha1 = "2694eedbde889114dd82d7e2e7d4ef06545fffc7"
+git-tree-sha1 = "b2202f63f62d8c1214ed16c18319f72fa74adc4d"
 uuid = "fdea26ae-647d-5447-a871-4b548cad5224"
-version = "3.1.0"
+version = "3.2.1"
 
 [[Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
