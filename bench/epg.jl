@@ -14,6 +14,7 @@ const epg_algs = [
     DECAES.EPGWork_Vec,
     DECAES.EPGWork_Cplx,
     DECAES.EPGWork_Cplx_Vec_Unrolled,
+    DECAES.EPGWork_Fused_Cplx,
 ]
 
 for ETL in [32,48,64]
@@ -38,6 +39,7 @@ end  # module
 # Tune and run benchmarks
 tune!(BenchEPG.suite)
 results = run(BenchEPG.suite; verbose = true, seconds = 1)
+map(((name,res),) -> (@info(name); display(res)), leaves(results))
 display(results)
 
 # Display results

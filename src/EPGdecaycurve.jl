@@ -63,29 +63,16 @@ struct EPGWork_Basic_Cplx{T, ETL, MzType <: AbstractVector{SVector{3,Complex{T}}
     decay_curve::DCType
 end
 function EPGWork_Basic_Cplx(T, ETL::Int)
-    Mz = SizedVector{ETL,SVector{3,Complex{T}}}(zeros(SVector{3,Complex{T}}, ETL))
-    dc = SizedVector{ETL,T}(zeros(T, ETL))
+    Mz = SizedVector{ETL,SVector{3,Complex{T}}}(fill(SA{Complex{T}}[1,1,1], ETL))
+    dc = SizedVector{ETL,T}(ones(T, ETL))
     EPGWork_Basic_Cplx{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
 end
 
-# Computing the action of the transition matrix that describes the effect of the refocusing pulse
-# on the magnetization phase state vector, as given by Hennig (1988), but corrected by Jones (1997):
-# 
-#   for each complex magnetization vector M
-#       M <-- T2mat * M
-#   end for
-# 
-# where T2mat is complex flip matrix from `element_flipmat`
-
-# Basic loop: load in complex SVector, do multiplication, assign to Mz
-# @inbounds @simd for j in 1:3:3*nStates-2
-#     m = SVector{3,Complex{T}}((Mz[j], Mz[j+1], Mz[j+2]))
-#     m = T2mat * m
-#     Mz[j], Mz[j+1], Mz[j+2] = m
-# end
-
-# Computes the action of the relaxation matrix that describes the time evolution of the
-# magnetization phase state vector after each refocusing pulse as described by Hennig (1988)
+# Compute a basis function under the extended phase graph algorithm. The magnetization phase state vector (MPSV) is
+# successively modified by applying relaxation for TE/2, then a refocusing pulse as described by Hennig (1988),
+# then transitioning phase states as given by Hennig (1988) but corrected by Jones (1997), and a finally relaxing for TE/2.
+# See the appendix in Prasloski (2012) for details:
+#    https://doi.org/10.1002/mrm.23157
 
 function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Basic_Cplx{T,ETL}, o::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
@@ -128,26 +115,90 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Basic_Cp
 end
 
 ####
+#### EPGWork_Fused_Cplx
+####
+
+struct EPGWork_Fused_Cplx{T, ETL, MzType <: AbstractVector{SVector{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+    Mz::MzType
+    decay_curve::DCType
+end
+function EPGWork_Fused_Cplx(T, ETL::Int)
+    Mz = SizedVector{ETL,SVector{3,T}}(fill(SA{T}[1,1,1], ETL))
+    dc = SizedVector{ETL,T}(ones(T, ETL))
+    EPGWork_Fused_Cplx{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
+end
+
+function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Fused_Cplx{T,ETL}, o::EPGOptions{T,ETL}) where {T,ETL}
+    # Unpack workspace
+    @unpack Mz = work
+    @unpack flip_angle, TE, T2, T1, refcon = o
+    αₑₓ, α₁, αₘ = flip_angle/2, flip_angle, flip_angle * refcon / 180
+
+    # Precompute compute element flip matrices and other intermediate variables
+    E1, E2 = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
+    a₁, b₁, c₁, d₁, e₁ = E2^2*(1+cosd(α₁))/2, E2^2*(1-cosd(α₁))/2, E1*E2*sind(α₁), E1*E2*sind(α₁)/2, E1^2*cosd(α₁)
+    aₘ, bₘ, cₘ, dₘ, eₘ = E2^2*(1+cosd(αₘ))/2, E2^2*(1-cosd(αₘ))/2, E1*E2*sind(αₘ), E1*E2*sind(αₘ)/2, E1^2*cosd(αₘ)
+
+    # Initialize magnetization phase state vector (MPSV), pulling j=1 iteration out of loop
+    @inbounds begin
+        m₀ = sind(αₑₓ)
+        Mnew = SA{T}[b₁*m₀, 0, -d₁*m₀]
+        decay_curve[1] = abs(Mnew[1])
+
+        Mz[1] = Mnew
+        Mz[2] = SA{T}[a₁*m₀, 0, 0]
+        Mz[3] = SA{T}[0, 0, 0]
+    end
+
+    @inbounds for j in 2:ETL-1
+        # i = 1
+        Mcurr, Mnext = Mz[1], Mz[2]
+        Mnew = SA{T}[bₘ*Mcurr[1] + aₘ*Mcurr[2] - cₘ*Mcurr[3],
+                     bₘ*Mnext[1] + aₘ*Mnext[2] - cₘ*Mnext[3],
+                    -dₘ*Mcurr[1] + dₘ*Mcurr[2] + eₘ*Mcurr[3]]
+        Mz[1] = Mnew
+        decay_curve[j] = abs(Mnew[1])
+
+        # 2 <= i <= j
+        @simd for i in 2:j
+            Mprev, Mcurr, Mnext = Mcurr, Mnext, Mz[i+1]
+            Mz[i] = SA{T}[aₘ*Mprev[1] + bₘ*Mprev[2] + cₘ*Mprev[3],
+                          bₘ*Mnext[1] + aₘ*Mnext[2] - cₘ*Mnext[3],
+                         -dₘ*Mcurr[1] + dₘ*Mcurr[2] + eₘ*Mcurr[3]]
+        end
+
+        # i = j+1
+        Mprev = Mcurr
+        Mz[j+1] = SA{T}[aₘ*Mprev[1] + bₘ*Mprev[2] + cₘ*Mprev[3], 0, 0]
+        if j+1 < ETL
+            Mz[j+2] = SA{T}[0, 0, 0]
+        end
+    end
+
+    @inbounds begin
+        Mcurr = Mz[1]
+        Mxnew = bₘ*Mcurr[1] + aₘ*Mcurr[2] - cₘ*Mcurr[3]
+        decay_curve[ETL] = abs(Mxnew)
+    end
+
+    return decay_curve
+end
+
+####
 #### EPGWork_Vec
 ####
 
-# Optimized version which combines flip matrix and
-# relaxation matrix functions into one loop.
-# Combining these loops and using explicit SIMD.jl `Vec`
-# vector types instead of `Complex` decreases execution time
-# by a factor of ~2.
-# As this function is called many times during T2mapSEcorr,
-# the micro-optimizations are worth the loss of code readability.
-# See the `EPGWork_Cplx` section below for a more readable
-# implementation which produces exactly the same result.
+# Flip matrix and relaxation matrix steps are combined into one loop, and SIMD.jl `Vec` types are used instead of `Complex`.
+# As this function is called many times during T2mapSEcorr, the micro-optimizations are worth the loss of code readability.
+# See `EPGWork_Basic_Cplx` for a more readable, mathematically identicaly implementation.
 
 struct EPGWork_Vec{T, ETL, MzType <: AbstractVector{Vec{2,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
     Mz::MzType
     decay_curve::DCType
 end
 function EPGWork_Vec(T, ETL::Int)
-    Mz = SizedVector{3*ETL,Vec{2,T}}(zeros(Vec{2,T}, 3*ETL))
-    dc = SizedVector{ETL,T}(zeros(T, ETL))
+    Mz = SizedVector{3*ETL,Vec{2,T}}(fill(Vec{2,T}((1,1)), 3*ETL))
+    dc = SizedVector{ETL,T}(ones(T, ETL))
     EPGWork_Vec{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
 end
 
@@ -243,8 +294,8 @@ struct EPGWork_Cplx{T, ETL, MzType <: AbstractVector{Complex{T}}, DCType <: Abst
     decay_curve::DCType
 end
 function EPGWork_Cplx(T, ETL::Int)
-    Mz = SizedVector{3*ETL,Complex{T}}(zeros(Complex{T}, 3*ETL))
-    dc = SizedVector{ETL,T}(zeros(T, ETL))
+    Mz = SizedVector{3*ETL,Complex{T}}(ones(Complex{T}, 3*ETL))
+    dc = SizedVector{ETL,T}(ones(T, ETL))
     EPGWork_Cplx{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
 end
 
@@ -258,11 +309,11 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Cplx{T,E
     T1mat = element_flipmat(flip_angle)
     T2mat = element_flipmat(flip_angle * (refcon/180))
     @inbounds T2mat_elements = ( # independent elements of T2mat
-       -imag(T2mat[1,3]), # sin(α)
-        real(T2mat[3,3]), # cos(α)
-        real(T2mat[2,1]), # sin(α/2)^2
-        real(T2mat[1,1]), # cos(α/2)^2
-       -imag(T2mat[3,1]), # sin(α)/2
+       -imag(T2mat[1,3]), # sind(α)
+        real(T2mat[3,3]), # cosd(α)
+        real(T2mat[2,1]), # sind(α/2)^2
+        real(T2mat[1,1]), # cosd(α/2)^2
+       -imag(T2mat[3,1]), # sind(α)/2
     )
 
     # Initialize magnetization phase state vector (MPSV)
@@ -333,8 +384,8 @@ struct EPGWork_Cplx_Vec_Unrolled{T, ETL, MzType <: AbstractVector{Complex{T}}, D
     decay_curve::DCType
 end
 function EPGWork_Cplx_Vec_Unrolled(T, ETL::Int)
-    Mz = SizedVector{3*ETL,Complex{T}}(zeros(Complex{T}, 3*ETL))
-    dc = SizedVector{ETL,T}(zeros(T, ETL))
+    Mz = SizedVector{3*ETL,Complex{T}}(ones(Complex{T}, 3*ETL))
+    dc = SizedVector{ETL,T}(ones(T, ETL))
     EPGWork_Cplx_Vec_Unrolled{T,ETL,typeof(Mz),typeof(dc)}(Mz, dc)
 end
 
@@ -348,11 +399,11 @@ end
     T1mat = element_flipmat(flip_angle)
     T2mat = element_flipmat(flip_angle * (refcon/180))
     @inbounds T2mat_elements = ( # independent elements of T2mat
-       -imag(T2mat[1,3]), # sin(α)
-        real(T2mat[3,3]), # cos(α)
-        real(T2mat[2,1]), # sin(α/2)^2
-        real(T2mat[1,1]), # cos(α/2)^2
-       -imag(T2mat[3,1]), # sin(α)/2
+       -imag(T2mat[1,3]), # sind(α)
+        real(T2mat[3,3]), # cosd(α)
+        real(T2mat[2,1]), # sind(α/2)^2
+        real(T2mat[1,1]), # cosd(α/2)^2
+       -imag(T2mat[3,1]), # sind(α)/2
     )
 
     # Initialize magnetization phase state vector (MPSV)

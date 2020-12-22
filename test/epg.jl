@@ -8,6 +8,7 @@ using Logging
         DECAES.EPGWork_Vec,
         DECAES.EPGWork_Cplx,
         DECAES.EPGWork_Cplx_Vec_Unrolled,
+        DECAES.EPGWork_Fused_Cplx,
     ]
     for ((i, algᵢ), (j, algⱼ)) in Iterators.product(enumerate(epg_algs), enumerate(epg_algs))
         for T in (Float32, Float64)
