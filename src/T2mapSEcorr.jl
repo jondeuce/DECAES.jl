@@ -176,7 +176,7 @@ function voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, o
     end
 
     # Extract decay curve from the voxel
-    @inbounds for j in 1:opts.nTE
+    @inbounds @simd for j in 1:opts.nTE
         thread_buffer.decay_data[j] = image[I,j]
     end
 
@@ -357,7 +357,7 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
     end
 
     # Save distribution
-    @inbounds for j in 1:o.nT2
+    @inbounds @simd for j in 1:o.nT2
         distributions[I,j] = T2_dist[j]
     end
 
@@ -376,7 +376,7 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
     # Optionally save signal decay curve from fit
     if o.SaveDecayCurve
         @unpack decaycurve = maps
-        @inbounds for j in 1:o.nTE
+        @inbounds @simd for j in 1:o.nTE
             decaycurve[I,j] = decay_calc[j]
         end
     end
@@ -384,7 +384,7 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
     # Optionally save NNLS basis
     if o.SaveNNLSBasis && isnothing(o.SetFlipAngle)
         @unpack decaybasis = maps
-        @inbounds for J in CartesianIndices((o.nTE, o.nT2))
+        @inbounds @simd for J in CartesianIndices((o.nTE, o.nT2))
             decaybasis[I,J] = decay_basis[J]
         end
     end
