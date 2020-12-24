@@ -94,18 +94,24 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Basic_Cp
     @inbounds MPSV[1] = V[sind(αₑₓ), 0, 0] # initial magnetization in F1 state
 
     @inbounds for i in 1:ETL
+        # Relaxation for TE/2, followed by flip matrix
         R = i == 1 ? R₁ : Rⱼ
-        jend = min(i+1, ETL)
-        for j in 1:jend
-            MPSV[j] = R * (E .* MPSV[j]) # Relaxation for TE/2 and apply flip matrix
+        for j in 1:ETL
+            MPSV[j] = R * (E .* MPSV[j])
         end
-        Mlast = MPSV[1]
-        MPSV[1] = V[MPSV[1][2], MPSV[2][2], MPSV[1][3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
-        for j in 2:i
-            Mlast, MPSV[j] = MPSV[j], V[Mlast[1], MPSV[j+1][2], MPSV[j][3]] # (Fⱼ, Fⱼ*, Zⱼ)⁺ = (Fⱼ₋₁, Fⱼ₊₁*, Zⱼ)
+
+        # Transition between phase states
+        Mⱼ, Mⱼ₊₁ = MPSV[1], MPSV[2]
+        MPSV[1] = V[Mⱼ[2], Mⱼ₊₁[2], Mⱼ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
+        for j in 2:ETL-1
+            Mⱼ₋₁, Mⱼ, Mⱼ₊₁ = Mⱼ, Mⱼ₊₁, MPSV[j+1]
+            MPSV[j] = V[Mⱼ₋₁[1], Mⱼ₊₁[2], Mⱼ[3]] # (Fⱼ, Fⱼ*, Zⱼ)⁺ = (Fⱼ₋₁, Fⱼ₊₁*, Zⱼ)
         end
-        MPSV[jend] = V[Mlast[1], 0, MPSV[jend][3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
-        for j in 1:jend
+        Mⱼ₋₁, Mⱼ = Mⱼ, Mⱼ₊₁
+        MPSV[ETL] = V[Mⱼ₋₁[1], 0, Mⱼ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
+
+        # Relaxation for TE/2
+        for j in 1:ETL
             MPSV[j] = E .* MPSV[j] # Relaxation for TE/2
         end
         decay_curve[i] = abs(MPSV[1][1]) # first echo amplitude
