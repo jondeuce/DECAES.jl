@@ -78,14 +78,14 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Basic_Cp
     # Unpack workspace
     @unpack MPSV = work
     @unpack flip_angle, TE, T2, T1, refcon = o
-    αₑₓ, α₁, αⱼ = flip_angle/2, flip_angle, flip_angle * refcon / 180
+    αₑₓ, α₁, αᵢ = flip_angle/2, flip_angle, flip_angle * refcon / 180
     V = SA{Complex{T}} # alias
 
     # Precompute compute element flip matrices and other intermediate variables
     E1, E2 = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
     E  = SA{T}[E2, E2, E1]
     R₁ = element_flipmat(α₁)
-    Rⱼ = element_flipmat(αⱼ)
+    Rᵢ = element_flipmat(αᵢ)
 
     # Initialize magnetization phase state vector (MPSV)
     @inbounds for j in 1:ETL
@@ -95,20 +95,20 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Basic_Cp
 
     @inbounds for i in 1:ETL
         # Relaxation for TE/2, followed by flip matrix
-        R = i == 1 ? R₁ : Rⱼ
+        R = i == 1 ? R₁ : Rᵢ
         for j in 1:ETL
             MPSV[j] = R * (E .* MPSV[j])
         end
 
         # Transition between phase states
-        Mⱼ, Mⱼ₊₁ = MPSV[1], MPSV[2]
-        MPSV[1] = V[Mⱼ[2], Mⱼ₊₁[2], Mⱼ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
+        Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
+        MPSV[1] = V[Mᵢ[2], Mᵢ₊₁[2], Mᵢ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
         for j in 2:ETL-1
-            Mⱼ₋₁, Mⱼ, Mⱼ₊₁ = Mⱼ, Mⱼ₊₁, MPSV[j+1]
-            MPSV[j] = V[Mⱼ₋₁[1], Mⱼ₊₁[2], Mⱼ[3]] # (Fⱼ, Fⱼ*, Zⱼ)⁺ = (Fⱼ₋₁, Fⱼ₊₁*, Zⱼ)
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
+            MPSV[j] = V[Mᵢ₋₁[1], Mᵢ₊₁[2], Mᵢ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
         end
-        Mⱼ₋₁, Mⱼ = Mⱼ, Mⱼ₊₁
-        MPSV[ETL] = V[Mⱼ₋₁[1], 0, Mⱼ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
+        Mᵢ₋₁, Mᵢ = Mᵢ, Mᵢ₊₁
+        MPSV[ETL] = V[Mᵢ₋₁[1], 0, Mᵢ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
 
         # Relaxation for TE/2
         for j in 1:ETL
@@ -139,7 +139,7 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm{T,E
     @unpack MPSV = work
     @unpack flip_angle, TE, T2, T1, refcon = o
     α = deg2rad(flip_angle)
-    α₁, αⱼ = α, α*refcon/180
+    α₁, αᵢ = α, α*refcon/180
 
     # Precompute intermediate variables
     V = SA{T} # alias
@@ -147,41 +147,41 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm{T,E
     sin½α₁, cos½α₁ = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2*sin½α₁*cos½α₁
-    sinαⱼ, cosαⱼ = sincos(αⱼ)
-    cos²½αⱼ = (1+cosαⱼ)/2
-    sin²½αⱼ = 1-cos²½αⱼ
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1+cosαᵢ)/2
+    sin²½αᵢ = 1-cos²½αᵢ
     a₁, b₁, c₁     = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
-    aⱼ, bⱼ, cⱼ, dⱼ = E₂^2*cos²½αⱼ, E₂^2*sin²½αⱼ, E₁*E₂*sinαⱼ, E₁^2*cosαⱼ
-    F, F̄, Z = V[aⱼ, bⱼ, cⱼ], V[bⱼ, aⱼ, -cⱼ], V[-cⱼ/2, cⱼ/2, dⱼ]
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁
-        Mⱼ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
-        decay_curve[1] = abs(Mⱼ⁺[1])
-        MPSV[1] = Mⱼ⁺
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        decay_curve[1] = abs(Mᵢ⁺[1])
+        MPSV[1] = Mᵢ⁺
         MPSV[2] = V[a₁*m₀, 0, 0]
         MPSV[3] = V[0, 0, 0]
     end
 
     @inbounds for i in 2:ETL-1
         # j = 1, initialize and update `decay_curve`
-        Mⱼ, Mⱼ₊₁ = MPSV[1], MPSV[2]
-        Mⱼ⁺ = V[F̄⋅Mⱼ, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
-        decay_curve[i] = abs(Mⱼ⁺[1])
-        MPSV[1] = Mⱼ⁺
+        Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        decay_curve[i] = abs(Mᵢ⁺[1])
+        MPSV[1] = Mᵢ⁺
 
         # inner loop
         jup = min(i, ETL-i)
         @simd for j in 2:jup
-            Mⱼ₋₁, Mⱼ, Mⱼ₊₁ = Mⱼ, Mⱼ₊₁, MPSV[j+1]
-            MPSV[j] = V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
+            MPSV[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
 
         # cleanup for next iteration
         if i == jup
-            Mⱼ₋₁ = Mⱼ
-            MPSV[i+1] = V[F⋅Mⱼ₋₁, 0, 0]
+            Mᵢ₋₁ = Mᵢ
+            MPSV[i+1] = V[F⋅Mᵢ₋₁, 0, 0]
             MPSV[i+2] = V[0, 0, 0]
         end
     end
@@ -212,7 +212,7 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
     @unpack MPSV₁, MPSV₂ = work
     @unpack flip_angle, TE, T2, T1, refcon = o
     α = deg2rad(flip_angle)
-    α₁, αⱼ = α, α*refcon/180
+    α₁, αᵢ = α, α*refcon/180
 
     # Precompute intermediate variables
     V = SA{T} # alias
@@ -220,19 +220,19 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
     sin½α₁, cos½α₁ = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2*sin½α₁*cos½α₁
-    sinαⱼ, cosαⱼ = sincos(αⱼ)
-    cos²½αⱼ = (1+cosαⱼ)/2
-    sin²½αⱼ = 1-cos²½αⱼ
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1 + cosαᵢ)/2
+    sin²½αᵢ = 1-cos²½αᵢ
     a₁, b₁, c₁     = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
-    aⱼ, bⱼ, cⱼ, dⱼ = E₂^2*cos²½αⱼ, E₂^2*sin²½αⱼ, E₁*E₂*sinαⱼ, E₁^2*cosαⱼ
-    F, F̄, Z = V[aⱼ, bⱼ, cⱼ], V[bⱼ, aⱼ, -cⱼ], V[-cⱼ/2, cⱼ/2, dⱼ]
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁
-        Mⱼ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
-        decay_curve[1] = abs(Mⱼ⁺[1])
-        MPSV₁[1] = Mⱼ⁺
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        decay_curve[1] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
         MPSV₁[2] = V[a₁*m₀, 0, 0]
         MPSV₁[3] = V[0, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
@@ -240,22 +240,22 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
 
     @inbounds for i in 2:ETL-1
         # j = 1, initialize and update `decay_curve`
-        Mⱼ, Mⱼ₊₁ = MPSV₂[1], MPSV₂[2]
-        Mⱼ⁺ = V[F̄⋅Mⱼ, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
-        decay_curve[i] = abs(Mⱼ⁺[1])
-        MPSV₁[1] = Mⱼ⁺
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2]
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        decay_curve[i] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
 
         # inner loop
         jup = min(i, ETL-i)
         @simd for j in 2:jup
-            Mⱼ₋₁, Mⱼ, Mⱼ₊₁ = Mⱼ, Mⱼ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
 
         # cleanup for next iteration
         if i == jup
-            Mⱼ₋₁ = Mⱼ
-            MPSV₁[i+1] = V[F⋅Mⱼ₋₁, 0, 0]
+            Mᵢ₋₁ = Mᵢ
+            MPSV₁[i+1] = V[F⋅Mᵢ₋₁, 0, 0]
             MPSV₁[i+2] = V[0, 0, 0]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
@@ -287,7 +287,7 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
     @unpack MPSV₁, MPSV₂ = work
     @unpack flip_angle, TE, T2, T1, refcon = o
     α = deg2rad(flip_angle)
-    α₁, αⱼ = α, α*refcon/180
+    α₁, αᵢ = α, α*refcon/180
 
     # Precompute intermediate variables
     V = SA{T} # alias
@@ -295,45 +295,45 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
     sin½α₁, cos½α₁ = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2*sin½α₁*cos½α₁
-    sinαⱼ, cosαⱼ = sincos(αⱼ)
-    cos²½αⱼ = (1+cosαⱼ)/2
-    sin²½αⱼ = 1-cos²½αⱼ
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1+cosαᵢ)/2
+    sin²½αᵢ = 1-cos²½αᵢ
     a₁, b₁, c₁     = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
-    aⱼ, bⱼ, cⱼ, dⱼ = E₂^2*cos²½αⱼ, E₂^2*sin²½αⱼ, E₁*E₂*sinαⱼ, E₁^2*cosαⱼ
-    F, F̄, Z = V[aⱼ, bⱼ, cⱼ], V[bⱼ, aⱼ, -cⱼ], V[-cⱼ/2, cⱼ/2, dⱼ]
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁
-        Mⱼ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
-        decay_curve[1] = abs(Mⱼ⁺[1])
-        MPSV₁[1] = Mⱼ⁺
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        decay_curve[1] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
         MPSV₁[2] = V[a₁*m₀, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in 2:ETL÷2
-        Mⱼ, Mⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `decay_curve`
-        Mⱼ⁺ = V[F̄⋅Mⱼ, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
-        decay_curve[i] = abs(Mⱼ⁺[1])
-        MPSV₁[1] = Mⱼ⁺
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `decay_curve`
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        decay_curve[i] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:i-1
-            Mⱼ₋₁, Mⱼ, Mⱼ₊₁ = Mⱼ, Mⱼ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
-        MPSV₁[i]   = V[F⋅Mⱼ, 0, Z⋅Mⱼ₊₁] # j = i
-        MPSV₁[i+1] = V[F⋅Mⱼ₊₁, 0, 0] # j = i + 1
+        MPSV₁[i]   = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁] # j = i
+        MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0] # j = i + 1
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in ETL÷2+1:ETL-1
-        Mⱼ, Mⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `decay_curve`
-        Mⱼ⁺ = V[F̄⋅Mⱼ, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
-        decay_curve[i] = abs(Mⱼ⁺[1])
-        MPSV₁[1] = Mⱼ⁺
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `decay_curve`
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        decay_curve[i] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:ETL-i
-            Mⱼ₋₁, Mⱼ, Mⱼ₊₁ = Mⱼ, Mⱼ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
@@ -341,23 +341,23 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
     #= Cleaner, but slightly slower
     @inbounds for i in 2:ETL-1
         # j = 1, initialize and update `decay_curve`
-        Mⱼ, Mⱼ₊₁ = MPSV₂[1], MPSV₂[2]
-        Mⱼ⁺ = V[F̄⋅Mⱼ, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
-        decay_curve[i] = abs(Mⱼ⁺[1])
-        MPSV₁[1] = Mⱼ⁺
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2]
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        decay_curve[i] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
         if i <= ETL÷2
             # inner loop
             @simd for j in 2:i-1
-                Mⱼ₋₁, Mⱼ, Mⱼ₊₁ = Mⱼ, Mⱼ₊₁, MPSV₂[j+1]
-                MPSV₁[j] = V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
+                Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+                MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
             end
-            MPSV₁[i]   = V[F⋅Mⱼ, 0, Z⋅Mⱼ₊₁] # j = i
-            MPSV₁[i+1] = V[F⋅Mⱼ₊₁, 0, 0] # j = i + 1
+            MPSV₁[i]   = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁] # j = i
+            MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0] # j = i + 1
         else
             # inner loop
             @simd for j in 2:ETL-i
-                Mⱼ₋₁, Mⱼ, Mⱼ₊₁ = Mⱼ, Mⱼ₊₁, MPSV₂[j+1]
-                MPSV₁[j] = V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
+                Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+                MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
             end
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
@@ -390,7 +390,7 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
     @unpack MPSV₁, MPSV₂ = work
     @unpack flip_angle, TE, T2, T1, refcon = o
     α = deg2rad(flip_angle)
-    α₁, αⱼ = α, α*refcon/180
+    α₁, αᵢ = α, α*refcon/180
 
     # Precompute intermediate variables
     V = SA{T} # alias
@@ -398,21 +398,21 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
     sin½α₁, cos½α₁ = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2*sin½α₁*cos½α₁
-    sinαⱼ, cosαⱼ = sincos(αⱼ)
-    cos²½αⱼ = (1+cosαⱼ)/2
-    sin²½αⱼ = 1-cos²½αⱼ
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1+cosαᵢ)/2
+    sin²½αᵢ = 1-cos²½αᵢ
     a₁, b₁, c₁     = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
-    aⱼ, bⱼ, cⱼ, dⱼ = E₂^2*cos²½αⱼ, E₂^2*sin²½αⱼ, E₁*E₂*sinαⱼ, E₁^2*cosαⱼ
-    F, F̄, Z = V[aⱼ, bⱼ, cⱼ], V[bⱼ, aⱼ, -cⱼ], V[-cⱼ/2, cⱼ/2, dⱼ]
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁
         M₁  = V[b₁*m₀, 0, -c₁*m₀/2]
         M₂  = V[a₁*m₀, 0, 0]
-        M₁⁺ = V[F̄⋅M₁, F̄⋅M₂, Z⋅M₁] # V[F̄⋅Mⱼ,   F̄⋅Mⱼ₊₁, Z⋅Mⱼ], j=1
-        M₂⁺ = V[F⋅M₁, 0, Z⋅M₂]    # V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ], j=2, M₃ = 0
-        M₃⁺ = V[F⋅M₂, 0, 0]       # V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ], j=3, M₃ = M₄ = 0
+        M₁⁺ = V[F̄⋅M₁, F̄⋅M₂, Z⋅M₁] # V[F̄⋅Mᵢ,   F̄⋅Mᵢ₊₁, Z⋅Mᵢ], j=1
+        M₂⁺ = V[F⋅M₁, 0, Z⋅M₂]    # V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ], j=2, M₃ = 0
+        M₃⁺ = V[F⋅M₂, 0, 0]       # V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ], j=3, M₃ = M₄ = 0
 
         decay_curve[1] = abs(M₁[1])
         decay_curve[2] = abs(M₁⁺[1])
@@ -426,37 +426,37 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
 
     @inbounds for i in 3:ETL-1
         # j = 1, j = 2, and update `decay_curve`
-        Mⱼ, Mⱼ₊₁, Mⱼ₊₂ = MPSV₂[1], MPSV₂[2], MPSV₂[3]
-        Mⱼ⁺   = V[F̄⋅Mⱼ, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
-        Mⱼ₊₁⁺ = V[F⋅Mⱼ, F̄⋅Mⱼ₊₂, Z⋅Mⱼ₊₁]
-        decay_curve[i] = abs(Mⱼ⁺[1])
-        MPSV₁[1] = Mⱼ⁺
-        MPSV₁[2] = Mⱼ₊₁⁺
+        Mᵢ, Mᵢ₊₁, Mᵢ₊₂ = MPSV₂[1], MPSV₂[2], MPSV₂[3]
+        Mᵢ⁺   = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        Mᵢ₊₁⁺ = V[F⋅Mᵢ, F̄⋅Mᵢ₊₂, Z⋅Mᵢ₊₁]
+        decay_curve[i] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        MPSV₁[2] = Mᵢ₊₁⁺
 
         # inner loop
         jup = min(i, ETL-i)
         @simd for j in 3:2:jup#-isodd(jup)
-            Mⱼ₋₁, Mⱼ, Mⱼ₊₁, Mⱼ₊₂ = Mⱼ₊₁, Mⱼ₊₂, MPSV₂[j+1], MPSV₂[j+2]
-            MPSV₁[j]   = V[F⋅Mⱼ₋₁, F̄⋅Mⱼ₊₁, Z⋅Mⱼ]
-            MPSV₁[j+1] = V[F⋅Mⱼ,   F̄⋅Mⱼ₊₂, Z⋅Mⱼ₊₁]
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁, Mᵢ₊₂ = Mᵢ₊₁, Mᵢ₊₂, MPSV₂[j+1], MPSV₂[j+2]
+            MPSV₁[j]   = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            MPSV₁[j+1] = V[F⋅Mᵢ,   F̄⋅Mᵢ₊₂, Z⋅Mᵢ₊₁]
         end
 
         # cleanup for next iteration
         if i == jup
             if iseven(jup)
-                Mⱼ₋₁ = Mⱼ₊₁
-                MPSV₁[jup+1] = V[F⋅Mⱼ₋₁, 0, 0]
+                Mᵢ₋₁ = Mᵢ₊₁
+                MPSV₁[jup+1] = V[F⋅Mᵢ₋₁, 0, 0]
                 MPSV₁[jup+2] = V[0, 0, 0]
                 MPSV₁[jup+3] = V[0, 0, 0]
             else
                 # inner loop: for j in 3:2:jup
-                # MPSV₁[jup+1] = V[F⋅Mⱼ, 0, 0] # (with or without)
+                # MPSV₁[jup+1] = V[F⋅Mᵢ, 0, 0] # (with or without)
                 MPSV₁[jup+2] = V[0, 0, 0]
 
                 # # (not working) inner loop: for j in 3:2:jup-isodd
-                # Mⱼ₋₁, Mⱼ = Mⱼ₊₁, Mⱼ₊₂
-                # MPSV₁[jup]   = V[F⋅Mⱼ₋₁, 0, Z⋅Mⱼ]
-                # MPSV₁[jup+1] = V[F⋅Mⱼ, 0, 0]
+                # Mᵢ₋₁, Mᵢ = Mᵢ₊₁, Mᵢ₊₂
+                # MPSV₁[jup]   = V[F⋅Mᵢ₋₁, 0, Z⋅Mᵢ]
+                # MPSV₁[jup+1] = V[F⋅Mᵢ, 0, 0]
                 # MPSV₁[jup+2] = V[0, 0, 0]
                 # MPSV₁[jup+3] = V[0, 0, 0]
             end
