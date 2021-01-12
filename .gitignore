@@ -6,6 +6,6 @@
 /docs/build/
 /docs/site/
 /docs/Manifest.toml
-/bench/*.md
-/bench/*.json
+/bench/results*
+/bench/results*
 Manifest.toml
