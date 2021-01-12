@@ -20,11 +20,16 @@ function parse_commandline()
             nargs = '*' # Zero or more inputs
             arg_type = String
             default = String["julia"]
+        "--decaes-version", "-v"
+            help = "tag (e.g. 0.3 or v0.3), branch (e.g. master), or git commit (e.g. 338795e)"
+            nargs = '*' # Zero or more inputs
+            arg_type = String
+            default = String["master"]
         "--threads", "-t"
             help = "number of threads"
             nargs = '*' # Zero or more inputs
-            arg_type = Union{Int,String}
-            default = Union{Int,String}["auto"]
+            arg_type = Any
+            default = Any["auto"]
         "--optimize", "-O"
             help = "optimization level"
             arg_type = Int
@@ -38,8 +43,8 @@ function parse_commandline()
             help = "minimum number of runs"
             arg_type = Int
             default = 3
-        # "--flag1"
-        #     help = "an option without argument, i.e. a flag"
+        # "--show-output"
+        #     help = "print stdout and stderr of the benchmark instead of suppressing"
         #     action = :store_true
     end
 
@@ -54,16 +59,20 @@ function main()
 
     run(`
     hyperfine
-        --parameter-list julia $(join(args["julia"], ","))
-        --parameter-list input $(join(args["input"], ","))
-        --parameter-list threads $(join(args["threads"], ","))
-        --parameter-list optimize $(join(args["optimize"], ","))
+        "JULIA_NUM_THREADS={threads} {julia} --project=.bench.tmp/{julia}/{version} --startup-file=no --quiet --optimize={optimize} -e 'using DECAES; main()' @{input}"
+        --prepare "{julia} --startup-file=no -e 'include(\"utils.jl\"); prepare_project(\"{julia}\", \"{version}\")'"
         --warmup $(args["warmup"])
         --min-runs $(args["min-runs"])
+        --parameter-list version $(join(args["decaes-version"], ","))
+        --parameter-list julia $(join(args["julia"], ","))
+        --parameter-list threads $(join(args["threads"], ","))
+        --parameter-list optimize $(join(args["optimize"], ","))
+        --parameter-list input $(join(args["input"], ","))
         --export-markdown $(joinpath(mkpath(args["output"]), "results.md"))
         --export-json $(joinpath(mkpath(args["output"]), "results.json"))
-        "{julia} --project --startup-file=no --quiet --threads={threads} --optimize={optimize} -e 'using DECAES; main()' @{input}"
     `)
+    # --show-output
+    return nothing
 end
 
 main()

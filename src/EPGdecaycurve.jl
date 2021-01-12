@@ -27,8 +27,8 @@ end
 end
 
 @inline EPGdecaycurve_work(::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve_work(T, ETL)
-@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualCache_Split(T, ETL) # fallback
-@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualCache_Split(T, ETL) # default for T <: SIMD.FloatingTypes
+@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
+@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
 
 """
     EPGdecaycurve(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)
@@ -471,6 +471,83 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Dua
 end
 
 ####
+#### EPGWork_ReIm_DualMVector_Split
+####
+
+struct EPGWork_ReIm_DualMVector_Split{T, ETL, MPSVType <: AbstractVector{SVector{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+    MPSV₁::MPSVType
+    MPSV₂::MPSVType
+    decay_curve::DCType
+end
+function EPGWork_ReIm_DualMVector_Split(T, ETL::Int)
+    mpsv₁ = MVector{ETL,SVector{3,T}}(undef)
+    mpsv₂ = MVector{ETL,SVector{3,T}}(undef)
+    dc = MVector{ETL,T}(undef)
+    EPGWork_ReIm_DualMVector_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+end
+
+function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Split{T,ETL}, o::EPGOptions{T,ETL}) where {T,ETL}
+    # Unpack workspace
+    @unpack MPSV₁, MPSV₂ = work
+    @unpack flip_angle, TE, T2, T1, refcon = o
+    α = deg2rad(flip_angle)
+    α₁, αᵢ = α, α*refcon/180
+
+    # Precompute intermediate variables
+    V = SA{T} # alias
+    E₁, E₂ = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
+    sin½α₁, cos½α₁ = sincos(α₁/2)
+    sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
+    sinα₁ = 2*sin½α₁*cos½α₁
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1+cosαᵢ)/2
+    sin²½αᵢ = 1-cos²½αᵢ
+    a₁, b₁, c₁     = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+
+    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    @inbounds begin
+        m₀ = sin½α₁
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        decay_curve[1] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        MPSV₁[2] = V[a₁*m₀, 0, 0]
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds for i in 2:ETL÷2
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `decay_curve`
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        decay_curve[i] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        @simd for j in 2:i-1
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        end
+        MPSV₁[i]   = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁] # j = i
+        MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0] # j = i + 1
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds for i in ETL÷2+1:ETL-1
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `decay_curve`
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        decay_curve[i] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        @simd for j in 2:ETL-i
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        end
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds decay_curve[ETL] = abs(F̄⋅MPSV₂[1])
+
+    return decay_curve
+end
+
+####
 #### EPGWork_Vec
 ####
 
@@ -790,11 +867,16 @@ end
 
 const EPGWork_List = [
     EPGWork_Basic_Cplx,
-    EPGWork_Vec,
     EPGWork_Cplx,
-    EPGWork_Cplx_Vec_Unrolled,
+    if VERSION >= v"1.6-"
+        # TODO: SIMD.jl broken on v1.6.0-beta1
+        []
+    else
+        [EPGWork_Vec, EPGWork_Cplx_Vec_Unrolled]
+    end...,
     EPGWork_ReIm,
     EPGWork_ReIm_DualCache,
     EPGWork_ReIm_DualCache_Split,
     EPGWork_ReIm_DualCache_Unrolled,
+    EPGWork_ReIm_DualMVector_Split,
 ]

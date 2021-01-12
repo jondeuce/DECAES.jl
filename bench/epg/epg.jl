@@ -41,7 +41,7 @@ function default_pretty_table(io, data, header, row_names; backend = :text, kwar
     PrettyTables.pretty_table(io, data, header; backend = :text, row_names, highlighters = (hl,), formatters = (v,i,j) -> round(v, sigdigits = 3), kwargs...)
 end
 
-let
+function main()
     names, times = map(leaves(results)) do (name, res)
         name, time(minimum(res)) / 1000
     end |> xs -> ((x->x[1]).(xs), (x->x[2]).(xs))
@@ -50,10 +50,12 @@ let
     tbl_data  = reshape(times, length(alg_names), :) |> permutedims
     tbl_hdr   = vcat(alg_names, fill("Time [us]", size(alg_names)...))
     default_pretty_table(stdout, tbl_data, tbl_hdr, row_names; backend = :text)
+    return nothing
 end
 
-nothing
+main()
 
+# v1.5.3
 # ┌───────────────────┬──────────────────┬───────────────────────────────┬────────────────────────────┬──────────────────────────────────┬────────────────────────┬─────────────────┬──────────────────┬─────────────────────────────────────┐
 # │                   │ alg=EPGWork_ReIm │ alg=EPGWork_Cplx_Vec_Unrolled │ alg=EPGWork_ReIm_DualCache │ alg=EPGWork_ReIm_DualCache_Split │ alg=EPGWork_Basic_Cplx │ alg=EPGWork_Vec │ alg=EPGWork_Cplx │ alg=EPGWork_ReIm_DualCache_Unrolled │
 # │                   │        Time [us] │                     Time [us] │                  Time [us] │                        Time [us] │              Time [us] │       Time [us] │        Time [us] │                           Time [us] │
@@ -65,3 +67,16 @@ nothing
 # │ ETL=32, T=Float64 │            0.395 │                          1.34 │                      0.396 │                             0.39 │                   3.13 │           0.957 │             1.93 │                               0.487 │
 # │ ETL=32, T=Float32 │            0.391 │                          1.51 │                      0.387 │                            0.381 │                   2.94 │           0.891 │             1.82 │                               0.484 │
 # └───────────────────┴──────────────────┴───────────────────────────────┴────────────────────────────┴──────────────────────────────────┴────────────────────────┴─────────────────┴──────────────────┴─────────────────────────────────────┘
+
+# v1.6.0-beta1
+# ┌───────────────────┬────────────────────────────────────┬────────────────────────────┬──────────────────────────────────┬────────────────────────┬──────────────────┬──────────────────┬─────────────────────────────────────┐
+# │                   │ alg=EPGWork_ReIm_DualMVector_Split │ alg=EPGWork_ReIm_DualCache │ alg=EPGWork_ReIm_DualCache_Split │ alg=EPGWork_Basic_Cplx │ alg=EPGWork_Cplx │ alg=EPGWork_ReIm │ alg=EPGWork_ReIm_DualCache_Unrolled │
+# │                   │                          Time [us] │                  Time [us] │                        Time [us] │              Time [us] │        Time [us] │        Time [us] │                           Time [us] │
+# ├───────────────────┼────────────────────────────────────┼────────────────────────────┼──────────────────────────────────┼────────────────────────┼──────────────────┼──────────────────┼─────────────────────────────────────┤
+# │ ETL=48, T=Float64 │                               0.79 │                      0.808 │                            0.824 │                   10.7 │             2.99 │             0.84 │                               0.919 │
+# │ ETL=48, T=Float32 │                              0.814 │                      0.832 │                            0.816 │                   13.0 │             3.47 │             0.83 │                               0.875 │
+# │ ETL=64, T=Float64 │                               1.43 │                       1.46 │                             1.44 │                   19.0 │             5.05 │             1.46 │                                1.54 │
+# │ ETL=64, T=Float32 │                               1.43 │                       1.45 │                             1.43 │                   23.2 │              7.4 │             1.45 │                                1.49 │
+# │ ETL=32, T=Float64 │                              0.389 │                      0.397 │                            0.388 │                   4.94 │             1.54 │            0.399 │                               0.465 │
+# │ ETL=32, T=Float32 │                              0.381 │                      0.392 │                            0.381 │                   5.92 │             1.65 │            0.389 │                               0.431 │
+# └───────────────────┴────────────────────────────────────┴────────────────────────────┴──────────────────────────────────┴────────────────────────┴──────────────────┴──────────────────┴─────────────────────────────────────┘

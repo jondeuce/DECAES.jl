@@ -3,7 +3,7 @@ module DECAES
 using LinearAlgebra, SpecialFunctions, Statistics, Random
 import NLopt, Dierckx, Polynomials, PolynomialRoots
 using Parameters: @with_kw, @with_kw_noshow, @unpack
-using StaticArrays: SVector, SizedVector, SA
+using StaticArrays: SVector, MVector, SizedVector, SA
 using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
 using SIMD: Vec, FloatingTypes, shufflevector
 
