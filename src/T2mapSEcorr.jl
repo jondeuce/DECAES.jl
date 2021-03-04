@@ -102,11 +102,14 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}; io::IO = stderr) 
 
     # Run analysis in parallel
     indices = filter(I -> image[I,1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
-    progmeter = opts.Silent ? nothing : progress_meter(io, length(indices), "Computing T2-Distribution: ")
+    progmeter = opts.Silent ? nothing : progress_meter(io, length(indices), "Computing T2-Distribution: "; dt = 0.5)
     tforeach(indices; blocksize = 64) do I
-        voxelwise_T2_distribution!(thread_buffers[Threads.threadid()], maps, distributions, image, opts, I)
-        opts.Silent || next!(progmeter)
+        thread_buffer = thread_buffers[Threads.threadid()]
+        voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
+        # opts.Silent || next!(progmeter)
+        !opts.Silent && mod(thread_buffer.curr_count[], 5) == 0 && next!(progmeter; step = 5)
     end
+    !opts.Silent && finish!(progmeter)
 
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
     LEGACY[] = false

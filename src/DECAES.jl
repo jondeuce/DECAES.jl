@@ -6,7 +6,7 @@ using Parameters: @with_kw, @with_kw_noshow, @unpack
 using StaticArrays: SVector, MVector, SizedVector, SA
 using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
 using SIMD: Vec, FloatingTypes, shufflevector
-using ProgressMeter: Progress, tty_width, next!
+using ProgressMeter: Progress, tty_width, next!, finish!
 
 include("NNLS.jl")
 using .NNLS

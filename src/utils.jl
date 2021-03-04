@@ -58,22 +58,22 @@ function tforeach(f, xs; blocksize = 1)
         tforeach_seq(f, xs)
     elseif blocksize == 1
         # Spawn one task for each `f` call
-        @sync for i in eachindex(xs)
+        @sync for x in xs
             Threads.@spawn begin
-                f(@inbounds xs[i])
+                f(x)
             end
         end
     else
         # Spawn one task for each `blocksize` `f` calls
-        @sync for p in Iterators.partition(xs, blocksize)
-            Threads.@spawn tforeach_seq(f, p)
+        @sync for xs_block in Iterators.partition(xs, blocksize)
+            Threads.@spawn tforeach_seq(f, xs_block)
         end
     end
 end
 
-function tforeach_seq(f, xs)
-    @simd ivdep for i in eachindex(xs)
-        f(@inbounds xs[i])
+@inline function tforeach_seq(f, xs)
+    @simd ivdep for x in xs
+        f(x)
     end
 end
 
@@ -104,7 +104,7 @@ function pretty_time(t)
     end
 end
 
-progress_meter(io, n, desc) = Progress(n; dt = 1.0, desc = desc, color = :cyan, output = io, barlen = min(80, tty_width(desc, stderr)))
+progress_meter(io, n, desc; kwargs...) = Progress(n; dt = 0.0, desc = desc, color = :cyan, output = io, barlen = min(80, tty_width(desc, stderr)), kwargs...)
 printheader(io, s) = (println(io, ""); printstyled(io, "* " * s * "\n"; color = :cyan))
 printbody(io, s) = println(io, s)
 
