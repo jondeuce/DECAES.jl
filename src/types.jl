@@ -102,7 +102,7 @@ T2mapOptions(image::Array{T,4}; kwargs...) where {T} = T2mapOptions{T}(;kwargs..
 
 function _show_string(o::T2mapOptions)
     io = IOBuffer()
-    print(io, "T2-Distribution analysis settings:")
+    print(io, "T2-distribution analysis settings:")
     fields = fieldnames(typeof(o))
     fields = fields[sortperm(uppercase.(string.([fields...])))] # sort alphabetically, ignoring case
     padlen = 1 + maximum(f -> length(string(f)), fields)
@@ -162,7 +162,7 @@ T2partOptions(image::Array{T,4}; kwargs...) where {T} = T2partOptions{T}(;kwargs
 
 function _show_string(o::T2partOptions)
     io = IOBuffer()
-    print(io, "T2-part analysis settings:")
+    print(io, "T2-parts analysis settings:")
     fields = fieldnames(typeof(o))
     fields = fields[sortperm(uppercase.(string.([fields...])))] # sort alphabetically
     padlen = 1 + maximum(f -> length(string(f)), fields)

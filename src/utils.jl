@@ -1,6 +1,7 @@
 ####
 #### Miscellaneous utils
 ####
+
 ndigits(x::Int) = x == 0 ? 1 : floor(Int, log10(abs(x))) + 1
 logrange(a::T, b::T, len::Int) where {T} = (r = T(10) .^ range(log10(a), log10(b); length = len); r[1] = a; r[end] = b; return r)
 normcdf(x::T) where {T} = erfc(-x/sqrt(T(2)))/2 # Cumulative distribution for normal distribution
@@ -76,55 +77,10 @@ function tforeach_seq(f, xs)
     end
 end
 
-# Running linear regression
-@with_kw mutable struct RunningLinReg{T}
-    k::Int = 0
-    Mx::Tuple{T,T} = (zero(T), zero(T))
-    My::Tuple{T,T} = (zero(T), zero(T))
-    Sx::Tuple{T,T} = (zero(T), zero(T))
-    Sy::Tuple{T,T} = (zero(T), zero(T))
-    Sxy::Tuple{T,T} = (zero(T), zero(T))
-end
-
-function (r::RunningLinReg)(x)
-    x̄, ȳ = mean(r)
-    β = cov(r) / var(r)[1]
-    α = ȳ - β * x̄
-    return α + β * x
-end
-Statistics.mean(r::RunningLinReg) = (r.Mx[1], r.My[1])
-Statistics.var(r::RunningLinReg) = (r.Sx[1]/(r.k-1), r.Sy[1]/(r.k-1))
-Statistics.std(r::RunningLinReg) = (sqrt(r.Sx[1]/(r.k-1)), sqrt(r.Sy[1]/(r.k-1)))
-Statistics.cov(r::RunningLinReg) = (r.k/(r.k-1)) * r.Sxy[1]
-Base.length(r::RunningLinReg) = r.k
-
-function Base.push!(r::RunningLinReg{T}, x, y) where {T}
-    r.k += 1
-    if r.k == 1
-        r.Mx = (T(x), zero(T))
-        r.My = (T(y), zero(T))
-    else
-        r.Mx, r.Sx = _var_update(r.Mx, r.Sx, x, r.k)
-        r.My, r.Sy = _var_update(r.My, r.Sy, y, r.k)
-        r.Sxy = _cov_update(r.Mx, r.My, r.Sxy, x, y, r.k)
-    end
-    return r
-end
-function _var_update(M::Tuple{T,T}, S::Tuple{T,T}, x, k) where {T}
-    Mk, Mk′, Sk, Sk′ = M..., S...
-    Mk, Mk′ = T(Mk + (x - Mk)/k), Mk
-    Sk, Sk′ = T(Sk + (x - Mk′)*(x - Mk)), Sk
-    return (Mk, Mk′), (Sk, Sk′)
-end
-function _cov_update(Mx::Tuple{T,T}, My::Tuple{T,T}, Sxy::Tuple{T,T}, x, y, k) where {T}
-    mx, mx′, my, my′, sxy, sxy′ = Mx..., My..., Sxy...
-    sxy, sxy′ = T(sxy + (k - 1) * (x - mx′) * (y - my′) / k^2 - sxy / k), sxy
-    return (sxy, sxy′)
-end
-
 ####
 #### Timing utilities
 ####
+
 const GLOBAL_TIMER = TimerOutput() # Global timer object
 const THREAD_LOCAL_TIMERS = [TimerOutput() for _ in 1:Threads.nthreads()] # Thread-local timer objects
 TIMER() = @inbounds THREAD_LOCAL_TIMERS[Threads.threadid()]
@@ -148,14 +104,18 @@ function pretty_time(t)
     end
 end
 
+progress_meter(io, n, desc) = Progress(n; dt = 1.0, desc = desc, color = :cyan, output = io, barlen = min(80, tty_width(desc, stderr)))
+printheader(io, s) = (println(io, ""); printstyled(io, "* " * s * "\n"; color = :cyan))
+printbody(io, s) = println(io, s)
+
 # Macro for timing arbitrary code snippet and printing time
-macro showtime(ex, msg, verb)
+macro showtime(io, msg, ex)
     quote
-        $(esc(verb)) && println(stderr, "")
-        @info $(esc(msg)) * " ..."
+        local io = $(esc(io))
+        printheader(io, $(esc(msg)) * " ...")
         local val
         local t = @elapsed val = $(esc(ex))
-        @info "Done ($(round(t; digits = 2)) seconds)"
+        printheader(io, "Done ($(round(t; digits = 2)) seconds)")
         val
     end
 end

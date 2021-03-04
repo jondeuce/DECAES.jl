@@ -4,14 +4,12 @@ if isdefined(Base, :Experimental) && isdefined(Base.Experimental, Symbol("@optle
     @eval Base.Experimental.@optlevel 0
 end
 
-include("ParXRec.jl")
-import .ParXRec, MAT, NIfTI
+import ..DECAES: T2mapOptions, T2partOptions, T2mapSEcorr, T2partSEcorr, @unpack, @showtime, printheader, printbody, tic, toc
 using ArgParse, Logging, LoggingExtras
 
-import ..T2mapOptions, ..T2partOptions, ..T2mapSEcorr, ..T2partSEcorr
-import ..@unpack, ..@showtime, ..tic, ..toc
-
-export MAT, NIfTI, ParXRec
+include("ParXRec.jl")
+import .ParXRec, MAT, NIfTI
+export ParXRec, MAT, NIfTI
 export main, load_image
 
 """
@@ -39,20 +37,6 @@ function main(command_line_args::Vector{String} = ARGS)
 
     # Get input file list and output folder list
     for info in get_file_info(opts)
-        # Main processing
-        function _call_main(logger)
-            with_logger(logger) do
-                try
-                    _main(info, opts, t2map_kwargs, t2part_kwargs)
-                catch e
-                    !opts[:quiet] && println(stderr, "")
-                    @warn "Error during processing of file: $(info[:inputfile])"
-                    !opts[:quiet] && println(stderr, "")
-                    @warn sprint(showerror, e, catch_backtrace())
-                end
-            end
-        end
-
         # Make output path
         if !opts[:dry]
             mkpath(info[:outputfolder])
@@ -67,17 +51,18 @@ function main(command_line_args::Vector{String} = ARGS)
             end
         end
 
-        # Call main function
-        if !opts[:dry]
-            logfile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".log")
-            open(logfile, "w+") do io
-                # Set logger to output to log file, and optionally to console as well
-                logger = opts[:quiet] ? ConsoleLogger(io) : TeeLogger(ConsoleLogger(), ConsoleLogger(io))
-                _call_main(logger)
+        # Main processing
+        tee_capture(
+            logfile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".log"),
+            suppress_terminal = opts[:quiet],
+            suppress_logfile = opts[:dry],
+        ) do io
+            try
+                _main(io, info, opts, t2map_kwargs, t2part_kwargs)
+            catch e
+                @warn "Error during processing of file: $(info[:inputfile])"
+                @warn sprint(showerror, e, catch_backtrace())
             end
-        else
-            logger = opts[:quiet] ? NullLogger() : ConsoleLogger()
-            _call_main(logger)
         end
     end
 
@@ -85,6 +70,7 @@ function main(command_line_args::Vector{String} = ARGS)
 end
 
 function _main(
+        io::IO,
         info::Dict,
         opts::Dict,
         t2map_kwargs::Dict,
@@ -93,50 +79,50 @@ function _main(
 
     # Starting message/starting time
     t_start = tic()
-    @info "Starting with $(Threads.nthreads()) threads"
+    printheader(io, "Starting with $(Threads.nthreads()) threads")
 
     # Load image(s)
-    image = @showtime(
-        load_image(info[:inputfile]),
+    image = @showtime(io,
         "Loading input file: $(info[:inputfile])",
-        !opts[:quiet])
+        load_image(info[:inputfile]),
+    )
 
     # Apply mask
     if !isnothing(info[:maskfile])
-        @showtime(
-            try_apply_maskfile!(image, info[:maskfile]),
+        @showtime(io,
             "Applying mask from file: '$(info[:maskfile])'",
-            !opts[:quiet])
+            try_apply_maskfile!(image, info[:maskfile]),
+        )
     elseif opts[:bet]
-        @showtime(
-            try_apply_bet!(image, opts[:betpath], opts[:betargs]),
+        @showtime(io,
             "Making and applying BET mask with args: '$(opts[:betargs])'",
-            !opts[:quiet])
+            try_apply_bet!(image, opts[:betpath], opts[:betargs]),
+        )
     end
 
     # Compute T2 distribution from input 4D multi-echo image
     if opts[:T2map]
-        maps, dist = @showtime(
-            T2mapSEcorr(image; t2map_kwargs...),
+        maps, dist = @showtime(io,
             "Running T2mapSEcorr on file: $(info[:inputfile])",
-            !opts[:quiet])
+            T2mapSEcorr(image; io = io, t2map_kwargs...),
+        )
 
         # Save T2-distribution to .mat file
         savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2dist.mat")
         if !opts[:dry]
-            @showtime(
-                MAT.matwrite(savefile, Dict("dist" => dist)),
+            @showtime(io,
                 "Saving T2 distribution to file: $savefile",
-                !opts[:quiet])
+                MAT.matwrite(savefile, Dict("dist" => dist)),
+            )
         end
 
         # Save T2-maps to .mat file
         savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2maps.mat")
         if !opts[:dry]
-            @showtime(
-                MAT.matwrite(savefile, maps),
+            @showtime(io,
                 "Saving T2 parameter maps to file: $savefile",
-                !opts[:quiet])
+                MAT.matwrite(savefile, maps),
+            )
         end
     else
         # Input image is the T2 distribution
@@ -145,25 +131,23 @@ function _main(
 
     # Analyze T2 distribution to produce parameter maps
     if opts[:T2part]
-        parts = @showtime(
-            T2partSEcorr(dist; t2part_kwargs...),
+        parts = @showtime(io,
             "Running T2partSEcorr",
-            !opts[:quiet])
+            T2partSEcorr(dist; io = io, t2part_kwargs...),
+        )
 
         # Save T2-parts to .mat file
         savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2parts.mat")
         if !opts[:dry]
-            @showtime(
-                MAT.matwrite(savefile, parts),
+            @showtime(io,
                 "Saving T2 parts maps to file: $savefile",
-                !opts[:quiet])
+                MAT.matwrite(savefile, parts),
+            )
         end
     end
 
     # Done message
-    !opts[:quiet] && println(stderr, "")
-    @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"
-    !opts[:quiet] && println(stderr, "")
+    printheader(io, "Finished ($(round(toc(t_start); digits = 2)) seconds)")
 
     return nothing
 end
@@ -486,6 +470,45 @@ function chop_allowed_suffix(filename::AbstractString)
         error("Currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported")
     end
 end
+
+####
+#### Logging
+####
+
+# https://discourse.julialang.org/t/write-to-file-and-stdout/35042/3
+struct Tee{TIO <: Tuple} <: IO
+    streams::TIO
+end
+Tee(streams::IO...) = Tee(streams)
+do_tee(t::Tee, f, args...; kwargs...) = foreach(io -> f(io, args...; kwargs...), t.streams)
+for f in [:write, :print, :println, :printstyled], T in [Any, Array, Char, Union{SubString{String},String}]
+    @eval Base.$f(t::Tee, x::$T; kwargs...) = do_tee(t, $f, x; kwargs...)
+end
+Base.flush(t::Tee) = do_tee(t, flush)
+
+function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppress_logfile = false)
+    open(suppress_logfile ? tempname() : logfile, "w+") do io
+        io = Tee(suppress_terminal ? devnull : stderr, io)
+        logger = ConsoleLogger(io)
+        with_logger(logger) do
+            f(io)
+        end
+    end
+end
+
+# https://discourse.julialang.org/t/redirect-stdout-and-stderr/13424/3
+function redirect_to_files(f, outfile, errfile)
+    open(outfile, "w") do out
+        open(errfile, "w") do err
+            redirect_stdout(out) do
+                redirect_stderr(err) do
+                    f()
+                end
+            end
+        end
+    end
+end
+redirect_to_tempfiles(f) = redirect_to_files(f, tempname() * ".log", tempname() * ".err")
 
 ####
 #### Global constants

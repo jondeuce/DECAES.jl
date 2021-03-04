@@ -1,13 +1,10 @@
+import Pkg
+Pkg.activate(@__DIR__)
 using DECAES
 using BenchmarkTools
 using PrettyTables
 
-module BenchEPG
-
-using ..DECAES
-using ..BenchmarkTools
-
-const suite = BenchmarkGroup()
+suite = BenchmarkGroup()
 
 for ETL in [32,48,64]
     s_ETL = suite["ETL=$ETL"] = BenchmarkGroup()
@@ -26,11 +23,9 @@ for ETL in [32,48,64]
     end
 end
 
-end  # module
-
 # Tune and run benchmarks
-tune!(BenchEPG.suite)
-results = run(BenchEPG.suite; verbose = true, seconds = 1)
+tune!(suite)
+results = run(suite; verbose = true, seconds = 1)
 map(((name,res),) -> (@info(name); display(res)), leaves(results))
 display(results)
 

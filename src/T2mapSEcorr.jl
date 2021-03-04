@@ -57,10 +57,10 @@ See also:
 * [`lsqnonneg_lcurve`](@ref)
 * [`EPGdecaycurve`](@ref)
 """
-function T2mapSEcorr(image::Array{T,4}; kwargs...) where {T}
+function T2mapSEcorr(image::Array{T,4}; io::IO = stderr, kwargs...) where {T}
     map(reset_timer!, THREAD_LOCAL_TIMERS)
     out = @timeit_debug TIMER() "T2mapSEcorr" begin
-        T2mapSEcorr(image, T2mapOptions(image; kwargs...))
+        T2mapSEcorr(image, T2mapOptions(image; kwargs...); io = io)
     end
     if timeit_debug_enabled()
         display(THREAD_LOCAL_TIMERS[1]) #TODO
@@ -69,33 +69,30 @@ function T2mapSEcorr(image::Array{T,4}; kwargs...) where {T}
     return out
 end
 
-function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
+function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}; io::IO = stderr) where {T}
     # =========================================================================
     # Initialize output data structures and thread-local buffers
     # =========================================================================
     @assert size(image) == (opts.MatrixSize..., opts.nTE)
 
     # Print settings to terminal
-    if !opts.Silent
-        @info _show_string(opts)
-    end
+    !opts.Silent && printbody(io, _show_string(opts))
     LEGACY[] = opts.legacy
-
-    maps = Dict{String, Any}()
-    distributions  = fill(T(NaN), opts.MatrixSize..., opts.nT2)
-    thread_buffers = [thread_buffer_maker(image, opts) for _ in 1:Threads.nthreads()]
-    global_buffer  = global_buffer_maker(image, opts)
 
     # =========================================================================
     # Initialization
     # =========================================================================
     @timeit_debug TIMER() "Initialization" begin
+        # Initialize output maps and distributions
+        maps = init_output_t2maps(image, opts)
+        distributions = init_output_t2distributions(image, opts)
+
+        # Initialize reusable temporary buffers
+        thread_buffers = [thread_buffer_maker(image, opts) for _ in 1:Threads.nthreads()]
         for i in 1:length(thread_buffers)
             # Compute lookup table of EPG decay bases
             init_epg_decay_basis!(thread_buffers[i], opts)
         end
-        # Initialize output maps
-        init_output_t2maps!(thread_buffers[1], maps, opts)
     end
 
     # =========================================================================
@@ -104,18 +101,28 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     LinearAlgebra.BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
 
     # Run analysis in parallel
-    global_buffer.loop_start_time[] = tic()
     indices = filter(I -> image[I,1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
+    progmeter = opts.Silent ? nothing : progress_meter(io, length(indices), "Computing T2-Distribution: ")
     tforeach(indices; blocksize = 64) do I
-        thread_buffer = thread_buffers[Threads.threadid()]
-        voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
-        update_progress!(global_buffer, thread_buffers, opts)
+        voxelwise_T2_distribution!(thread_buffers[Threads.threadid()], maps, distributions, image, opts, I)
+        opts.Silent || next!(progmeter)
     end
 
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
     LEGACY[] = false
 
     return @ntuple(maps, distributions)
+end
+
+function init_output_t2distributions(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
+    distributions = fill(T(NaN), opts.MatrixSize..., opts.nT2)
+    return distributions
+end
+
+function init_output_t2maps(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
+    maps = Dict{String, Any}()
+    init_output_t2maps!(thread_buffer_maker(image, opts), maps, opts)
+    return maps
 end
 
 function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {T}
@@ -421,61 +428,4 @@ function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
         chi2fact_opt     = Ref(T(NaN)),
     )
     return buffer
-end
-
-function global_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
-    buffer = (
-        global_lock     = Threads.SpinLock(),
-        loop_start_time = Ref(0.0),
-        last_print_time = Ref(-Inf),
-        done_printing   = Ref(false),
-        trigger_print   = Threads.Atomic{Bool}(false),
-        print_message   = Ref(""),
-        total_count     = sum(>(o.Threshold), @views(image[:,:,:,1])),
-        running_stats   = RunningLinReg{Float64}(),
-    )
-    return buffer
-end
-
-function update_progress!(global_buffer, thread_buffers, o::T2mapOptions)
-    @unpack global_lock, loop_start_time, last_print_time, done_printing = global_buffer
-    @unpack running_stats, total_count, trigger_print, print_message = global_buffer
-
-    if !o.Silent && !done_printing[]
-        # Update global buffer every `print_interval` seconds
-        print_interval = 15.0
-        lock(global_lock) do
-            time_elapsed = toc(loop_start_time[])
-            print_now = time_elapsed - last_print_time[] ≥ print_interval
-            curr_count = sum(buf -> buf.curr_count[], thread_buffers)
-            finished = curr_count == total_count
-
-            if !done_printing[] && (finished || print_now)
-                last_print_time[] = time_elapsed
-                done_printing[] = finished
-
-                # Update completion time estimate
-                push!(running_stats, curr_count, time_elapsed)
-                est_complete = running_stats(total_count)
-                est_remaining = done_printing[] ? 0.0 :
-                    time_elapsed < print_interval || length(running_stats) < 2 ? NaN :
-                    max(est_complete - time_elapsed, 0.0)
-
-                # Set print message, and trigger printing below
-                print_message[] = join([
-                    "[" * lpad(floor(Int, 100 * (curr_count / total_count)), 3) * "%]",
-                    "Elapsed Time: " * pretty_time(time_elapsed),
-                    "Estimated Time Remaining: " * pretty_time(est_remaining),
-                ], " -- ")
-                trigger_print[] = true
-            end
-        end
-
-        # Print message outside of spin lock to avoid blocking I/O
-        if Threads.atomic_cas!(trigger_print, true, false)
-            @info print_message[]
-        end
-    end
-
-    return nothing
 end

@@ -32,10 +32,10 @@ Dict{String,Array{Float64,3}} with 4 entries:
 See also:
 * [`T2mapSEcorr`](@ref)
 """
-function T2partSEcorr(T2distributions::Array{T,4}; kwargs...) where {T}
+function T2partSEcorr(T2distributions::Array{T,4}; io::IO = stderr, kwargs...) where {T}
     # map(reset_timer!, THREAD_LOCAL_TIMERS) #TODO
     out = @timeit_debug TIMER() "T2partSEcorr" begin
-        T2partSEcorr(T2distributions, T2partOptions(T2distributions; kwargs...))
+        T2partSEcorr(T2distributions, T2partOptions(T2distributions; kwargs...); io = io)
     end
     # if timeit_debug_enabled()
     #     map(display, THREAD_LOCAL_TIMERS) #TODO
@@ -43,21 +43,15 @@ function T2partSEcorr(T2distributions::Array{T,4}; kwargs...) where {T}
     return out
 end
 
-function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
+function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}; io::IO = stderr) where {T}
     @assert size(T2distributions) == (opts.MatrixSize..., opts.nT2)
 
     # Print settings to terminal
-    if !opts.Silent
-        @info _show_string(opts)
-    end
+    !opts.Silent && printbody(io, _show_string(opts))
     LEGACY[] = opts.legacy
 
     # Initial output
-    maps = Dict{String, Any}()
-    maps["sfr"] = fill(T(NaN), opts.MatrixSize...)
-    maps["sgm"] = fill(T(NaN), opts.MatrixSize...)
-    maps["mfr"] = fill(T(NaN), opts.MatrixSize...)
-    maps["mgm"] = fill(T(NaN), opts.MatrixSize...)
+    maps = init_output_t2parts(T2distributions, opts)
     thread_buffers = [thread_buffer_maker(opts) for _ in 1:Threads.nthreads()]
 
     # Run T2-Part analysis
@@ -69,6 +63,15 @@ function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
     LEGACY[] = false
 
+    return maps
+end
+
+function init_output_t2parts(T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
+    maps = Dict{String, Any}()
+    maps["sfr"] = fill(T(NaN), opts.MatrixSize...)
+    maps["sgm"] = fill(T(NaN), opts.MatrixSize...)
+    maps["mfr"] = fill(T(NaN), opts.MatrixSize...)
+    maps["mgm"] = fill(T(NaN), opts.MatrixSize...)
     return maps
 end
 
