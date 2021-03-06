@@ -104,7 +104,40 @@ function pretty_time(t)
     end
 end
 
-progress_meter(io, n, desc; kwargs...) = Progress(n; dt = 0.0, desc = desc, color = :cyan, output = io, barlen = min(80, tty_width(desc, stderr)), kwargs...)
+@with_kw mutable struct DECAESProgress
+    progmeter::Progress
+    io::IO
+    iobuf::IOBuffer
+    last_msg::AbstractString = ""
+end
+
+function DECAESProgress(io::IO, n::Int, desc::AbstractString; kwargs...)
+    iobuf = IOBuffer()
+    DECAESProgress(
+        io = io,
+        iobuf = iobuf,
+        progmeter = Progress(n;
+            dt = 0.0, desc = desc, color = :cyan, output = iobuf, barlen = min(80, tty_width(desc, stderr)), barglyphs = BarGlyphs("[=> ]"),
+            kwargs...
+        )
+    )
+end
+DECAESProgress(n::Int, desc::AbstractString; kwargs...) = DECAESProgress(stderr, n, desc; kwargs...)
+
+function ProgressMeter.next!(p::DECAESProgress)
+    next!(p.progmeter)
+    msg = String(take!(p.iobuf))
+    if !isempty(msg)
+        msg = replace(msg, "\r" => "")
+        msg = replace(msg, "\u1b[K" => "")
+        msg = replace(msg, "\u1b[A" => "")
+        if msg != p.last_msg
+            println(p.io, msg)
+            p.last_msg = msg
+        end
+    end
+end
+
 printheader(io, s) = (println(io, ""); printstyled(io, "* " * s * "\n"; color = :cyan))
 printbody(io, s) = println(io, s)
 

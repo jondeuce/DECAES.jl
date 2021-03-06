@@ -1,12 +1,12 @@
 module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
-import NLopt, Dierckx, Polynomials, PolynomialRoots
+import NLopt, Dierckx, Polynomials, PolynomialRoots, ProgressMeter
 using Parameters: @with_kw, @with_kw_noshow, @unpack
 using StaticArrays: SVector, MVector, SizedVector, SA
 using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
 using SIMD: Vec, FloatingTypes, shufflevector
-using ProgressMeter: Progress, tty_width, next!, finish!
+using ProgressMeter: Progress, BarGlyphs, tty_width, next!, finish!
 
 include("NNLS.jl")
 using .NNLS

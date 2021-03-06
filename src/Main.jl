@@ -480,11 +480,16 @@ struct Tee{TIO <: Tuple} <: IO
     streams::TIO
 end
 Tee(streams::IO...) = Tee(streams)
-do_tee(t::Tee, f, args...; kwargs...) = foreach(io -> f(io, args...; kwargs...), t.streams)
+Base.flush(t::Tee) = do_tee(t, io -> nothing)
+function do_tee(t::Tee, f, args...; kwargs...)
+    for io in t.streams
+        f(io, args...; kwargs...)
+        flush(io)
+    end
+end
 for f in [:write, :print, :println, :printstyled], T in [Any, Array, Char, Union{SubString{String},String}]
     @eval Base.$f(t::Tee, x::$T; kwargs...) = do_tee(t, $f, x; kwargs...)
 end
-Base.flush(t::Tee) = do_tee(t, flush)
 
 function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppress_logfile = false)
     open(suppress_logfile ? tempname() : logfile, "w+") do io

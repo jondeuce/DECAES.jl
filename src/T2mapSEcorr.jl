@@ -102,14 +102,23 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}; io::IO = stderr) 
 
     # Run analysis in parallel
     indices = filter(I -> image[I,1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
-    progmeter = opts.Silent ? nothing : progress_meter(io, length(indices), "Computing T2-Distribution: "; dt = 0.5)
-    tforeach(indices; blocksize = 64) do I
-        thread_buffer = thread_buffers[Threads.threadid()]
-        voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
-        # opts.Silent || next!(progmeter)
-        !opts.Silent && mod(thread_buffer.curr_count[], 5) == 0 && next!(progmeter; step = 5)
+    blocksize = 64
+    if opts.Silent
+        tforeach(indices; blocksize = blocksize) do I
+            thread_buffer = thread_buffers[Threads.threadid()]
+            voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
+        end
+    else
+        bigblocks = Iterators.partition(indices, 8 * Threads.nthreads() * blocksize) .|> copy
+        progmeter = DECAESProgress(io, length(bigblocks), "Computing T2-Distribution: "; dt = 5.0)
+        for bigblock in bigblocks
+            tforeach(bigblock; blocksize = blocksize) do I
+                thread_buffer = thread_buffers[Threads.threadid()]
+                voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
+            end
+            next!(progmeter)
+        end
     end
-    !opts.Silent && finish!(progmeter)
 
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
     LEGACY[] = false
