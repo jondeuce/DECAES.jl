@@ -3,8 +3,8 @@
 ####
 
 # Julia command for starting server.
-#   Note: inherits current environment - make sure number of threads
-#         are set before running this script!
+# Note: inherits current Julia environment - make sure number of threads
+#       are set before running this script!
 julia_cmd =
     ```
     $(Base.julia_cmd())
@@ -16,7 +16,6 @@ julia_cmd =
     ```;
 
 # Convenience macro to write a Julia expression into a temporary script
-# which will then be run on the DECAES server
 macro mktempscript(ex = nothing, filename = nothing)
     quote
         local fname = $filename === nothing ? tempname() * ".jl" : $filename
@@ -62,28 +61,33 @@ if !isempty(ARGS) && lowercase(ARGS[1]) == "--kill"
     end
 end
 
-# Check if server is alive by sending a dummy script to run
-tryconnect() =
-    try
-        ping_script = @mktempscript begin
-            using DaemonMode
-            redirect_stdout(devnull) do
-                redirect_stderr(devnull) do
-                    runfile(touch(tempname() * ".jl"))
-                end
+# Ping server by trying to delete dummy file
+function ping()
+    daemon_script = @mktempscript begin
+        using DaemonMode
+        redirect_stdout(devnull) do
+            redirect_stderr(devnull) do
+                runargs()
             end
         end
-        run(`$(julia_cmd) $(ping_script)`)
-        return true
+    end
+    ping_script = @mktempscript rm(ARGS[1]; force = true)
+    ping_file = touch(tempname())
+    try
+        run(`$(julia_cmd) $(daemon_script) $(ping_script) $(ping_file)`)
+        return !isfile(ping_file)
     catch e
         if e isa ProcessFailedException
             return false
         else
             rethrow(e)
         end
+    finally
+        rm.([ping_file, daemon_script, ping_script]; force = true)
     end
+end
 
-if !tryconnect()
+if !ping()
     # Server is not started
     println("* Starting DECAES server")
 
@@ -93,14 +97,9 @@ if !tryconnect()
     end
     server_cmd = `$(julia_cmd) $(server_script) \&`
     run(detach(server_cmd); wait = false)
-    sleep(1)
 
-    local tries, max_tries, delay = 0, 5, 0.5
-    while !tryconnect()
-        sleep(delay)
-        delay *= 2
-        tries += 1
-        tries >= max_tries && error("Failed to connect to DECAES server")
+    while !ping()
+        sleep(1)
     end
 end
 

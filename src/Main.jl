@@ -79,7 +79,7 @@ function _main(
 
     # Starting message/starting time
     t_start = tic()
-    printheader(io, "Starting with $(Threads.nthreads()) threads")
+    printheader(io, "Starting DECAES with $(Threads.nthreads()) threads")
 
     # Load image(s)
     image = @showtime(io,
