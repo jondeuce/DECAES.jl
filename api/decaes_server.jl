@@ -1,4 +1,23 @@
 ####
+#### Load DaemonMode
+####
+
+# Load the Julia package manager, which is itself a Julia package
+import Pkg
+
+# Load the DaemonMode package
+try
+    @eval using DaemonMode
+catch e
+    println("* Installing DaemonMode package for DECAES server")
+    Pkg.add("DaemonMode"; io = devnull)
+    @eval using DaemonMode
+end
+
+# Server port number. This can be changed to any valid port
+const PORT = DaemonMode.PORT
+
+####
 #### Utilities
 ####
 
@@ -16,10 +35,11 @@ julia_cmd =
     ```;
 
 # Convenience macro to write a Julia expression into a temporary script
-macro mktempscript(ex = nothing, filename = nothing)
+macro mktempscript(ex = nothing)
     quote
-        local fname = $filename === nothing ? tempname() * ".jl" : $filename
+        local fname = tempname() * ".jl"
         open(fname; write = true) do io
+            println(io, "const PORT = $PORT")
             println(io, $(string(ex)))
         end
         fname
@@ -29,21 +49,6 @@ end
 ####
 #### Start DECAES server, if necessary
 ####
-
-# Load the Julia package manager, which is itself a Julia package
-import Pkg
-
-# Load the DaemonMode package
-try
-    @eval using DaemonMode
-catch e
-    println("* Installing DaemonMode package for DECAES server")
-    Pkg.add("DaemonMode"; io = devnull)
-    @eval using DaemonMode
-end
-
-# Server port number. This can be changed to any valid port
-const PORT = DaemonMode.PORT
 
 # Check for kill server command
 if !isempty(ARGS) && lowercase(ARGS[1]) == "--kill"
@@ -67,7 +72,7 @@ function ping()
         using DaemonMode
         redirect_stdout(devnull) do
             redirect_stderr(devnull) do
-                runargs()
+                runargs(PORT)
             end
         end
     end
@@ -93,7 +98,7 @@ if !ping()
 
     server_script = @mktempscript begin
         using DaemonMode
-        serve()
+        serve(PORT)
     end
     server_cmd = `$(julia_cmd) $(server_script) \&`
     run(detach(server_cmd); wait = false)
@@ -123,4 +128,4 @@ decaes_script = @mktempscript begin
 end
 
 pushfirst!(ARGS, decaes_script)
-runargs()
+runargs(PORT)

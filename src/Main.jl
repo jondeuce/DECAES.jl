@@ -25,6 +25,10 @@ See also:
 function main(command_line_args::Vector{String} = ARGS)
     # Parse command line arguments
     opts = parse_args(command_line_args, ARGPARSE_SETTINGS; as_symbols = true)
+    if opts === nothing
+        # Help message was triggered. Return nothing instead of exit(0)
+        return nothing
+    end
 
     # Unpack parsed flags, overriding appropriate options fields
     t2map_kwargs = get_parsed_args_subset(opts, T2MAP_FIELDTYPES)
@@ -157,7 +161,7 @@ function create_argparse_settings(;legacy = false, add_defaults = false)
         prog = "",
         fromfile_prefix_chars = "@",
         error_on_conflict = false,
-        exit_after_help = true,
+        exit_after_help = false,
         # exc_handler = ArgParse.debug_handler,
     )
 

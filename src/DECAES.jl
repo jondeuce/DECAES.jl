@@ -7,6 +7,7 @@ using StaticArrays: SVector, MVector, SizedVector, SA
 using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
 using SIMD: Vec, FloatingTypes, shufflevector
 using ProgressMeter: Progress, BarGlyphs, tty_width, next!, finish!
+using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 
 include("NNLS.jl")
 using .NNLS

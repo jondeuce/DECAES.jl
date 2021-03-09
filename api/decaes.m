@@ -145,9 +145,8 @@ function st = jl_call_decaes_server(opts, decaes_args)
         system(cmd, '-echo');
     end
 
-    % DECAES server object
-    mlock %TODO
-    persistent cleanup_server
+    mlock % Prevent Matlab from clearing persistent variables via e.g. `clear all`
+    persistent cleanup_server % DECAES server cleanup object
 
     if isempty(cleanup_server)
         % Create and run system command to start DECAES server
@@ -259,13 +258,10 @@ end
 function [opts, decaes_args] = parse_args(varargin)
 
     % Check for deprecated syntax for setting number of Julia threads
-    defaultThreads = maxNumCompThreads;
-
     if ~isempty(varargin)
         nthreads = check_positive_int(varargin{1});
         if ~isnan(nthreads)
-            defaultThreads = nthreads;
-            varargin = {varargin{2:end}, '--threads', defaultThreads};
+            varargin = {varargin{2:end}, '--threads', nthreads};
             warning(['Passing the number of threads as first argument is deprecated syntax.\n' ...
                      'Use flag/value pairs instead: ''decaes --threads %d ...'''], nthreads);
         end
@@ -285,11 +281,7 @@ function [opts, decaes_args] = parse_args(varargin)
         if ischar(arg)
             switch lower(arg)
                 case '--threads'
-                    nthreads = check_positive_int(varargin{ii+1});
-                    if isnan(nthreads)
-                        error('Number of threads must be a positive integer')
-                    end
-                    mat_args = {mat_args{:}, 'threads', nthreads}; %#ok
+                    mat_args = {mat_args{:}, 'threads', check_positive_int(varargin{ii+1})}; %#ok
                     ii = ii + 2;
                 case '--server'
                     mat_args = {mat_args{:}, 'server', true}; %#ok
@@ -311,7 +303,7 @@ function [opts, decaes_args] = parse_args(varargin)
 
     % Parse Matlab inputs
     p = inputParser;
-    addParameter(p, 'threads', defaultThreads, @(x) ~isnan(check_positive_int(x)));
+    addParameter(p, 'threads', maxNumCompThreads, @(x) ~isnan(check_positive_int(x)));
     addParameter(p, 'server', false, @(x) islogical(x));
     parse(p, mat_args{:});
     opts = p.Results;
