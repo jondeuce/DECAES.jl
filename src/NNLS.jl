@@ -28,7 +28,8 @@
 module NNLS
 
 using LinearAlgebra
-# using ..LoopVectorization
+# using LoopVectorization: @avx
+using UnsafeArrays: @uviews, uviews, uview
 
 export nnls,
        nnls!,
@@ -226,42 +227,14 @@ function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}, indextype::Ty
 end
 
 """
-Views in Julia still allocate some memory (since they need to keep
-a reference to the original array). This type allocates no memory
-and does no bounds checking. Use it with caution.
-"""
-struct UnsafeVectorView{T} <: AbstractVector{T}
-    offset::Int
-    len::Int
-    ptr::Ptr{T}
-end
+Views in Julia no longer allocate memory since v1.5, but unsafe views
+provided by the UnsafeArrays package are still faster.
 
-UnsafeVectorView(parent::DenseArray{T}, start_ind::Integer, len::Integer) where {T} = UnsafeVectorView{T}(start_ind - 1, len, pointer(parent))
-Base.pointer(v::UnsafeVectorView{T}) where {T} = v.ptr + sizeof(T) * v.offset
-Base.strides(v::UnsafeVectorView) = (1,)
-Base.size(v::UnsafeVectorView) = (v.len,)
-Base.getindex(v::UnsafeVectorView, idx) = unsafe_load(v.ptr, idx + v.offset)
-Base.setindex!(v::UnsafeVectorView, value, idx) = unsafe_store!(v.ptr, value, idx + v.offset)
-Base.length(v::UnsafeVectorView) = v.len
-@static if VERSION >= v"0.7-"
-    Base.IndexStyle(::Type{V}) where {V <: UnsafeVectorView} = Base.IndexLinear()
-else
-    Base.IndexStyle{V <: UnsafeVectorView}(::Type{V}) = Base.IndexLinear()
-end
-
+Note: will segfault if parent array is garbage collected. If this is
+a possibility, use `UnsafeArrays.@uviews(parent, I...)` instead.
 """
-UnsafeVectorView only works for isbits types. For other types, we're already
-allocating lots of memory elsewhere, so creating a new View is fine.
-
-This function looks type-unstable, but the isbitstype(T) test can be evaluated
-by the compiler, so the result is actually type-stable.
-"""
-function fastview(parent::DenseArray{T}, start_ind::Integer, len::Integer) where {T}
-    if isbitstype(T)
-        UnsafeVectorView(parent, start_ind, len)
-    else
-        @view(parent[start_ind:(start_ind + len - 1)])
-    end
+@inline function fastview(parent::DenseArray, start_ind::Integer, len::Integer)
+    uview(parent, start_ind:(start_ind + len - 1)) # uview checks for isbitstype(T) internally
 end
 
 @noinline function checkargs(work::NNLSWorkspace)

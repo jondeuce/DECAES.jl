@@ -1,13 +1,14 @@
 module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
-import NLopt, Dierckx, Polynomials, PolynomialRoots, ProgressMeter
-using Parameters: @with_kw, @with_kw_noshow, @unpack
-using StaticArrays: SVector, MVector, SizedVector, SA
-using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
-using SIMD: Vec, FloatingTypes, shufflevector
-using ProgressMeter: Progress, BarGlyphs, tty_width, next!, finish!
+import Dierckx, DocStringExtensions, NLopt, Parameters, PolynomialRoots, Polynomials, ProgressMeter, ProgressMeter, StaticArrays, SIMD, TimerOutputs, UnsafeArrays
 using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
+using Parameters: @with_kw, @with_kw_noshow, @unpack
+using ProgressMeter: Progress, BarGlyphs, tty_width, next!, finish!
+using StaticArrays: SVector, MVector, SizedVector, SA
+using SIMD: Vec, FloatingTypes, shufflevector
+using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!
+using UnsafeArrays: @uviews, uviews, uview
 
 include("NNLS.jl")
 using .NNLS

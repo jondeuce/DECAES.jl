@@ -297,7 +297,8 @@ function epg_decay_basis!(decay_curve_work, decay_basis::AbstractMatrix{T}, flip
     # Compute the NNLS basis over T2 space
     @timeit_debug TIMER() "EPGdecaycurve!" begin
         @inbounds for j in 1:o.nT2
-            decay_curve = NNLS.fastview(decay_basis, 1+(j-1)*o.nTE, o.nTE)
+            # decay_curve = @views decay_basis[:,j] # @views no longer allocates since v1.5
+            decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is still a bit faster than `Base.view`
             EPGdecaycurve!(decay_curve, decay_curve_work, flip_angle, o.TE, T2_times[j], o.T1, o.RefConAngle)
             # EPGdecaycurve_vTE!(decay_curve_work, o.nTE, flip_angle, o.vTEparam..., T2_times[j], o.T1, o.RefConAngle) #TODO update if vTEparam is implemented
         end

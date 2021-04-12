@@ -108,6 +108,7 @@ end
     progmeter::Progress
     io::IO
     iobuf::IOBuffer
+    iolock::ReentrantLock = Threads.ReentrantLock()
     last_msg::AbstractString = ""
 end
 
@@ -126,14 +127,16 @@ DECAESProgress(n::Int, desc::AbstractString; kwargs...) = DECAESProgress(stderr,
 
 function ProgressMeter.next!(p::DECAESProgress)
     next!(p.progmeter)
-    msg = String(take!(p.iobuf))
+    msg = String(take!(p.iobuf)) # take!(::IOBuffer) is threadsafe
     if !isempty(msg)
         msg = replace(msg, "\r" => "")
         msg = replace(msg, "\u1b[K" => "")
         msg = replace(msg, "\u1b[A" => "")
         if msg != p.last_msg
-            println(p.io, msg)
-            p.last_msg = msg
+            lock(p.iolock) do
+                println(p.io, msg)
+                p.last_msg = msg
+            end
         end
     end
 end
