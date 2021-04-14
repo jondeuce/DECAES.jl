@@ -88,39 +88,43 @@ function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T
         #   1) while unlikely, it is possible for the spline to return a negative regularization parameter
         #   2) the μ values are exponentially spaced, leading to poorly conditioned splines
         μ = spline_root(μ_cache, χ²_cache, χ²fact * χ²min)
+        μ = μ === nothing ? μmin : μ
     else
         if length(μ_cache) == 2
             # Solution is contained in [0,μmin]; `spline_root` with two points performs root finding via simple linear interpolation
             μ = spline_root(μ_cache, χ²_cache, χ²fact * χ²min)
+            μ = μ === nothing ? μmin : μ
         else
             # Perform spline fit on log-log scale on data with μ > 0. This solves the above problems with the legacy algorithm:
             #   1) Root is found in terms of logμ, guaranteeing μ > 0
             #   2) logμ is linearly spaced, leading to well-conditioned splines
             logμ = @views spline_root(log.(μ_cache[2:end]), log.(χ²_cache[2:end]), log(χ²fact * χ²min))
-            μ = exp(logμ)
+            μ = logμ === nothing ? μmin : exp(logμ)
         end
     end
 
-    # Compute the final regularized 
+    # Compute the final regularized solution
     χ² = f(μ)
 
     return μ, χ²
 end
 
-function chi2factor_search_from_guess(f, χ²min::T, χ²fact::T, μ₀::T = T(1e-2), μfact = T(1.5)) where {T}
-    # Find interval containing χ²fact * χ²min
+function chi2factor_search_from_guess(f, χ²min::T, χ²fact::T, μ₀::T = T(1e-2), μfact = T(1.5), μmin::T = T(1e-4)) where {T}
+    # Find interval containing χ²target = χ²fact * χ²min
+    χ²target = χ²fact * χ²min
     μnew = μ₀
     χ²new = f(μnew)
     logμ_cache = T[log(μnew)]
     logχ²_cache = T[log(χ²new)]
 
-    if χ²new > χ²fact * χ²min
+    if χ²new > χ²target
         while true
-            μnew /= μfact
+            (logμ_cache[1] ≈ μmin) && break # in case μmin is approximately μ₀/μfact^k for some k, e.g. μ₀ = 1e-2, μfact = 10, μmin = 1e-4
+            μnew = max(μnew/μfact, μmin)
             χ²new = f(μnew)
             pushfirst!(logμ_cache, log(μnew))
             pushfirst!(logχ²_cache, log(χ²new))
-            (χ²new < χ²fact * χ²min) && (length(logμ_cache) >= 3) && break
+            ((χ²new < χ²target && length(logμ_cache) >= 3) || μnew ≈ μmin) && break
         end
     else
         while true
@@ -128,14 +132,21 @@ function chi2factor_search_from_guess(f, χ²min::T, χ²fact::T, μ₀::T = T(1
             χ²new = f(μnew)
             push!(logμ_cache, log(μnew))
             push!(logχ²_cache, log(χ²new))
-            (χ²new > χ²fact * χ²min) && (length(logμ_cache) >= 3) && break
+            (χ²new > χ²target && length(logμ_cache) >= 3) && break
         end
     end
 
-    # Find optimal μ and evaluate at the interpolated solution
-    logμ = spline_root(logμ_cache, logχ²_cache, log(χ²fact * χ²min))
-    μ = exp(logμ)
-    χ² = f(μ)
+    if logμ_cache[1] ≈ log(μmin) && logχ²_cache[1] > log(χ²target)
+        # μ decreased to μmin but χ²target was not reached; linearly interpolate between μ=0 and μ=μmin points
+        μ = spline_root([zero(T), μmin], [log(χ²min), logχ²_cache[1]], log(χ²target))
+        μ = μ === nothing ? μmin : μ
+        χ² = f(μ)
+    else
+        # Find optimal μ and evaluate at the interpolated solution
+        logμ = spline_root(logμ_cache, logχ²_cache, log(χ²target))
+        μ = logμ === nothing ? μmin : exp(logμ)
+        χ² = f(μ)
+    end
 
     return μ, χ²
 end
@@ -185,7 +196,7 @@ function lsqnonneg_reg!(work, C::AbstractMatrix{T}, d::AbstractVector{T}, Chi2Fa
     end
 
     @timeit_debug TIMER() "chi2factor search" begin
-        if true #LEGACY[]
+        if LEGACY[]
             mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor) do μ
                 lsqnonneg_solve!(work, C, d, μ)
             end

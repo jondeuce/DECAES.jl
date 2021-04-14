@@ -1,7 +1,7 @@
 module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
-import Dierckx, DocStringExtensions, NLopt, Parameters, PolynomialRoots, Polynomials, ProgressMeter, ProgressMeter, StaticArrays, SIMD, TimerOutputs, UnsafeArrays
+import Dierckx, DocStringExtensions, NLopt, Parameters, PolynomialRoots, ProgressMeter, ProgressMeter, StaticArrays, SIMD, TimerOutputs, UnsafeArrays
 using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using Parameters: @with_kw, @with_kw_noshow, @unpack
 using ProgressMeter: Progress, BarGlyphs, tty_width, next!, finish!

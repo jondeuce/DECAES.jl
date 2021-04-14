@@ -169,6 +169,26 @@ const LEGACY = Ref(false)
 spline_opt(args...)  = LEGACY[] ? _spline_opt_legacy_slow(args...)  : _spline_opt(args...)
 spline_root(args...) = LEGACY[] ? _spline_root_legacy_slow(args...) : _spline_root(args...)
 
+"""
+Lightweight convenience polynomial type
+"""
+struct Poly{T, A<:AbstractVector{T}}
+    c::A
+end
+Poly(c::Number...) = Poly(c)
+Poly(c::Tuple) = Poly([float.(c)...])
+Poly(c::AbstractVector{Int}) = Poly(float.(c))
+
+coeffs(p::Poly) = p.c
+degree(p::Poly) = length(coeffs(p)) - 1
+(p::Poly)(x) = evalpoly(x, coeffs(p))
+
+shift!(p::Poly, a::Number) = (p.c[1] -= a; return p)
+derivative(p::Poly) = Poly([(i-1) * coeffs(p)[i] for i in 2:degree(p)+1])
+integral(p::Poly{T}) where {T} = Poly([i == 0 ? zero(T) : coeffs(p)[i] / i for i in 0:degree(p)+1])
+PolynomialRoots.roots(p::Poly) = PolynomialRoots.roots(coeffs(p))
+Base.extrema(p::Poly) = PolynomialRoots.roots(derivative(p))
+
 function _make_spline(X, Y)
     # @assert length(X) == length(Y) && length(X) > 1
     deg_spline = min(3, length(X)-1)
@@ -183,7 +203,7 @@ function _build_polynomials(spl)
     for m in 1:k
         coeffs[m+1, :] .= Dierckx.derivative(spl, t, m) ./ factorial(m)
     end
-    return [Polynomials.Polynomial(coeffs[:, j]) for j in 1:size(coeffs, 2)]
+    return [Poly(coeffs[:, j]) for j in 1:size(coeffs, 2)]
 end
 
 # Global minimization through fitting a spline to data (X, Y)
@@ -192,15 +212,14 @@ function _spline_opt(spl::Dierckx.Spline1D)
     polys = _build_polynomials(spl)
     x, y = knots[1], polys[1](0) # initial lefthand point
     @inbounds for (i,p) in enumerate(polys)
-        x0, x1 = knots[i], knots[i+1] # spline section endpoints
-        _x, _y = x1, p(x1 - x0) # check right endpoint
+        x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
+        _x, _y = x₁, p(x₁ - x₀) # check right endpoint
         (_y < y) && (x = _x; y = _y)
-        r = PolynomialRoots.roots(Polynomials.coeffs(Polynomials.derivative(p)))
-        for ri in r
-            if imag(ri) == 0 # real roots only
-                xi = x0 + real(ri)
-                if x0 <= xi <= x1 # filter roots within range
-                    _x, _y = xi, p(real(ri))
+        for rᵢ in extrema(p) # extrema(p) returns the zeros of derivative(p)
+            if imag(rᵢ) ≈ 0 # real roots only
+                xᵢ = x₀ + real(rᵢ)
+                if x₀ <= xᵢ <= x₁ # filter roots within range
+                    _x, _y = xᵢ, p(real(rᵢ))
                     (_y < y) && (x = _x; y = _y)
                 end
             end
@@ -237,10 +256,10 @@ function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     knots = Dierckx.get_knots(spl)
     Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
     x, y = Xs[1], spl(Xs[1])
-    for (i,xi) in enumerate(Xs)
+    for (i,xᵢ) in enumerate(Xs)
         (i == 1) && continue
-        yi = spl(xi)
-        (yi < y) && ((x, y) = (xi, yi))
+        yᵢ = spl(xᵢ)
+        (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
     end
     return @ntuple(x, y)
 end
@@ -250,16 +269,15 @@ _spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector) = _spline_opt_lega
 function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
     knots = Dierckx.get_knots(spl)
     polys = _build_polynomials(spl)
-    (value != 0) && (polys .-= value)
     x = nothing
     @inbounds for (i,p) in enumerate(polys)
-        x0, x1 = knots[i], knots[i+1] # spline section endpoints
-        r = Polynomials.roots(p) # zeros of derivative
-        for ri in r
-            if imag(ri) == 0 # real roots only
-                xi = x0 + real(ri)
-                if x0 <= xi <= x1 # filter roots within range
-                    x = isnothing(x) ? xi : min(x, xi)
+        x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
+        # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
+        for rᵢ in PolynomialRoots.roots(shift!(p, value))
+            if imag(rᵢ) ≈ 0 # real roots only
+                xᵢ = x₀ + real(rᵢ)
+                if x₀ <= xᵢ <= x₁ # filter roots within range
+                    x = isnothing(x) ? xᵢ : min(x, xᵢ)
                 end
             end
         end
@@ -302,11 +320,11 @@ _spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_r
 function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     knots = Dierckx.get_knots(spl)
     Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    x, f = Xs[1], abs(spl(Xs[1]) - value)
-    for (i,xi) in enumerate(Xs)
+    x, y = Xs[1], abs(spl(Xs[1]) - value)
+    for (i,xᵢ) in enumerate(Xs)
         (i == 1) && continue
-        fi = abs(spl(xi) - value)
-        (fi < f) && ((x, f) = (xi, fi))
+        yᵢ = abs(spl(xᵢ) - value)
+        (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
     end
     return x
 end
