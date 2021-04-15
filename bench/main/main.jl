@@ -53,11 +53,10 @@ end
 
 function main()
     args = parse_commandline()
+    outpath(xs...) = joinpath(mkpath(args["output"]), xs...)
 
-    pretty_args = Dict([Symbol(k) => v isa AbstractVector ? join(string.(v), ",") : string(v) for (k,v) in args])
-    @info "Benchmarking DECAES with settings:\n" pretty_args...
-
-    run(`
+    # Benchmarking command
+    cmd = `
     hyperfine
         "JULIA_NUM_THREADS={threads} {julia} --project=.bench.tmp/{julia}/{version} --startup-file=no --quiet --optimize={optimize} -e 'using DECAES; main()' -- @{input} --quiet"
         --prepare "{julia} --startup-file=no -e 'include(\"utils.jl\"); prepare_project(\"{julia}\", \"{version}\")'"
@@ -68,10 +67,32 @@ function main()
         --parameter-list threads $(join(args["threads"], ","))
         --parameter-list optimize $(join(args["optimize"], ","))
         --parameter-list input $(join(args["input"], ","))
-        --export-markdown $(joinpath(mkpath(args["output"]), "results.md"))
-        --export-json $(joinpath(mkpath(args["output"]), "results.json"))
-    `)
+        --export-markdown $(outpath("results.md"))
+        --export-json $(outpath("results.json"))
+    `
     # --show-output
+
+    # Save benchmarking settings/files for future reference
+    open(outpath("settings.txt"); write = true) do io
+        for arg in ARGS
+            startswith(arg, "@") ?
+                println(io, readchomp(arg[2:end])) :
+                println(io, arg)
+        end
+    end
+    open(outpath("run_benchmarks.jl"); write = true) do io
+        println(io, "mkpath(\"$(outpath())\")")
+        println(io, "run($cmd)")
+    end
+    for jl in filter(endswith(".jl"), readdir(@__DIR__; join = true))
+        cp(jl, outpath(basename(jl)); force = true)
+    end
+
+    # Run benchmarks
+    @info "Benchmarking DECAES with settings:\n" * readchomp(outpath("settings.txt"))
+    run(cmd)
+    rm(".bench.tmp"; force = true, recursive = true)
+
     return nothing
 end
 
