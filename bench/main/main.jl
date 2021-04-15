@@ -1,3 +1,4 @@
+using Dates
 using ArgParse
 
 function parse_commandline()
@@ -12,7 +13,7 @@ function parse_commandline()
             arg_type = String
             required = true
         "--output", "-o"
-            help = "output folder"
+            help = "output folder suffix; timestamp will be prepended"
             arg_type = String
             required = true
         "--julia"
@@ -53,7 +54,10 @@ end
 
 function main()
     args = parse_commandline()
-    outpath(xs...) = joinpath(mkpath(args["output"]), xs...)
+    dateformat = "yyyy-mm-dd-T-HH-MM-SS"
+    timestamp = Dates.format(Dates.now(), dateformat)
+    outfolder = timestamp * "_" * args["output"]
+    outpath(xs...) = joinpath(mkpath(outfolder), xs...)
 
     # Benchmarking command
     cmd = `
