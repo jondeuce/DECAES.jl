@@ -533,7 +533,7 @@ function nnls!(
             sm += b[i]^2
         end
     else
-        w .= 0
+        @inbounds w .= 0
     end
     work.rnorm = sqrt(sm)
     work.nsetp = nsetp

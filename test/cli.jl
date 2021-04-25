@@ -410,15 +410,28 @@ end
 
 # Try loading MATLAB.jl and running tests
 try
-    @eval using MATLAB
+    # Check for environment flags
+    mwi_toolbox_path = get(ENV, "DECAES_MWI_TOOLBOX_PATH", "")
+    run_matlab_tests = get(ENV, "DECAES_RUN_MWI_TOOLBOX_TESTS", "") != "0"
 
-    if mfile_exists("T2map_SEcorr_nechoes_2019") && mfile_exists("T2part_SEcorr_2019")
-        matlab_tests()
-    else
-        @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
-            "Modify your default MATLAB path to include these files. For example, add a command such as" *
-            "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
-            "to your startup.m file using the appropriate path for your file system. Then, try testing again."
+    if run_matlab_tests
+        @eval using MATLAB
+
+        if !isempty(mwi_toolbox_path)
+            mxcall(:addpath, 0, mwi_toolbox_path)
+        end
+
+        if mfile_exists("T2map_SEcorr_nechoes_2019") && mfile_exists("T2part_SEcorr_2019")
+            matlab_tests()
+        else
+            @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
+                "Modify your default MATLAB path to include these files, or set the DECAES_MWI_TOOLBOX_PATH environment variable.\n\n" *
+                "For example, on unix-like systems run" *
+                "\n\n    export DECAES_MWI_TOOLBOX_PATH=/path/to/MWI_NNLS_toolbox_0319\n\n" *
+                "before testing DECAES, or add a command such as" *
+                "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
+                "to your startup.m file in MATLAB."
+        end
     end
 catch e
     @warn "Failed to load Julia package MATLAB.jl; skipping UBCMWF MATLAB tests"

@@ -1,8 +1,9 @@
 module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
-import Dierckx, DocStringExtensions, NLopt, Parameters, PolynomialRoots, ProgressMeter, ProgressMeter, StaticArrays, SIMD, TimerOutputs, UnsafeArrays
+import Dierckx, DocStringExtensions, NLopt, LazyArrays, Parameters, PolynomialRoots, ProgressMeter, ProgressMeter, StaticArrays, SIMD, TimerOutputs, UnsafeArrays
 using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
+using LazyArrays: Vcat
 using Parameters: @with_kw, @with_kw_noshow, @unpack
 using ProgressMeter: Progress, BarGlyphs, tty_width, next!, finish!
 using StaticArrays: SVector, MVector, SizedVector, SA
@@ -28,7 +29,7 @@ using .Main
 export MAT, NIfTI, ParXRec
 export T2mapSEcorr, T2mapOptions, T2partSEcorr, T2partOptions
 export EPGdecaycurve, EPGdecaycurve!, EPGdecaycurve_work
-export lsqnonneg, lsqnonneg_reg, lsqnonneg_lcurve
+export lsqnonneg, lsqnonneg_chi2, lsqnonneg_gcv, lsqnonneg_lcurve
 export main
 
 # include("precompile.jl")

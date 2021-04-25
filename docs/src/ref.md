@@ -18,7 +18,8 @@ T2partSEcorr
 
 ```@docs
 lsqnonneg
-lsqnonneg_reg
+lsqnonneg_chi2
+lsqnonneg_gcv
 lsqnonneg_lcurve
 ```
 

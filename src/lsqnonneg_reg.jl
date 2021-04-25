@@ -1,72 +1,123 @@
 ####
-#### Utilities for regularized NNLS
+#### Tikhonov regularized NNLS problem
 ####
 
-# Work buffers
-function lsqnonneg_reg_work(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
-    @assert size(C,1) == length(d)
-    m, n = size(C) # m = output dim (num echoes), n = input dim (num basis functions)
-    d_backproj = zeros(T, m)
-    resid = zeros(T, m)
-    nnls_work = lsqnonneg_work(C, d)
-    C_smooth = zeros(T, m + n, n)
-    d_smooth = zeros(T, m + n)
-    nnls_work_smooth = lsqnonneg_work(C_smooth, d_smooth)
-    A_mu = zeros(T, m, m)
-    Ct_tmp = zeros(T, n, m)
-    CtC_tmp = zeros(T, n, n)
-    x = zeros(T, n)
-    mu_opt = Ref(T(NaN))
-    chi2fact_opt = Ref(T(NaN))
-    return @ntuple(
-        d_backproj, resid, nnls_work,
-        C_smooth, d_smooth, nnls_work_smooth,
-        A_mu, Ct_tmp, CtC_tmp,
-        x, mu_opt, chi2fact_opt
-    )
+struct NNLSTikhonovRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, Vμ <: AbstractVector{T}, MCμ <: AbstractMatrix{T}, Vdμ <: AbstractVector{T}, W}
+    C::MC
+    d::Vd
+    m::Int
+    n::Int
+    μ_diag::Vμ
+    C_smooth::MCμ
+    d_smooth::Vdμ
+    nnls_work::W
+end
+function NNLSTikhonovRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
+    m, n = size(C)
+    μ_diag = zeros(T, n)
+    C_smooth = Vcat(C, Diagonal(μ_diag))
+    d_smooth = Vcat(d, zeros(T, n))
+    nnls_work = NNLSProblem(C_smooth, d_smooth)
+    NNLSTikhonovRegProblem(C, d, m, n, μ_diag, C_smooth, d_smooth, nnls_work)
 end
 
-function lsqnonneg_init!(work, C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
-    @unpack C_smooth, d_smooth = work
-    m, n = size(C)
-    @assert length(d_smooth) == m+n && length(d) == m
-    @assert size(C_smooth) == (m+n, n)
-
-    # Assign top and bottom of C_smooth, d_smooth
-    uview(C_smooth, 1:m, :) .= C
-    uview(C_smooth, m.+(1:n), :) .= 0
-    uview(d_smooth, 1:m) .= d
-    uview(d_smooth, m.+(1:n)) .= 0
-
-    return nothing
+function solve!(work::NNLSTikhonovRegProblem, μ)
+    # Solve NNLS problem
+    @inbounds work.μ_diag .= μ
+    solve!(work.nnls_work)
+    return solution(work)
 end
 
-function lsqnonneg_solve!(work, C::AbstractMatrix{T}, d::AbstractVector{T}, mu = nothing) where {T}
-    @unpack nnls_work, d_backproj, resid = work
-    @unpack nnls_work_smooth, C_smooth, d_smooth = work
-    m, n = size(C)
+residuals!(work::NNLSTikhonovRegProblem) = residuals!(work.nnls_work)
 
-    # Solve
-    if mu === nothing
-        # Non-regularized distribution
-        nnls_workspace, A, b = work.nnls_work, C, d
-    else
-        # Regularized distribution
-        nnls_workspace, A, b = work.nnls_work_smooth, C_smooth, d_smooth
-        set_diag!(uview(A, m.+(1:n), :), mu)
+solution(work::NNLSTikhonovRegProblem) = solution(work.nnls_work)
+
+chi2(work::NNLSTikhonovRegProblem) = sum(abs2, uview(work.nnls_work.resid, 1:work.m))
+
+####
+#### Chi2 method for choosing Tikhonov regularization parameter
+####
+
+struct NNLSChi2RegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W1, W2}
+    C::MC
+    d::Vd
+    m::Int
+    n::Int
+    nnls_work::W1
+    nnls_work_smooth::W2
+end
+function NNLSChi2RegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
+    m, n = size(C)
+    nnls_work = NNLSProblem(C, d)
+    nnls_work_smooth = NNLSTikhonovRegProblem(C, d)
+    NNLSChi2RegProblem(C, d, m, n, nnls_work, nnls_work_smooth)
+end
+
+"""
+    lsqnonneg_chi2(C::AbstractMatrix, d::AbstractVector, Chi2Factor::Real)
+
+Returns the regularized NNLS solution, X, that incurrs an increase in ``\\chi^2`` approximately by a factor of `Chi2Factor`.
+The regularized NNLS problem solved internally is:
+
+```math
+X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu^2 ||x||_2^2
+```
+
+where ``\\mu`` is determined by approximating a solution to the nonlinear equation
+
+```math
+\\frac{\\chi^2(\\mu)}{\\chi^2_{min}} = \\mathrm{Chi2Factor}
+\\quad
+\\text{where}
+\\quad
+\\chi^2_{min} = \\chi^2(\\mu = 0)
+```
+
+# Arguments
+- `C::AbstractMatrix`: Decay basis matrix
+- `d::AbstractVector`: Decay curve data
+- `Chi2Factor::Real`: Desired ``\\chi^2`` increase due to regularization
+
+# Outputs
+- `X::AbstractVector`: Regularized NNLS solution
+- `mu::Real`: Resulting regularization parameter ``\\mu``
+- `Chi2Factor::Real`: Actual increase ``\\chi^2(\\mu)/\\chi^2_{min}``, which will be approximately equal to the input `Chi2Factor`
+"""
+function lsqnonneg_chi2(C, d, Chi2Factor)
+    work = lsqnonneg_chi2_work(C, d)
+    lsqnonneg_chi2!(work, Chi2Factor)
+end
+lsqnonneg_chi2_work(C, d) = NNLSChi2RegProblem(C, d)
+
+function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T) where {T}
+    # Non-regularized solution
+    @timeit_debug TIMER() "Non-Reg. lsqnonneg!" begin
+        solve!(work.nnls_work)
+        residuals!(work.nnls_work)
+        chi2_min = chi2(work.nnls_work)
     end
-    lsqnonneg!(nnls_workspace, A, b)
 
-    # Find predicted curve and calculate residuals and chi-squared
-    mul!(d_backproj, C, nnls_workspace.x)
-    resid .= d .- d_backproj
-    chi2 = sum(abs2, resid)
+    @timeit_debug TIMER() "chi2factor search" begin
+        if LEGACY[]
+            mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor) do μ
+                solve!(work.nnls_work_smooth, μ)
+                residuals!(work.nnls_work_smooth)
+                return chi2(work.nnls_work_smooth)
+            end
+        else
+            mu_final, chi2_final = chi2factor_search_from_guess(chi2_min, Chi2Factor) do μ
+                solve!(work.nnls_work_smooth, μ)
+                residuals!(work.nnls_work_smooth)
+                return chi2(work.nnls_work_smooth)
+            end
+        end
+    end
 
-    return chi2
+    return (x = solution(work.nnls_work_smooth), mu = mu_final, chi2factor = chi2_final/chi2_min)
 end
 
 function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0)) where {T}
-    # Minimize energy of spectrum; loop to find largest mu that keeps chi-squared in desired range
+    # Minimize energy of spectrum; loop to find largest μ that keeps chi-squared in desired range
     μ_cache = T[zero(T)]
     χ²_cache = T[χ²min]
     μnew = μmin
@@ -207,13 +258,9 @@ function lsqnonneg_reg!(work, C::AbstractMatrix{T}, d::AbstractVector{T}, Chi2Fa
         end
     end
 
-    # Assign output
-    work.x .= work.nnls_work_smooth.x
-    work.mu_opt[] = mu_final
-    work.chi2fact_opt[] = chi2_final/chi2_min
-
-    return (x = work.x, mu = work.mu_opt[], chi2factor = work.chi2fact_opt[])
-end
+####
+#### L-curve method for choosing Tikhonov regularization parameter
+####
 
 """
     lsqnonneg_lcurve(C::AbstractMatrix, d::AbstractVector)
@@ -238,60 +285,86 @@ Details of L-curve and GCV methods can be found in:
 - `Chi2Factor::Real`: Resulting increase in ``\\chi^2`` relative to unregularized (``\\mu = 0``) solution
 """
 function lsqnonneg_lcurve(C, d)
-    work = lsqnonneg_reg_work(C, d)
-    lsqnonneg_lcurve!(work, C, d)
+    work = lsqnonneg_lcurve_work(C, d)
+    lsqnonneg_lcurve!(work)
 end
-
-lsqnonneg_lcurve!(work, C, d) = lsqnonneg_gcv!(work, C, d) #TODO
+lsqnonneg_lcurve!(work) = lsqnonneg_gcv!(work) #TODO
+lsqnonneg_lcurve_work(C, d) = lsqnonneg_gcv_work(C, d)
 
 ####
-#### GCV
+#### GCV method for choosing Tikhonov regularization parameter
 ####
+
+struct NNLSGCVRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W1, W2}
+    C::MC
+    d::Vd
+    m::Int
+    n::Int
+    nnls_work::W1
+    nnls_work_smooth::W2
+end
+function NNLSGCVRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
+    m, n = size(C)
+    nnls_work = NNLSProblem(C, d)
+    nnls_work_smooth = NNLSTikhonovRegProblem(C, d)
+    NNLSGCVRegProblem(C, d, m, n, nnls_work, nnls_work_smooth)
+end
 
 function lsqnonneg_gcv(C, d)
-    work = lsqnonneg_reg_work(C, d)
-    lsqnonneg_gcv!(work, C, d)
+    work = lsqnonneg_gcv_work(C, d)
+    lsqnonneg_gcv!(work)
 end
+lsqnonneg_gcv_work(C, d) = NNLSGCVRegProblem(C, d)
 
-function lsqnonneg_gcv!(work, C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
-    # Initialize buffers
-    lsqnonneg_init!(work, C, d)
-
-    # Find mu by minimizing the function G(mu) (GCV method)
+function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}) where {T}
+    # Find μ by minimizing the function G(μ) (GCV method)
     @timeit_debug TIMER() "L-curve Optimization" begin
         opt = NLopt.Opt(:LN_BOBYQA, 1)
         opt.lower_bounds  = [sqrt(eps(T))]
         opt.upper_bounds  = [T(0.1)]
         opt.xtol_rel      = sqrt(eps(T))
-        opt.min_objective = (μ, ∇μ) -> gcv(μ[1], C, d, work)
+        opt.min_objective = (μ, ∇μ) -> gcv!(work, μ[1])
         minf, minx, ret   = NLopt.optimize(opt, [T(1e-2)])
-        mu = minx[1]
-    end
-
-    # Compute the final regularized solution
-    @timeit_debug TIMER() "Final Reg. lsqnonneg!" begin
-        chi2_final = lsqnonneg_solve!(work, C, d, mu)
+        mu_final = minx[1]
     end
 
     # Non-regularized solution
     @timeit_debug TIMER() "Non-Reg. lsqnonneg!" begin
-        chi2_min = lsqnonneg_solve!(work, C, d)
+        solve!(work.nnls_work)
+        residuals!(work.nnls_work)
+        chi2_min = chi2(work.nnls_work)
     end
 
-    # Assign output
-    work.x .= work.nnls_work_smooth.x
-    work.mu_opt[] = mu
-    work.chi2fact_opt[] = chi2_final/chi2_min
+    # Compute the final regularized solution
+    @timeit_debug TIMER() "Final Reg. lsqnonneg!" begin
+        solve!(work.nnls_work_smooth, mu_final)
+        residuals!(work.nnls_work_smooth)
+        chi2_final = chi2(work.nnls_work_smooth)
+    end
 
-    return (x = work.x, mu = work.mu_opt[], chi2factor = work.chi2fact_opt[])
+    return (x = solution(work.nnls_work_smooth), mu = mu_final, chi2factor = chi2_final/chi2_min)
 end
 
-function gcv(μ, C, d, work)
+# Implements equation (32) from:
+#   Analysis of Discrete Ill-Posed Problems by Means of the L-Curve
+#   Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115)
+# 
+# Notation dictionary (this function -> the above work)
+#   C -> A
+#   d -> b
+#   μ -> λ
+#   I -> L (i.e. L == identity here)
+function gcv!(work::NNLSGCVRegProblem, μ)
     # Unpack buffers
-    @unpack A_mu, Ct_tmp, CtC_tmp = work
+    @unpack C, d, m, n = work
+    A_mu = zeros(T, m, m)
+    Ct_tmp = zeros(T, n, m)
+    CtC_tmp = zeros(T, n, n)
 
     # Solve regularized NNLS problem and record chi2 = ||C*X_reg - d||^2 which is returned
-    chi2 = lsqnonneg_solve!(work, C, d, mu)
+    solve!(work.nnls_work_smooth, μ)
+    residuals!(work.nnls_work_smooth)
+    chi2 = chi2(work.nnls_work_smooth)
 
     # Efficient compution of
     #   A_mu = C * (C'C + μ^2*I)^-1 * C'

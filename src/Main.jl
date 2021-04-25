@@ -519,6 +519,14 @@ function redirect_to_files(f, outfile, errfile)
 end
 redirect_to_tempfiles(f) = redirect_to_files(f, tempname() * ".log", tempname() * ".err")
 
+function redirect_to_devnull(f)
+    with_logger(ConsoleLogger(devnull)) do
+        redirect_to_tempfiles() do
+            f()
+        end
+    end
+end
+
 ####
 #### Global constants
 ####

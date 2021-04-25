@@ -53,7 +53,8 @@ Dict{String,Array{Float64,N} where N} with 10 entries:
 See also:
 * [`T2partSEcorr`](@ref)
 * [`lsqnonneg`](@ref)
-* [`lsqnonneg_reg`](@ref)
+* [`lsqnonneg_chi2`](@ref)
+* [`lsqnonneg_gcv`](@ref)
 * [`lsqnonneg_lcurve`](@ref)
 * [`EPGdecaycurve`](@ref)
 """
@@ -245,13 +246,10 @@ function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
     function chi2_alpha_fun(flip_angles, i)
         # First argument `flip_angles` has been used implicitly in creating `decay_basis_set` already
         @timeit_debug TIMER() "lsqnonneg!" begin
-            lsqnonneg!(nnls_work, decay_basis_set[i], decay_data)
+            solve!(nnls_work, decay_basis_set[i], decay_data)
+            residuals!(nnls_work)
+            return chi2(nnls_work)
         end
-        T2_dist_nnls = nnls_work.x
-        mul!(decay_pred, decay_basis_set[i], T2_dist_nnls)
-        residuals .= decay_data .- decay_pred
-        chi2 = sum(abs2, residuals)
-        return chi2
     end
 
     @timeit_debug TIMER() "Surrogate Spline Opt" begin
@@ -310,19 +308,19 @@ end
 # =========================================================
 # T2-distribution fitting
 # =========================================================
-function T2_distribution_work(o::T2mapOptions{T}) where {T}
-    decay_basis_buffer = zeros(T, o.nTE, o.nT2)
-    decay_data_buffer  = zeros(T, o.nTE)
-
+function T2_distribution_work(decay_basis, decay_data, o::T2mapOptions{T}) where {T}
     work = if o.Reg == "no"
         # Fit T2 distribution using unregularized NNLS
-        lsqnonneg_work(decay_basis_buffer, decay_data_buffer)
+        lsqnonneg_work(decay_basis, decay_data)
     elseif o.Reg == "chi2"
-        # Fit T2 distribution using chi2 based regularized NNLS
-        lsqnonneg_reg_work(decay_basis_buffer, decay_data_buffer)
+        # Fit T2 distribution using chi2-based regularized NNLS
+        lsqnonneg_chi2_work(decay_basis, decay_data)
+    elseif o.Reg == "gcv"
+        # Fit T2 distribution using GCV-based regularized NNLS
+        lsqnonneg_gcv_work(decay_basis, decay_data)
     elseif o.Reg == "lcurve"
-        # Fit T2 distribution using lcurve based regularization
-        lsqnonneg_lcurve_work(decay_basis_buffer, decay_data_buffer)
+        # Fit T2 distribution using L-curve-based regularized NNLS
+        lsqnonneg_lcurve_work(decay_basis, decay_data)
     end
 
     return work
@@ -332,25 +330,23 @@ function fit_T2_distribution!(thread_buffer, o::T2mapOptions{T}) where {T}
     @unpack T2_dist_work, decay_basis, decay_data = thread_buffer
     @unpack T2_dist, mu_opt, chi2fact_opt = thread_buffer
 
-    if o.Reg == "no"
+    @unpack x, mu, chi2factor = if o.Reg == "no"
         # Fit T2 distribution using unregularized NNLS
-        lsqnonneg!(T2_dist_work, decay_basis, decay_data)
-        T2_dist       .= T2_dist_work.x
-        mu_opt[]       = T(NaN)
-        chi2fact_opt[] = one(T)
+        (; x = lsqnonneg!(T2_dist_work), mu = zero(T), chi2factor = one(T))
     elseif o.Reg == "chi2"
         # Fit T2 distribution using chi2 based regularized NNLS
-        lsqnonneg_reg!(T2_dist_work, decay_basis, decay_data, o.Chi2Factor)
-        T2_dist       .= T2_dist_work.x
-        mu_opt[]       = T2_dist_work.mu_opt[]
-        chi2fact_opt[] = T2_dist_work.chi2fact_opt[]
+        lsqnonneg_chi2!(T2_dist_work, o.Chi2Factor)
+    elseif o.Reg == "gcv"
+        # Fit T2 distribution using gcv based regularization
+        lsqnonneg_gcv!(T2_dist_work)
     elseif o.Reg == "lcurve"
         # Fit T2 distribution using lcurve based regularization
-        lsqnonneg_lcurve!(T2_dist_work, decay_basis, decay_data)
-        T2_dist       .= T2_dist_work.x
-        mu_opt[]       = T2_dist_work.mu_opt[]
-        chi2fact_opt[] = T2_dist_work.chi2fact_opt[]
+        lsqnonneg_lcurve!(T2_dist_work)
     end
+
+    @inbounds T2_dist .= x
+    mu_opt[]           = mu
+    chi2fact_opt[]     = chi2factor
 
     return nothing
 end
@@ -419,6 +415,8 @@ end
 # Utility functions
 # =========================================================
 function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
+    decay_basis = zeros(T, o.nTE, o.nT2)
+    decay_data  = zeros(T, o.nTE)
     buffer = (
         curr_count       = Ref(0),
         total_count      = sum(>(o.Threshold), @views(image[:,:,:,1])),
@@ -426,13 +424,13 @@ function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
         flip_angles      = range(o.MinRefAngle, T(180); length = o.nRefAngles),
         decay_basis_set  = [zeros(T, o.nTE, o.nT2) for _ in 1:o.nRefAngles],
-        decay_basis      = zeros(T, o.nTE, o.nT2),
-        decay_data       = zeros(T, o.nTE),
+        decay_basis      = decay_basis,
+        decay_data       = decay_data,
         decay_calc       = zeros(T, o.nTE),
         residuals        = zeros(T, o.nTE),
         decay_curve_work = epg_decay_curve_work(o),
         flip_angle_work  = optimize_flip_angle_work(o),
-        T2_dist_work     = T2_distribution_work(o),
+        T2_dist_work     = T2_distribution_work(decay_basis, decay_data, o),
         alpha_opt        = Ref(ifelse(isnothing(o.SetFlipAngle), T(NaN), o.SetFlipAngle)),
         chi2_alpha_opt   = Ref(T(NaN)),
         T2_dist          = zeros(T, o.nT2),

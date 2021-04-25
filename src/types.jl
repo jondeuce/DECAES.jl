@@ -75,9 +75,9 @@ See also:
     nRefAnglesMin::Int = !legacy ? min(5, nRefAngles) : nRefAngles
     @assert 2 <= nRefAnglesMin <= nRefAngles
 
-    "Regularization routine to use. One of \"no\", \"chi2\", or \"lcurve\", representing no regularization, `Chi2Factor`-based Tikhonov regularization, or L-Curve based regularization, respectively."
+    "Regularization routine to use. One of \"no\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, `Chi2Factor`-based Tikhonov regularization, Generalized Cross-Validation method, or L-Curve based regularization, respectively."
     Reg::String = "chi2"
-    @assert Reg ∈ ("no", "chi2", "lcurve")
+    @assert Reg ∈ ("no", "chi2", "gcv", "lcurve")
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
     SetFlipAngle::Union{T,Nothing} = nothing
