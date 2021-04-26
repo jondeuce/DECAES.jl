@@ -29,6 +29,7 @@ UnsafeArrays = "c4a57d5a-5b31-53a6-b365-19f8c011fbd6"
 [compat]
 ArgParse = "1"
 Dierckx = "0.4, 0.5"
+LazyArrays = "0.21"
 LightXML = "0.9"
 LoggingExtras = "0.4"
 MAT = "0.7, 0.8, 0.9, 0.10"
