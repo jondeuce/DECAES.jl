@@ -56,7 +56,7 @@ function construct_householder!(u::AbstractVector{T}, up::T)::T where {T}
     @assert cl > 0
     clinvsq = 1 / cl^2
     sm = zero(T)
-    @simd for i in eachindex(u) #@avx
+    @inbounds @simd for i in eachindex(u) #@avx
         sm += clinvsq * u[i]^2
     end
     cl *= sqrt(sm)
@@ -97,7 +97,7 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
         end
         if sm != 0
             sm *= b
-            @inbounds c[1] += sm * up
+            c[1] += sm * up
             @simd for i in 2:m #@avx
                 c[i] += sm * u[i]
             end
@@ -204,8 +204,8 @@ function load!(work::NNLSWorkspace{T}, A::AbstractMatrix{T}, b::AbstractVector{T
     if size(work.QA, 1) != m || size(work.QA, 2) != n
         resize!(work, m, n)
     end
-    @inbounds work.QA .= A
-    @inbounds work.Qb .= b
+    copyto!(work.QA, A)
+    copyto!(work.Qb, b)
     work
 end
 
@@ -297,8 +297,8 @@ function nnls!(
     n = convert(TI, size(A, 2))
 
     iter = 0
-    x .= 0
-    idx .= 1:n
+    fill!(x, 0)
+    copyto!(idx, 1:n)
 
     iz2 = n
     iz1 = 1
@@ -359,7 +359,7 @@ function nnls!(
                 # COL J IS SUFFICIENTLY INDEPENDENT.  COPY B INTO ZZ, UPDATE ZZ
                 # AND SOLVE FOR ZTEST ( = PROPOSED NEW VALUE FOR X(J) ).
                 # println("copying b into zz")
-                zz .= b
+                copyto!(zz, b)
                 apply_householder!(
                     fastview(A, Ainds[nsetp + 1, j], m - nsetp),
                     up,
@@ -386,7 +386,7 @@ function nnls!(
         # SET Z TO SET P.    UPDATE B,  UPDATE INDICES,  APPLY HOUSEHOLDER
         # TRANSFORMATIONS TO COLS IN NEW SET Z,  ZERO SUBDIAGONAL ELTS IN
         # COL J,  SET W(J)=0.
-        b .= zz
+        copyto!(b, zz)
 
         idx[iz] = idx[iz1]
         idx[iz1] = j
@@ -404,7 +404,7 @@ function nnls!(
         end
 
         if nsetp != m
-            @simd for l in (nsetp + 1):m #@avx
+            @inbounds @simd for l in (nsetp + 1):m #@avx
                 A[l, j] = 0
             end
         end
@@ -509,7 +509,7 @@ function nnls!(
             end
 
             # COPY B( ) INTO ZZ( ).  THEN SOLVE AGAIN AND LOOP BACK.
-            zz .= b
+            copyto!(zz, b)
             jj = solve_triangular_system!(zz, A, idx, nsetp, kk)
         end
         if terminated
@@ -529,11 +529,11 @@ function nnls!(
 
     sm = zero(T)
     if nsetp < m
-        @simd for i in (nsetp + 1):m #@avx
+        @inbounds @simd for i in (nsetp + 1):m #@avx
             sm += b[i]^2
         end
     else
-        @inbounds w .= 0
+        fill!(w, 0)
     end
     work.rnorm = sqrt(sm)
     work.nsetp = nsetp

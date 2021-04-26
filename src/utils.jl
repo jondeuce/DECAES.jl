@@ -10,8 +10,15 @@ normccdf(x::T) where {T} = erfc(x/sqrt(T(2)))/2 # Compliment of normcdf, i.e. 1 
 @inline mul_im(z::Complex) = Complex(-imag(z), real(z)) # optimized i*(a+b*i) = -b+a*i
 
 function set_diag!(A::AbstractMatrix, val)
-    @inbounds for i in 1:min(size(A)...)
+    @inbounds @simd for i in 1:min(size(A)...)
         A[i,i] = val
+    end
+    return A
+end
+
+function set_top!(A::AbstractArray, B::AbstractArray)
+    @inbounds @simd for I in CartesianIndices(B)
+        A[I] = B[I]
     end
     return A
 end
@@ -72,7 +79,7 @@ function tforeach(f, xs; blocksize = 1)
 end
 
 @inline function tforeach_seq(f, xs)
-    @simd ivdep for x in xs
+    @inbounds @simd ivdep for x in xs
         f(x)
     end
 end

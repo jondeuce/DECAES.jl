@@ -247,7 +247,6 @@ function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
         # First argument `flip_angles` has been used implicitly in creating `decay_basis_set` already
         @timeit_debug TIMER() "lsqnonneg!" begin
             solve!(nnls_work, decay_basis_set[i], decay_data)
-            residuals!(nnls_work)
             return chi2(nnls_work)
         end
     end
@@ -344,9 +343,9 @@ function fit_T2_distribution!(thread_buffer, o::T2mapOptions{T}) where {T}
         lsqnonneg_lcurve!(T2_dist_work)
     end
 
-    @inbounds T2_dist .= x
-    mu_opt[]           = mu
-    chi2fact_opt[]     = chi2factor
+    copyto!(T2_dist, x)
+    mu_opt[] = mu
+    chi2fact_opt[] = chi2factor
 
     return nothing
 end

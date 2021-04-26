@@ -697,7 +697,7 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Cplx{T,E
     s_α, c_α, s_½α_sq, c_½α_sq, s_α_½ = T2mat_elements
     @inbounds for i = 2:ETL
         # Perform the flip for all states
-        @inbounds @simd for j in 1:3:3*i-2
+        @simd for j in 1:3:3*i-2
             Vmx, Vmy, Vmz = MPSV[j], MPSV[j+1], MPSV[j+2]
             ms_α_Vtmp  = s_α * mul_im(Vmz)
             s_α_½_Vtmp = s_α_½ * mul_im(Vmy - Vmx)
@@ -709,9 +709,9 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Cplx{T,E
         # Zero out next elements
         if i+1 < ETL
             j = 3*i+1
-            @inbounds MPSV[j]   = 0
-            @inbounds MPSV[j+1] = 0
-            @inbounds MPSV[j+2] = 0
+            MPSV[j]   = 0
+            MPSV[j+1] = 0
+            MPSV[j+2] = 0
         end
 
         # Record the magnitude of the population of F1* as the echo amplitude, allowing for relaxation
@@ -720,9 +720,9 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_Cplx{T,E
         # Allow time evolution of magnetization between pulses
         if (i < ETL)
             # Basic relaxation matrix loop:
-            @inbounds mprev = MPSV[1]
-            @inbounds MPSV[1] = E2 * MPSV[2] # F1* --> F1
-            @inbounds @simd for j in 2:3:3i-1
+            mprev = MPSV[1]
+            MPSV[1] = E2 * MPSV[2] # F1* --> F1
+            @simd for j in 2:3:3i-1
                 m1, m2, m3 = MPSV[j+1], MPSV[j+2], MPSV[j+3]
                 mtmp  = m2
                 m0    = E2 * m3     # F(n)* --> F(n-1)*
@@ -789,7 +789,7 @@ end
         s_α, c_α, s_½α_sq, c_½α_sq, s_α_½ = T2mat_elements
         Vs_α = Vec((-s_α, s_α, -s_α, s_α))
         Vs_α_½ = Vec((-s_α_½, s_α_½, -s_α_½, s_α_½))
-        @inbounds @simd for j in 1:6:3*i-5 # 1+(0:3*(n-2))
+        @simd for j in 1:6:3*i-5 # 1+(0:3*(n-2))
             Vmx = Vec((reim(MPSV[j  ])..., reim(MPSV[j+3])...))
             Vmy = Vec((reim(MPSV[j+1])..., reim(MPSV[j+4])...))
             Vmz = Vec((reim(MPSV[j+2])..., reim(MPSV[j+5])...))
@@ -806,23 +806,21 @@ end
             MPSV[j+5]    = Complex(VMz[3], VMz[4])
         end
         if isodd(i)
-            @inbounds begin
-                j = 3*i-2
-                Vmx, Vmy, Vmz = MPSV[j], MPSV[j+1], MPSV[j+2]
-                ms_α_Vtmp  = s_α * mul_im(Vmz)
-                s_α_½_Vtmp = s_α_½ * mul_im(Vmy - Vmx)
-                MPSV[j]      = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy, -ms_α_Vtmp))
-                MPSV[j+1]    = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy,  ms_α_Vtmp))
-                MPSV[j+2]    = muladd(c_α, Vmz, s_α_½_Vtmp)
-            end
+            j = 3*i-2
+            Vmx, Vmy, Vmz = MPSV[j], MPSV[j+1], MPSV[j+2]
+            ms_α_Vtmp  = s_α * mul_im(Vmz)
+            s_α_½_Vtmp = s_α_½ * mul_im(Vmy - Vmx)
+            MPSV[j]      = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy, -ms_α_Vtmp))
+            MPSV[j+1]    = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy,  ms_α_Vtmp))
+            MPSV[j+2]    = muladd(c_α, Vmz, s_α_½_Vtmp)
         end
 
         # Zero out next elements
         if i+1 < ETL
             j = 3*i+1
-            @inbounds MPSV[j]   = 0
-            @inbounds MPSV[j+1] = 0
-            @inbounds MPSV[j+2] = 0
+            MPSV[j]   = 0
+            MPSV[j+1] = 0
+            MPSV[j+2] = 0
         end
 
         # Record the magnitude of the population of F1* as the echo amplitude, allowing for relaxation
@@ -830,9 +828,9 @@ end
 
         if (i < ETL)
             # Twice loop-unrolled relaxmat loop
-            @inbounds mprev = MPSV[1]
-            @inbounds MPSV[1] = E2 * MPSV[2] # F1* --> F1
-            @inbounds @simd for j in 2:6:3i-4
+            mprev = MPSV[1]
+            MPSV[1] = E2 * MPSV[2] # F1* --> F1
+            @simd for j in 2:6:3i-4
                 m1, m2, m3, m4, m5, m6 = MPSV[j+1], MPSV[j+2], MPSV[j+3], MPSV[j+4], MPSV[j+5], MPSV[j+6]
                 m0    = E2 * m3     # F(n)* --> F(n-1)*
                 m1   *= E1          # Z(n)  --> Z(n)
@@ -846,14 +844,12 @@ end
                 MPSV[j], MPSV[j+1], MPSV[j+2], MPSV[j+3], MPSV[j+4], MPSV[j+5] = m0, m1, m2, m3, m4, m5
             end
             if isodd(i)
-                @inbounds begin
-                    j = 3i-1
-                    m1, m2, m3 = MPSV[j+1], MPSV[j+2], MPSV[j+3]
-                    m0    = E2 * m3     # F(n)* --> F(n-1)*
-                    m1   *= E1          # Z(n)  --> Z(n)
-                    m2    = E2 * mprev  # F(n)  --> F(n+1)
-                    MPSV[j], MPSV[j+1], MPSV[j+2] = m0, m1, m2
-                end
+                j = 3i-1
+                m1, m2, m3 = MPSV[j+1], MPSV[j+2], MPSV[j+3]
+                m0    = E2 * m3     # F(n)* --> F(n-1)*
+                m1   *= E1          # Z(n)  --> Z(n)
+                m2    = E2 * mprev  # F(n)  --> F(n+1)
+                MPSV[j], MPSV[j+1], MPSV[j+2] = m0, m1, m2
             end
         end
     end

@@ -19,31 +19,17 @@ function NNLSProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     NNLSProblem(C, d, m, n, d_backproj, resid, nnls_work)
 end
 
-function solve!(work::NNLSProblem)
+function solve!(work::NNLSProblem, C, d)
     # Solve NNLS problem
-    @unpack C, d, m, n, d_backproj, resid, nnls_work = work
-    NNLS.load!(nnls_work, C, d)
-    NNLS.nnls!(nnls_work)
+    NNLS.load!(work.nnls_work, C, d)
+    NNLS.nnls!(work.nnls_work)
     return solution(work)
 end
-
-function solve!(work::NNLSProblem, C, d)
-    @inbounds work.C .= C
-    @inbounds work.d .= d
-    solve!(work)
-end
-
-function residuals!(work::NNLSProblem)
-    # Calculate predicted curve, calculate residuals, chi-squared
-    @unpack C, d, m, n, d_backproj, resid, nnls_work = work
-    mul!(d_backproj, C, solution(work))
-    @inbounds resid .= d .- d_backproj
-    return resid
-end
+solve!(work::NNLSProblem) = solve!(work, work.C, work.d)
 
 solution(work::NNLSProblem) = work.nnls_work.x
 
-chi2(work::NNLSProblem) = sum(abs2, work.resid)
+chi2(work::NNLSProblem) = work.nnls_work.rnorm^2
 
 """
     lsqnonneg(C::AbstractMatrix, d::AbstractVector)
