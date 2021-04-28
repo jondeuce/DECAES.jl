@@ -238,10 +238,10 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
 
         # Run T2map and T2part through Julia API for comparison
         jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
-        t2map, t2dist = DECAES.Main.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
+        t2map, t2dist = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
             T2mapSEcorr(image; io = io, jl_t2map_kwargs...)
         end
-        t2part = DECAES.Main.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
+        t2part = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
             T2partSEcorr(t2dist; io = io, jl_t2part_kwargs...)
         end
 
@@ -251,7 +251,7 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
             cli_t2map_args = construct_args(paramdict; settings_kwargs_cli...)
 
-            t2maps_cli, t2dist_cli, t2parts_cli = DECAES.Main.redirect_to_tempfiles() do
+            t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_tempfiles() do
                 run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
             end
             t2map_passed = test_compare_t2map((t2map, t2dist), (t2maps_cli, t2dist_cli); rtol = 1e-14)
@@ -273,7 +273,7 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             settings_kwargs_cli[:T2map] = false
             cli_t2part_args = construct_args(paramdict; settings_kwargs_cli...)
 
-            t2maps_cli, t2dist_cli, t2parts_cli = DECAES.Main.redirect_to_tempfiles() do
+            t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_tempfiles() do
                 run_main(t2dist, cli_t2part_args; make_settings_file = make_settings_file)
             end
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
@@ -372,10 +372,10 @@ function matlab_tests()
 
             # Run T2mapSEcorr
             image = DECAES.mock_image(nTE = rand([4,5,20,67]))
-            t2map_out_jl = DECAES.Main.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
+            t2map_out_jl = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
                 T2mapSEcorr(image; io = io, jl_t2map_kwargs...)
             end
-            t2map_out_mat = DECAES.Main.redirect_to_tempfiles() do
+            t2map_out_mat = DECAES.redirect_to_tempfiles() do
                 mxT2mapSEcorr(image; mat_t2map_kwargs...)
             end
             allpassed = test_compare_t2map(t2map_out_jl, t2map_out_mat; rtol = rtol)
@@ -396,10 +396,10 @@ function matlab_tests()
 
             # Run T2partSEcorr
             T2dist = DECAES.mock_T2_dist(nT2 = rand([5,19,20,40,60])) #rand([4,5,40,41]))
-            t2part_jl = DECAES.Main.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
+            t2part_jl = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
                 T2partSEcorr(T2dist; io = io, jl_t2part_kwargs...)
             end
-            t2part_mat = DECAES.Main.redirect_to_tempfiles() do
+            t2part_mat = DECAES.redirect_to_tempfiles() do
                 mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
             end
             allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)

@@ -1,17 +1,3 @@
-module Main
-
-if isdefined(Base, :Experimental) && isdefined(Base.Experimental, Symbol("@optlevel"))
-    @eval Base.Experimental.@optlevel 0
-end
-
-import ..DECAES: T2mapOptions, T2partOptions, T2mapSEcorr, T2partSEcorr, @unpack, @showtime, printheader, printbody, tic, toc
-using ArgParse, Logging, LoggingExtras
-
-include("ParXRec.jl")
-import .ParXRec, MAT, NIfTI
-export ParXRec, MAT, NIfTI
-export main, load_image
-
 """
     main(command_line_args = ARGS)
 
@@ -451,6 +437,19 @@ function try_apply_bet!(image, betpath, betargs)
     return image
 end
 
+"""
+Entrypoint function for compiling DECAES into an executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
+"""
+function julia_main()::Cint
+    try
+        main(ARGS)
+    catch
+        Base.invokelatest(Base.display_error, Base.catch_stack())
+        return 1
+    end
+    return 0
+end
+
 ####
 #### Helper functions
 ####
@@ -540,5 +539,3 @@ const T2PART_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2partOptions{Float64}) .
 const ARGPARSE_SETTINGS = create_argparse_settings(legacy = false, add_defaults = false)
 const ARGPARSE_SETTINGS_DECAES = create_argparse_settings(legacy = false, add_defaults = true)
 const ARGPARSE_SETTINGS_LEGACY = create_argparse_settings(legacy = true, add_defaults = true)
-
-end # module Main
