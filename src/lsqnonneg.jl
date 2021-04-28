@@ -2,21 +2,17 @@
 #### Unregularized NNLS problem
 ####
 
-struct NNLSProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, Vdp <: AbstractVector{T}, Vr <: AbstractVector{T}, W}
+struct NNLSProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W}
     C::MC
     d::Vd
     m::Int
     n::Int
-    d_backproj::Vdp
-    resid::Vr
     nnls_work::W
 end
 function NNLSProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
-    d_backproj = zeros(T, m)
-    resid = zeros(T, m)
     nnls_work = NNLS.NNLSWorkspace(C, d)
-    NNLSProblem(C, d, m, n, d_backproj, resid, nnls_work)
+    NNLSProblem(C, d, m, n, nnls_work)
 end
 
 function solve!(work::NNLSProblem, C, d)

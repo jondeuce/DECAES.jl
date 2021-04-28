@@ -10,14 +10,14 @@ normccdf(x::T) where {T} = erfc(x/sqrt(T(2)))/2 # Compliment of normcdf, i.e. 1 
 @inline mul_im(z::Complex) = Complex(-imag(z), real(z)) # optimized i*(a+b*i) = -b+a*i
 
 function set_diag!(A::AbstractMatrix, val)
-    @inbounds @simd for i in 1:min(size(A)...)
+    @inbounds @simd ivdep for i in 1:min(size(A)...)
         A[i,i] = val
     end
     return A
 end
 
 function set_top!(A::AbstractArray, B::AbstractArray)
-    @inbounds @simd for I in CartesianIndices(B)
+    @inbounds @simd ivdep for I in CartesianIndices(B)
         A[I] = B[I]
     end
     return A
@@ -173,8 +173,8 @@ end
 # For direct comparison of results with the MATLAB version, the brute force
 # version is implimented and can be used by setting the LEGACY flag.
 const LEGACY = Ref(false)
-spline_opt(args...)  = LEGACY[] ? _spline_opt_legacy_slow(args...)  : _spline_opt(args...)
-spline_root(args...) = LEGACY[] ? _spline_root_legacy_slow(args...) : _spline_root(args...)
+spline_opt(args...; kwargs...)  = LEGACY[] ? _spline_opt_legacy_slow(args...; kwargs...)  : _spline_opt(args...; kwargs...)
+spline_root(args...; kwargs...) = LEGACY[] ? _spline_root_legacy_slow(args...; kwargs...) : _spline_root(args...; kwargs...)
 
 """
 Lightweight convenience polynomial type
@@ -196,9 +196,8 @@ integral(p::Poly{T}) where {T} = Poly([i == 0 ? zero(T) : coeffs(p)[i] / i for i
 PolynomialRoots.roots(p::Poly) = PolynomialRoots.roots(coeffs(p))
 Base.extrema(p::Poly) = PolynomialRoots.roots(derivative(p))
 
-function _make_spline(X, Y)
+function _make_spline(X, Y; deg_spline = min(3, length(X)-1))
     # @assert length(X) == length(Y) && length(X) > 1
-    deg_spline = min(3, length(X)-1)
     spl = Dierckx.Spline1D(X, Y; k = deg_spline)
 end
 
@@ -235,7 +234,7 @@ function _spline_opt(spl::Dierckx.Spline1D)
 
     return @ntuple(x, y)
 end
-_spline_opt(X::AbstractVector, Y::AbstractVector) = _spline_opt(_make_spline(X, Y))
+_spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt(_make_spline(X, Y; deg_spline))
 
 # MATLAB spline optimization performs global optimization by sampling the spline
 # fit to data (X, Y) at points X[1]:0.001:X[end], and uses the minimum value.
@@ -255,7 +254,7 @@ function _spline_opt_legacy(spl::Dierckx.Spline1D)
 
     return @ntuple(x, y)
 end
-_spline_opt_legacy(X::AbstractVector, Y::AbstractVector) = _spline_opt_legacy(_make_spline(X, Y))
+_spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt_legacy(_make_spline(X, Y; deg_spline))
 
 # Similar to above, but removes the extra trick and instead performs
 # exactly what the MATLAB implementation does
@@ -270,7 +269,7 @@ function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     end
     return @ntuple(x, y)
 end
-_spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector) = _spline_opt_legacy_slow(_make_spline(X, Y))
+_spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt_legacy_slow(_make_spline(X, Y; deg_spline))
 
 # Root finding through fitting a spline to data (X, Y)
 function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
@@ -298,7 +297,7 @@ function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
 
     return x
 end
-_spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0) = _spline_root(_make_spline(X, Y), value)
+_spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X)-1)) = _spline_root(_make_spline(X, Y; deg_spline), value)
 
 # Brute force root finding through fitting a spline to data (X, Y):
 # MATLAB implementation of spline root finding performs root finding by sampling the
@@ -320,7 +319,7 @@ function _spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
 
     return x
 end
-_spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_root_legacy(_make_spline(X, Y), value)
+_spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = _spline_root_legacy(_make_spline(X, Y; deg_spline), value)
 
 # Similar to above, but removes the extra trick and instead performs
 # exactly what the MATLAB implementation does
@@ -335,7 +334,7 @@ function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     end
     return x
 end
-_spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0) = _spline_root_legacy_slow(_make_spline(X, Y), value)
+_spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = _spline_root_legacy_slow(_make_spline(X, Y; deg_spline), value)
 
 # Perform global optimization over a function `f` which may be evaluated only
 # on elements of a discrete vector `X` using surrogate spline functions.
