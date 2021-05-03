@@ -43,6 +43,12 @@ function Base.copyto!(B::AbstractMatrix{T}, A::TikhonovPaddedMatrix{T}) where {T
     return B
 end
 
+cache!(cache::AbstractArray, x, f) = cache !== nothing && push!(cache, (; x, f))
+cache!(cache::AbstractDict, x, f) = cache !== nothing && (cache[x] = f)
+
+lin_interp(x, x₁, x₂, y₁, y₂) = y₁ + (y₂ - y₁) * (x - x₁)  / (x₂ - x₁)
+exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x₁)  / (x₂ - x₁))
+
 ####
 #### Tikhonov regularized NNLS problem
 ####
@@ -72,15 +78,17 @@ end
 
 solution(work::NNLSTikhonovRegProblem) = solution(work.nnls_work)
 
+resnorm_sq(work::NNLSTikhonovRegProblem) = chi2(work)
+resnorm(work::NNLSTikhonovRegProblem) = sqrt(resnorm_sq(work))
+
+seminorm_sq(work::NNLSTikhonovRegProblem) = solution(work) ⋅ solution(work)
+seminorm(work::NNLSTikhonovRegProblem) = sqrt(seminorm_sq(work))
+
 loss(work::NNLSTikhonovRegProblem) = chi2(work.nnls_work)
 
-function regularization(work::NNLSTikhonovRegProblem)
-    μ = mu(work)
-    x = solution(work)
-    return μ^2 * (x ⋅ x)
-end
+reg(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work)
 
-chi2(work::NNLSTikhonovRegProblem) = max(loss(work) - regularization(work), 0)
+chi2(work::NNLSTikhonovRegProblem) = max(loss(work) - reg(work), 0)
 
 # Extract columns spanning solution space of regularized NNLS problem
 function subproblem(work::NNLSTikhonovRegProblem{T}) where {T}
@@ -92,7 +100,7 @@ function subproblem(work::NNLSTikhonovRegProblem{T}) where {T}
     return TikhonovPaddedMatrix(C[:,Jnz], μ), PaddedVector(d, nnz), x[Jnz]
 end
 
-function ∇regularization(work::NNLSTikhonovRegProblem)
+function ∇reg(work::NNLSTikhonovRegProblem)
     @unpack C, d = work
     μ = mu(work)
     x = solution(work)
@@ -110,14 +118,15 @@ function chi2factor_relerr!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = noth
     μ = exp(logμ)
     solve!(work, μ)
     χ² = chi2(work)
-    relerr = χ² / χ²target - 1
+    relerr = log(χ² / χ²target) # better behaved than χ² / χ²target - 1 for large χ²
     if ∇logμ !== nothing && length(∇logμ) > 0
-        ∂χ²_∂logμ = ∇regularization(work)
-        ∂relerr_∂logμ = μ * ∂χ²_∂logμ / χ²target
+        ∂χ²_∂logμ = ∇reg(work)
+        ∂relerr_∂logμ = μ * ∂χ²_∂logμ / χ²
         @inbounds ∇logμ[1] = ∂relerr_∂logμ
     end
     return relerr
 end
+chi2factor_relerr⁻¹(relerr; χ²target) = χ²target * exp(relerr)
 
 function chi2factor_loss!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = nothing; χ²target)
     relerr = chi2factor_relerr!(work, logμ, ∇logμ; χ²target)
@@ -204,7 +213,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T) where {T}
             f = logμ -> chi2factor_relerr!(work.nnls_work_smooth, logμ; χ²target = Chi2Factor * chi2_min)
             cache = NamedTuple{(:x, :f), NTuple{2,T}}[]
             a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6, cache)
-            bisect(f, a, b, fa, fb; atol = T(0.25), cache)
+            bisect(f, a, b, fa, fb; atol = T(0.05), cache)
 
             # Spline rootfinding on evaluated points to improve accuracy
             sort!(cache; by = d -> d.x)
@@ -214,7 +223,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T) where {T}
             # Return regularization which minimizes relerr
             _, i = findmin([abs(d.f) for d in cache])
             logmu_final, relerr_final = cache[i]
-            mu_final, chi2_final = exp(logmu_final), Chi2Factor * chi2_min * (relerr_final + 1)
+            mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target = Chi2Factor * chi2_min)
 
             #= Optimize using NLopt
             # Gradient-free:
@@ -349,11 +358,11 @@ end
 
 function secant_method(f, xs; atol = zero(float(real(first(xs)))), rtol = 8*eps(one(float(real(first(xs))))), maxiters = 1000, cache = nothing)
 
-    if length(xs) == 1 # secant needs x0, x1; only x0 given
-        a = float(xs[1])
-        h = eps(one(real(a)))^(1/3)
+    if length(xs) == 1 # secant needs a, b; only a given
+        a  = float(xs[1])
+        h  = eps(one(real(a)))^(1/3)
         da = h * oneunit(a) + abs(a) * h^2 # adjust for if eps(a) > h
-        b = a + da
+        b  = a + da
     else
         a, b = promote(float(xs[1]), float(xs[2]))
     end
@@ -394,44 +403,44 @@ end
 
 function bisection_method(f, a::Number, b::Number; atol = nothing, rtol = nothing, cache = nothing, maxiters = 1000)
 
-    x1, x2 = float.((a,b))
-    y1, y2 = f(x1), f(x2)
-    cache!(cache, x1, y1)
-    cache!(cache, x2, y2)
+    x₁, x₂ = float.((a,b))
+    y₁, y₂ = f(x₁), f(x₂)
+    cache!(cache, x₁, y₁)
+    cache!(cache, x₂, y₂)
 
-    T = eltype(x1)
+    T = eltype(x₁)
     atol = atol === nothing ? zero(T) : abs(atol)
     rtol = rtol === nothing ? zero(one(T)) : abs(rtol)
 
-    bisect(f, x1, x2, y1, y2; atol, rtol, cache, maxiters)
+    bisect(f, x₁, x₂, y₁, y₂; atol, rtol, cache, maxiters)
 end
 
-function bisect(f, x1::T, x2::T, y1::T, y2::T; atol = zero(T), rtol = zero(one(T)), cache = nothing, maxiters = 1000) where {T}
+function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; atol = zero(T), rtol = zero(one(T)), cache = nothing, maxiters = 1000) where {T}
 
-    y1 * y2 >= 0 && return (x1, y1) # arbitrary
+    y₁ * y₂ >= 0 && return (x₁, y₁) # arbitrary
 
-    if y2 < 0
-        x1, x2, y1, y2 = x2, x1, y2, y1
+    if y₂ < 0
+        x₁, x₂, y₁, y₂ = x₂, x₁, y₂, y₁
     end
 
-    xm = (x1+x2)/2
+    xm = (x₁ + x₂)/2
     ym = f(xm)
     cache!(cache, xm, ym)
 
     cnt = 1
     while cnt < maxiters
 
-        if iszero(ym) || isnan(ym) || abs(x1 - x2) <= atol + max(abs(x1), abs(x2)) * rtol
+        if iszero(ym) || isnan(ym) || abs(x₁ - x₂) <= atol + max(abs(x₁), abs(x₂)) * rtol
             return (xm, ym)
         end
 
         if ym < 0
-            x1, y1 = xm, ym
+            x₁, y₁ = xm, ym
         else
-            x2, y2 = xm, ym
+            x₂, y₂ = xm, ym
         end
 
-        xm = (x1+x2)/2
+        xm = (x₁ + x₂)/2
         ym = f(xm)
         cache!(cache, xm, ym)
 
@@ -476,11 +485,22 @@ function bracketing_interval(f, a, δ, dilate = 1; maxiters = 1000, cache = noth
     return a, b, fa, fb
 end
 
-cache!(cache, x, f) = cache !== nothing && push!(cache, (; x, f))
-
 ####
 #### L-curve method for choosing Tikhonov regularization parameter
 ####
+
+struct NNLSLCurveRegProblem{T, N, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W}
+    C::MC
+    d::Vd
+    m::Int
+    n::Int
+    nnls_work_cache::NTuple{N,W}
+end
+function NNLSLCurveRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}, ::Val{N} = Val(3)) where {T,N}
+    m, n = size(C)
+    nnls_work_cache = ntuple(_ -> NNLSTikhonovRegProblem(C, d), N)
+    NNLSLCurveRegProblem(C, d, m, n, nnls_work_cache)
+end
 
 """
     lsqnonneg_lcurve(C::AbstractMatrix, d::AbstractVector)
@@ -508,8 +528,352 @@ function lsqnonneg_lcurve(C, d)
     work = lsqnonneg_lcurve_work(C, d)
     lsqnonneg_lcurve!(work)
 end
-lsqnonneg_lcurve!(work) = lsqnonneg_gcv!(work) #TODO
-lsqnonneg_lcurve_work(C, d) = lsqnonneg_gcv_work(C, d)
+lsqnonneg_lcurve_work(C, d) = NNLSLCurveRegProblem(C, d)
+
+function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
+    # Compute the regularization using the L-curve method
+    logmu_bounds = (T(-8), T(2))
+    cache_idx = Ref(1)
+    logmu_final = lcurve_corner!(logmu_bounds...) do μ
+        cache_idx[] = mod1(cache_idx[] + 1, N)
+        nnls_work = work.nnls_work_cache[cache_idx[]]
+        solve!(nnls_work, μ)
+        ξ = log(resnorm(nnls_work))
+        η = log(seminorm(nnls_work))
+        return SA{T}[ξ, η]
+    end
+    mu_final = exp(logmu_final)
+    x_idx = findfirst(nnls_work -> mu_final ≈ mu(nnls_work), work.nnls_work_cache)
+    x_final = x_idx === nothing ?
+        solve!(work.nnls_work_cache[1], mu_final) :
+        solution(work.nnls_work_cache[x_idx])
+    return (x = x_final, mu = mu_final, chi2factor = T(NaN))
+end
+
+"""
+    lcurve_corner!(f, xlow, xhigh)
+
+Find the corner of the L-curve via curvature maximization.
+
+The implementation follows Algorithm 1 from the following work:
+
+    A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”
+    IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
+"""
+function lcurve_corner!(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.1, Ptol::T = 0.05, Ctol::T = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
+
+    # Initialize
+    msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [cache[x].C for x in state.x⃗])))
+    cache === nothing && (cache = Dict{T,NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}}())
+    state = LCurveCornerState(f, T(xlow), T(xhigh), cache; kwargs...)
+    state_cache = backtracking ? [state] : nothing
+
+    # Tolerances are relative to initial curve size
+    Ptopleft, Pbottomright = state.P⃗[1], state.P⃗[4]
+    Ptol = norm(Ptopleft - Pbottomright) * Ptol
+    Ctol = norm(Ptopleft - Pbottomright) * Ctol
+
+    # For very small regularization, points on the L-curve may be extremely close,
+    # and curvature calculations will be highly ill-posed. Similarly, while it should
+    # not typically occur, additionally check for points on the L-curve becoming
+    # extremely close for large regularization. Points which don't satisfy `Pfilter`
+    # are assigned curvature -Inf.
+    Pfilter = P -> min(norm(P - Ptopleft), norm(P - Pbottomright)) > Ctol
+    update_curvature!(state, cache; Pfilter)
+    msg("Starting", state)
+
+    while true
+        if backtracking
+            # Find state with minimum diameter which contains the current best estimate maximum curvature point
+            _, (x, (P, C)) = findmax(((x, (P, C)),) -> C, cache)
+            for s in state_cache
+                if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
+                    state = s
+                end
+            end
+        end
+
+        # Move state toward region of lower curvature
+        if cache[state.x⃗[2]].C > cache[state.x⃗[3]].C
+            state = move_left(f, state, cache)
+            update_curvature!(state, cache; Pfilter)
+            msg("C₂ > C₃; moved left", state)
+        else
+            state = move_right(f, state, cache)
+            update_curvature!(state, cache; Pfilter)
+            msg("C₃ ≥ C₂; moved right", state)
+        end
+        backtracking && push!(state_cache, state)
+        is_converged(state; xtol, Ptol) && break
+    end
+
+    if refine
+        x = refine!(f, state, cache; Pfilter)
+        msg("Converged; refined solution", state)
+    else
+        x = cache[state.x⃗[2]].C > cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
+        msg("Converged", state)
+    end
+
+    return x
+end
+
+struct LCurveCornerState{T, V <: SVector{2,T}}
+    x⃗::SVector{4,T} # grid of regularization parameters
+    P⃗::SVector{4,V} # points (residual norm, solution seminorm) evaluated at x⃗
+end
+function LCurveCornerState(f, x₁::T, x₄::T, cache = nothing) where {T}
+    x₂   = (T(φ) * x₁ + x₄) / (T(φ) + 1)
+    x₃   = x₁ + (x₄ - x₂)
+    x⃗    = SA{T}[x₁, x₂, x₃, x₄]
+    P⃗    = f.(exp.(x⃗))
+    foreach(i -> cache!(cache, x⃗[i], (P = P⃗[i], C = T(-Inf))), 1:4)
+    return LCurveCornerState(x⃗, P⃗)
+end
+
+is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x⃗[1]) < xtol || norm(state.P⃗[1] - state.P⃗[4]) < Ptol
+
+function maybecall!(f, x::T, state::LCurveCornerState{T}, cache) where {T}
+    for (_x, (_P, _C)) in cache
+        x ≈ _x && return _P
+    end
+    P = f(exp(x)) # only recalculate if not cached
+    cache!(cache, x, (P = P, C = T(-Inf)))
+    return P
+end
+
+function move_left(f, state::LCurveCornerState{T}, cache) where {T}
+    @unpack x⃗, P⃗ = state
+    x⃗ = SVector(x⃗[1], (T(φ) * x⃗[1] + x⃗[3]) / (T(φ) + 1), x⃗[2], x⃗[3])
+    P⃗ = SVector(P⃗[1], maybecall!(f, x⃗[2], state, cache), P⃗[2], P⃗[3]) # only P⃗[2] is recalculated
+    return LCurveCornerState(x⃗, P⃗)
+end
+
+function move_right(f, state::LCurveCornerState{T}, cache) where {T}
+    @unpack x⃗, P⃗ = state
+    x⃗ = SVector(x⃗[2], x⃗[3], x⃗[2] + (x⃗[4] - x⃗[3]), x⃗[4])
+    P⃗ = SVector(P⃗[2], P⃗[3], maybecall!(f, x⃗[3], state, cache), P⃗[4]) # only P⃗[3] is recalculated
+    return LCurveCornerState(x⃗, P⃗)
+end
+
+function update_curvature!(state::LCurveCornerState{T}, cache; Pfilter = nothing, menger_curvature = true, global_search = false) where {T}
+    @unpack x⃗, P⃗ = state
+    Cfun(P₋, P, P₊) = menger_curvature ?
+        menger(P₋, P, P₊) :
+        360 - rad2deg(kahan_angle(P₋, P, P₊))
+    for i in 1:4
+        x, P, C = x⃗[i], P⃗[i], T(-Inf)
+        if Pfilter === nothing || Pfilter(P)
+            if global_search
+                # Search for maximum curvature over all neighbours
+                for (x₋, (P₋, _)) in cache, (x₊, (P₊, _)) in cache
+                    (x₋ < x⃗[i] < x₊) && (C = max(C, Cfun(P₋, P, P₊)))
+                end
+            else
+                # Compute curvature from nearest neighbours
+                _, (x₋, (P₋, C₋)) = findmin(((x₋, (P₋, C₋)),) -> x₋ >= x ? T(Inf) : x - x₋, cache)
+                _, (x₊, (P₊, C₊)) = findmin(((x₊, (P₊, C₊)),) -> x₊ <= x ? T(Inf) : x₊ - x, cache)
+                C = Cfun(P₋, P, P₊)
+            end
+        end
+        cache[x] = (; P, C)
+    end
+    return state
+end
+
+function refine!(f, state::LCurveCornerState{T}, cache; Pfilter = nothing, analytical = false) where {T}
+    # Fit spline to (negative) curvature estimates on grid and minimize over the spline
+    if analytical
+        x_opt, _, _ = maximize_curvature(state)
+    else
+        C_spl = _make_spline(state.x⃗, [-cache[x].C for x in state.x⃗])
+        x_opt, _ = spline_opt(C_spl)
+    end
+    maybecall!(f, x_opt, state, cache)
+    update_curvature!(state, cache; Pfilter)
+    _, (x_opt, (P_opt, C_opt)) = findmax(((x,(P,C)),) -> C, cache)
+    return x_opt
+end
+
+function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}
+    Δⱼₖ, Δₖₗ, Δₗⱼ = Pⱼ - Pₖ, Pₖ - Pₗ, Pₗ - Pⱼ
+    P̄ⱼP̄ₖ, P̄ₖP̄ₗ, P̄ₗP̄ⱼ = Δⱼₖ ⋅ Δⱼₖ, Δₖₗ ⋅ Δₖₗ, Δₗⱼ ⋅ Δₗⱼ
+    Cₖ = 2 * (Δⱼₖ × Δₖₗ) / √(P̄ⱼP̄ₖ * P̄ₖP̄ₗ * P̄ₗP̄ⱼ)
+end
+
+function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2,T}}
+    if interp_uniform
+        h  = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / T(φ)
+        h₋ = h₊ = h
+        x₋, x₀, x₊ = xₖ - h, xₖ, xₖ + h
+        P₀ = Pₖ
+        P₋ = exp_interp.(x₋, xⱼ, xₖ, Pⱼ, Pₖ)
+        P₊ = exp_interp.(x₊, xₖ, xₗ, Pₖ, Pₗ)
+    else
+        P₋, P₀, P₊ = Pⱼ, Pₖ, Pₗ
+        x₋, x₀, x₊ = xⱼ, xₖ, xₗ
+        h₋, h₊ = x₀ - x₋, x₊ - x₀
+    end
+    ξ₋, ξ₀, ξ₊ = P₋[1], P₀[1], P₊[1]
+    η₋, η₀, η₊ = P₋[2], P₀[2], P₊[2]
+
+    if linear_deriv
+        ξ′  = (ξ₊ - ξ₋) / (h₊ + h₋)
+        η′  = (η₊ - η₋) / (h₊ + h₋)
+    else
+        ξ′ = (h₋^2 * ξ₊ + (h₊ + h₋) * (h₊ - h₋) * ξ₀ - h₊^2 * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
+        η′ = (h₋^2 * η₊ + (h₊ + h₋) * (h₊ - h₋) * η₀ - h₊^2 * η₋) / (h₊ * h₋ * (h₊ + h₋))
+    end
+
+    ξ′′ = 2 * (h₋ * ξ₊ - (h₊ + h₋) * ξ₀ + h₊ * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
+    η′′ = 2 * (h₋ * η₊ - (h₊ + h₋) * η₀ + h₊ * η₋) / (h₊ * h₋ * (h₊ + h₋))
+
+    return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
+end
+
+function menger(f; h = 1e-3)
+    function menger_curvature_inner(x)
+        fⱼ, fₖ, fₗ = f(x-h), f(x), f(x+h)
+        Pⱼ, Pₖ, Pₗ = SA[x-h,fⱼ], SA[x,fₖ], SA[x+h,fₗ]
+        menger(Pⱼ, Pₖ, Pₗ)
+    end
+end
+
+function menger(x, y; h = 1e-3)
+    function menger_curvature_inner(t)
+        x₋, x₀, x₊ = x(t-h), x(t), x(t+h)
+        y₋, y₀, y₊ = y(t-h), y(t), y(t+h)
+        x′, x′′ = (x₊ - x₋) / 2h, (x₊ - 2x₀ + x₋) / h^2
+        y′, y′′ = (y₊ - y₋) / 2h, (y₊ - 2y₀ + y₋) / h^2
+        return (x′ * y′′ - y′ * x′′) / √((x′^2 + y′^2)^3)
+    end
+end
+
+function menger(x::Dierckx.Spline1D, y::Dierckx.Spline1D)
+    function menger_curvature_inner(t)
+        x′  = Dierckx.derivative(x, t; nu = 1)
+        x′′ = Dierckx.derivative(x, t; nu = 2)
+        y′  = Dierckx.derivative(y, t; nu = 1)
+        y′′ = Dierckx.derivative(y, t; nu = 2)
+        return (x′ * y′′ - y′ * x′′) / √((x′^2 + y′^2)^3)
+    end
+end
+
+function menger(y::Dierckx.Spline1D)
+    function menger_curvature_inner(t)
+        y′  = Dierckx.derivative(y, t; nu = 1)
+        y′′ = Dierckx.derivative(y, t; nu = 2)
+        return y′′ / √((1 + y′^2)^3)
+    end
+end
+
+function maximize_curvature(state::LCurveCornerState{T}) where {T}
+    # Maximize curvature and transform back from t-space to x-space
+    @unpack x⃗, P⃗ = state
+    t₁, t₂, t₃, t₄ = T(0), 1/T(3), 2/T(3), T(1)
+    t_opt, P_opt, C_opt = maximize_curvature(P⃗...)
+    x_opt =
+        t₁ <= t_opt < t₂ ? lin_interp(t_opt, t₁, t₂, x⃗[1], x⃗[2]) :
+        t₂ <= t_opt < t₃ ? lin_interp(t_opt, t₂, t₃, x⃗[2], x⃗[3]) :
+        lin_interp(t_opt, t₃, t₄, x⃗[3], x⃗[4])
+    return x_opt
+end
+
+function maximize_curvature(P₁::V, P₂::V, P₃::V, P₄::V; bezier = true) where {T, V <: SVector{2,T}}
+    # Analytically maximize curvature of parametric cubic spline fit to data.
+    #   see: https://cs.stackexchange.com/a/131032
+    a, e = P₁[1], P₁[2]
+    b, f = P₂[1], P₂[2]
+    c, g = P₃[1], P₃[2]
+    d, h = P₄[1], P₄[2]
+
+    if bezier
+        ξ = t -> a*(1-t)^3+3*b*(1-t)^2*t+3*c*(1-t)*t^2+d*t^3
+        η = t -> e*(1-t)^3+3*f*(1-t)^2*t+3*g*(1-t)*t^2+h*t^3
+        P = t -> SA{T}[ξ(t), η(t)]
+
+        # In order to keep the equations in a more compact form, introduce the following substitutions:
+        m = d-3*c+3*b-a
+        n = c-2*b+a
+        o = b-a
+        p = h-3*g+3*f-e
+        q = g-2*f+e
+        r = f-e
+    else
+        ξ = t -> a*(t-1/3)*(t-2/3)*(t-1/1)/T((0/1-1/3)*(0/1-2/3)*(0/1-1/1)) + # (-9  * a * t^3)/2  + (+18 * a * t^2)/2 + (-11 * a * t)/2 + a
+                 b*(t-0/1)*(t-2/3)*(t-1/1)/T((1/3-0/1)*(1/3-2/3)*(1/3-1/1)) + # (+27 * b * t^3)/2  + (-45 * b * t^2)/2 + (+18 * b * t)/2 +
+                 c*(t-0/1)*(t-1/3)*(t-1/1)/T((2/3-0/1)*(2/3-1/3)*(2/3-1/1)) + # (-27 * c * t^3)/2  + (+36 * c * t^2)/2 + ( -9 * c * t)/2 +
+                 d*(t-0/1)*(t-1/3)*(t-2/3)/T((1/1-0/1)*(1/1-1/3)*(1/1-2/3))   # (+9  * d * t^3)/2  + ( -9 * d * t^2)/2 + ( +2 * d * t)/2
+        η = t -> e*(t-1/3)*(t-2/3)*(t-1/1)/T((0/1-1/3)*(0/1-2/3)*(0/1-1/1)) + # (-9  * e * t^3)/2  + (+18 * e * t^2)/2 + (-11 * e * t)/2 + e
+                 f*(t-0/1)*(t-2/3)*(t-1/1)/T((1/3-0/1)*(1/3-2/3)*(1/3-1/1)) + # (+27 * f * t^3)/2  + (-45 * f * t^2)/2 + (+18 * f * t)/2 +
+                 g*(t-0/1)*(t-1/3)*(t-1/1)/T((2/3-0/1)*(2/3-1/3)*(2/3-1/1)) + # (-27 * g * t^3)/2  + (+36 * g * t^2)/2 + ( -9 * g * t)/2 +
+                 h*(t-0/1)*(t-1/3)*(t-2/3)/T((1/1-0/1)*(1/1-1/3)*(1/1-2/3))   # (+9  * h * t^3)/2  + ( -9 * h * t^2)/2 + ( +2 * h * t)/2
+        P = t -> SA{T}[ξ(t), η(t)]
+
+        # In order to keep the equations in a more compact form, introduce the following substitutions:
+        m = ( -9 * a + 27 * b - 27 * c + 9 * d)/2
+        n = (+18 * a - 45 * b + 36 * c - 9 * d)/6
+        o = (-11 * a + 18 * b -  9 * c + 2 * d)/6
+        p = ( -9 * e + 27 * f - 27 * g + 9 * h)/2
+        q = (+18 * e - 45 * f + 36 * g - 9 * h)/6
+        r = (-11 * e + 18 * f -  9 * g + 2 * h)/6
+    end
+
+    # This leads to the following simplified derivatives:
+    ξ′  = t -> 3*(m*t^2+2*n*t+o)
+    ξ′′ = t -> 6*(m*t+n)
+    η′  = t -> 3*(p*t^2+2*q*t+r)
+    η′′ = t -> 6*(p*t+q)
+
+    # Curvature and its derivative:
+    k  = t -> ((3*(m*t^2+2*n*t+o)) * (6*(p*t+q)) - (3*(p*t^2+2*q*t+r)) * (6*(m*t+n))) / ((3*(m*t^2+2*n*t+o))^2 + (3*(p*t^2+2*q*t+r))^2)^(3/2)
+    k′ = t -> (-18*m*(p*t^2+2*q*t+r)+18*p*(m*t^2+2*n*t+o)-18*(m*t+n)*(2*p*t+2*q)+18*(2*m*t+2*n)*(p*t+q))/(9*(p*t^2+2*q*t+r)^2+9*(m*t^2+2*n*t+o)^2)^(3/2)-(3*(18*(p*t+q)*(m*t^2+2*n*t+o)-18*(m*t+n)*(p*t^2+2*q*t+r))*(18*(2*p*t+2*q)*(p*t^2+2*q*t+r)+18*(2*m*t+2*n)*(m*t^2+2*n*t+o)))/(2*(9*(p*t^2+2*q*t+r)^2+9*(m*t^2+2*n*t+o)^2)^(5/2))
+
+    # Solve analytically
+    coeffs = MVector{6,Complex{T}}(
+        (1296*m*p^2+1296*m^3)*q-1296*n*p^3-1296*m^2*n*p,
+        (1620*m*p^2+1620*m^3)*r+3240*m*p*q^2+(3240*m^2*n-3240*n*p^2)*q-1620*o*p^3+((-1620*m^2*o)-3240*m*n^2)*p,
+        (5184*m*p*q+1296*n*p^2+6480*m^2*n)*r+1296*m*q^3-1296*n*p*q^2+((-6480*o*p^2)-1296*m^2*o+1296*m*n^2)*q+((-5184*m*n*o)-1296*n^3)*p,
+        1296*m*p*r^2+(1944*m*q^2+6480*n*p*q-1296*o*p^2+1296*m^2*o+8424*m*n^2)*r-8424*o*p*q^2-6480*m*n*o*q+((-1296*m*o^2)-1944*n^2*o)*p,
+        2592*n*p*r^2+(3888*n*q^2-2592*o*p*q+2592*m*n*o+3888*n^3)*r-3888*o*q^3+((-2592*m*o^2)-3888*n^2*o)*q,
+        -324*m*r^3+(1944*n*q+324*o*p)*r^2+((-1944*o*q^2)-324*m*o^2+1944*n^2*o)*r-1944*n*o^2*q+324*o^3*p,
+    )
+    roots = MVector{6,Complex{T}}(undef)
+    PolynomialRoots.roots5!(roots, coeffs, eps(T), true)
+
+    # Check roots and return maximum
+    t₁, t₄ = zero(T), one(T)
+    k₁, k₄ = k(t₁), k(t₄)
+    tmax, Pmax, kmax = k₁ > k₄ ? (t₁, P₁, k₁) : (t₄, P₄, k₄)
+    for rᵢ in roots
+        _t, _s = real(rᵢ), imag(rᵢ)
+        !(_s ≈ 0) && continue # real roots only
+        !(t₁ <= _t <= t₄) && continue # filter roots within range
+        ((_k = k(_t)) > kmax) && ((tmax, Pmax, kmax) = (_t, P(_t), _k))
+    end
+
+    return tmax, Pmax, kmax
+end
+
+function directed_angle(v₁::V, v₂::V) where {T, V <: SVector{2,T}}
+    α = atan(v₁[2], v₁[1]) - atan(v₂[2], v₂[1])
+    α < 0 ? 2*T(π) + α : α
+end
+directed_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = directed_angle(Pⱼ - Pₖ, Pₗ - Pₖ)
+
+function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2,T}}
+    # Kahan's method for computing the angle between v₁ and v₂.
+    #   see: https://scicomp.stackexchange.com/a/27694
+    a, b, c = norm(v₁), norm(v₂), norm(v₁ - v₂)
+    a, b = max(a,b), min(a,b)
+    μ = b ≥ c ? c - (a - b) : (b - (a - c))
+    num = ((a - b) + c) * max(μ, zero(μ))
+    den = (a + (b + c)) * ((a - c) + b)
+    α = 2 * atan(√(num / den))
+    v₁ × v₂ > 0 ? 2*T(π) - α : α
+end
+kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(Pⱼ - Pₖ, Pₗ - Pₖ)
+
 
 ####
 #### GCV method for choosing Tikhonov regularization parameter
@@ -520,6 +884,9 @@ struct NNLSGCVRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W1
     d::Vd
     m::Int
     n::Int
+    A_mu::Matrix{T}
+    Ct_tmp::Matrix{T}
+    CtC_tmp::Matrix{T}
     nnls_work::W1
     nnls_work_smooth::W2
 end
@@ -527,7 +894,10 @@ function NNLSGCVRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
     nnls_work = NNLSProblem(C, d)
     nnls_work_smooth = NNLSTikhonovRegProblem(C, d)
-    NNLSGCVRegProblem(C, d, m, n, nnls_work, nnls_work_smooth)
+    A_mu = zeros(T, m, m)
+    Ct_tmp = zeros(T, n, m)
+    CtC_tmp = zeros(T, n, n)
+    NNLSGCVRegProblem(C, d, m, n, A_mu, Ct_tmp, CtC_tmp, nnls_work, nnls_work_smooth)
 end
 
 function lsqnonneg_gcv(C, d)
@@ -540,12 +910,12 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}) where {T}
     # Find μ by minimizing the function G(μ) (GCV method)
     @timeit_debug TIMER() "L-curve Optimization" begin
         opt = NLopt.Opt(:LN_BOBYQA, 1)
-        opt.lower_bounds  = [sqrt(eps(T))]
-        opt.upper_bounds  = [T(0.1)]
-        opt.xtol_rel      = sqrt(eps(T))
-        opt.min_objective = (μ, ∇μ) -> gcv!(work, μ[1])
-        minf, minx, ret   = NLopt.optimize(opt, [T(1e-2)])
-        mu_final = minx[1]
+        opt.lower_bounds  = [T(-8)]
+        opt.upper_bounds  = [T(2)]
+        opt.xtol_rel      = T(0.05)
+        opt.min_objective = (logμ, ∇logμ) -> gcv!(work, logμ[1])
+        minf, minx, ret   = NLopt.optimize(opt, [T(-4)])
+        mu_final = exp(minx[1])
     end
 
     # Non-regularized solution
@@ -572,16 +942,14 @@ end
 #   d -> b
 #   μ -> λ
 #   I -> L (i.e. L == identity here)
-function gcv!(work::NNLSGCVRegProblem, μ)
+function gcv!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
-    @unpack C, d, m, n = work
-    A_mu = zeros(T, m, m)
-    Ct_tmp = zeros(T, n, m)
-    CtC_tmp = zeros(T, n, n)
+    @unpack C, d, m, n, A_mu, Ct_tmp, CtC_tmp = work
 
     # Solve regularized NNLS problem and record chi2 = ||C*X_reg - d||^2 which is returned
+    μ = exp(logμ)
     solve!(work.nnls_work_smooth, μ)
-    chi2 = chi2(work.nnls_work_smooth)
+    χ² = chi2(work.nnls_work_smooth)
 
     # Efficient compution of
     #   A_mu = C * (C'C + μ^2*I)^-1 * C'
@@ -601,7 +969,7 @@ function gcv!(work::NNLSGCVRegProblem, μ)
     #   Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580
     #   https://doi.org/10.1137/1034115
     trace = m - tr(A_mu) # tr(I - A_mu) = m - tr(A_mu) for m x m matrix A_mu
-    gcv = chi2 / trace^2 # ||C*X_reg - d||^2 / tr(I - A_mu)^2
+    gcv = χ² / trace^2 # ||C*X_reg - d||^2 / tr(I - A_mu)^2
 
     return gcv
 end

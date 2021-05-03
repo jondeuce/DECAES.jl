@@ -3,10 +3,11 @@ module DECAES
 using LinearAlgebra, SpecialFunctions, Statistics, Random
 import ArgParse, Dierckx, DocStringExtensions, Logging, MAT, NIfTI, NLopt, Parameters, PolynomialRoots, ProgressMeter, ProgressMeter, StaticArrays, SIMD, TimerOutputs, UnsafeArrays
 using ArgParse: @add_arg_table!, add_arg_table!, add_arg_group!, ArgParseSettings, parse_args
+using Base.MathConstants: φ
 using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using Logging: ConsoleLogger, with_logger
-using Parameters: @with_kw, @with_kw_noshow, @unpack
-using ProgressMeter: Progress, BarGlyphs, tty_width, next!, finish!
+using Parameters: @with_kw, @with_kw_noshow, @unpack, @pack!
+using ProgressMeter: Progress, BarGlyphs, next!, finish!
 using StaticArrays: SVector, MVector, SizedVector, SA
 using SIMD: Vec, FloatingTypes, shufflevector
 using TimerOutputs: TimerOutput, @timeit_debug, reset_timer!

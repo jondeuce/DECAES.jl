@@ -125,7 +125,7 @@ function DECAESProgress(io::IO, n::Int, desc::AbstractString; kwargs...)
         io = io,
         iobuf = iobuf,
         progmeter = Progress(n;
-            dt = 0.0, desc = desc, color = :cyan, output = iobuf, barlen = min(80, tty_width(desc, stderr)), barglyphs = BarGlyphs("[=> ]"),
+            dt = 0.0, desc = desc, color = :cyan, output = iobuf, barglyphs = BarGlyphs("[=> ]"),
             kwargs...
         )
     )
@@ -198,7 +198,7 @@ Base.extrema(p::Poly) = PolynomialRoots.roots(derivative(p))
 
 function _make_spline(X, Y; deg_spline = min(3, length(X)-1))
     # @assert length(X) == length(Y) && length(X) > 1
-    spl = Dierckx.Spline1D(X, Y; k = deg_spline)
+    spl = Dierckx.Spline1D(X, Y; k = deg_spline, bc = "extrapolate")
 end
 
 function _build_polynomials(spl)
