@@ -46,42 +46,36 @@ function local_gridsearch(f, i::Int)
     return y, i
 end
 
-# Macro copied from DrWatson.jl in order to not depend on the package
-#   See: https://github.com/JuliaDynamics/DrWatson.jl
-macro ntuple(vars...)
-   args = Any[]
-   for i in 1:length(vars)
-       push!(args, Expr(:(=), esc(vars[i]), :($(esc(vars[i])))))
-   end
-   expr = Expr(:tuple, args...)
-   return expr
-end
-
-# Threaded `foreach` construct, borrowing implementation from ThreadTools.jl
-#   See: https://github.com/baggepinnen/ThreadTools.jl/blob/55aaf2bbe735e52cefaad143e7614d4f00e312b0/src/ThreadTools.jl#L57
-function tforeach(f, xs; blocksize = 1)
-    if Threads.nthreads() == 1 || length(xs) <= 2 * Threads.nthreads() || length(xs) <= blocksize
-        # Run `f` sequentially
-        tforeach_seq(f, xs)
-    elseif blocksize == 1
-        # Spawn one task for each `f` call
-        @sync for x in xs
+# Threaded `foreach` construct, borrowing implementation from ThreadTools.jl:
+# 
+#   https://github.com/baggepinnen/ThreadTools.jl/blob/55aaf2bbe735e52cefaad143e7614d4f00e312b0/src/ThreadTools.jl#L57
+# 
+# Updated according to suggestions from the folks at DataFrames.jl:
+# 
+#   https://github.com/jondeuce/DECAES.jl/issues/37
+function tforeach(f, x::AbstractArray; blocksize::Integer)
+    nt = Threads.nthreads()
+    len = length(x)
+    if nt > 1 && len > blocksize
+        @sync for p in split_indices(len, blocksize)
             Threads.@spawn begin
-                f(x)
+                @simd ivdep for i in p
+                    f(@inbounds x[i])
+                end
             end
         end
     else
-        # Spawn one task for each `blocksize` `f` calls
-        @sync for xs_block in Iterators.partition(xs, blocksize)
-            Threads.@spawn tforeach_seq(f, xs_block)
+        @simd ivdep for i in eachindex(x)
+            f(@inbounds x[i])
         end
     end
+    return nothing
 end
 
-@inline function tforeach_seq(f, xs)
-    @inbounds @simd ivdep for x in xs
-        f(x)
-    end
+function split_indices(len::Integer, basesize::Integer)
+    len′ = Int64(len) # Avoid overflow on 32-bit machines
+    np = max(1, div(len, basesize))
+    return (Int(1 + ((i - 1) * len′) ÷ np) : Int((i * len′) ÷ np) for i in 1:np)
 end
 
 ####
@@ -99,7 +93,7 @@ function hour_min_sec(t)
     hour = floor(Int, t/3600)
     min = floor(Int, (t - 3600*hour)/60)
     sec = floor(Int, t - 3600*hour - 60*min)
-    return @ntuple(hour, min, sec)
+    return (; hour, min, sec)
 end
 
 function pretty_time(t)
@@ -231,8 +225,7 @@ function _spline_opt(spl::Dierckx.Spline1D)
             end
         end
     end
-
-    return @ntuple(x, y)
+    return (; x, y)
 end
 _spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt(_make_spline(X, Y; deg_spline))
 
@@ -252,7 +245,7 @@ function _spline_opt_legacy(spl::Dierckx.Spline1D)
     y, i = local_gridsearch(dy, i0)
     x = Xs[i]
 
-    return @ntuple(x, y)
+    return (; x, y)
 end
 _spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt_legacy(_make_spline(X, Y; deg_spline))
 
@@ -267,7 +260,7 @@ function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
         yᵢ = spl(xᵢ)
         (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
     end
-    return @ntuple(x, y)
+    return (; x, y)
 end
 _spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt_legacy_slow(_make_spline(X, Y; deg_spline))
 
@@ -383,7 +376,7 @@ function surrogate_spline_opt(f, X, min_n_eval::Int = length(X))
     while true
         x, y = spline_opt(Xi, Yi) # current global minimum estimate
         if update_state!(Is, Xi, Yi, x, y) # update and check for convergence
-            return @ntuple(x, y)
+            return (; x, y)
         end
     end
 end

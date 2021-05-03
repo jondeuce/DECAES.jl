@@ -135,7 +135,7 @@ function thread_buffer_maker(o::T2partOptions{T}) where {T}
     logT2_times_sp = logT2_times[sp_range]
     logT2_times_mp = logT2_times[mp_range]
     weights        = sigmoid_weights(o)
-    return @ntuple(dist, T2_times, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights)
+    return (; dist, T2_times, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights)
 end
 
 function sigmoid_weights(o::T2partOptions{T}) where {T}

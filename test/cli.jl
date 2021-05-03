@@ -62,7 +62,7 @@ function run_main(image, args; make_settings_file::Bool)
     t2dist  = T2map  ? DECAES.MAT.matread(t2dist_file)["dist"] : nothing
     t2parts = T2part ? DECAES.MAT.matread(t2parts_file) : nothing
 
-    return DECAES.@ntuple(t2maps, t2dist, t2parts)
+    return (; t2maps, t2dist, t2parts)
 end
 
 function construct_args(paramdict;
