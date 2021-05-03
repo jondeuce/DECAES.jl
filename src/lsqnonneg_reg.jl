@@ -884,9 +884,10 @@ struct NNLSGCVRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W1
     d::Vd
     m::Int
     n::Int
-    A_mu::Matrix{T}
-    Ct_tmp::Matrix{T}
-    CtC_tmp::Matrix{T}
+    Aμ::Matrix{T}
+    C_buf::Matrix{T}
+    Ct_buf::Matrix{T}
+    CtC_buf::Matrix{T}
     nnls_work::W1
     nnls_work_smooth::W2
 end
@@ -894,10 +895,11 @@ function NNLSGCVRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
     nnls_work = NNLSProblem(C, d)
     nnls_work_smooth = NNLSTikhonovRegProblem(C, d)
-    A_mu = zeros(T, m, m)
-    Ct_tmp = zeros(T, n, m)
-    CtC_tmp = zeros(T, n, n)
-    NNLSGCVRegProblem(C, d, m, n, A_mu, Ct_tmp, CtC_tmp, nnls_work, nnls_work_smooth)
+    Aμ = zeros(T, m, m)
+    C_buf = zeros(T, m, n)
+    Ct_buf = zeros(T, n, m)
+    CtC_buf = zeros(T, n, n)
+    NNLSGCVRegProblem(C, d, m, n, Aμ, C_buf, Ct_buf, CtC_buf, nnls_work, nnls_work_smooth)
 end
 
 function lsqnonneg_gcv(C, d)
@@ -942,34 +944,71 @@ end
 #   d -> b
 #   μ -> λ
 #   I -> L (i.e. L == identity here)
-function gcv!(work::NNLSGCVRegProblem, logμ)
+function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
     # Unpack buffers
-    @unpack C, d, m, n, A_mu, Ct_tmp, CtC_tmp = work
+    @unpack C, d, m, n, Aμ, C_buf, Ct_buf, CtC_buf = work
 
     # Solve regularized NNLS problem and record chi2 = ||C*X_reg - d||^2 which is returned
     μ = exp(logμ)
     solve!(work.nnls_work_smooth, μ)
     χ² = chi2(work.nnls_work_smooth)
 
-    # Efficient compution of
-    #   A_mu = C * (C'C + μ^2*I)^-1 * C'
-    # where the matrices have sizes
-    #   C: (m,n), A_mu: (m,m), Ct_tmp: (n,m), CtC_tmp: (n,n)
-    @timeit_debug TIMER() "A_mu" begin
-        m, n = size(C)
-        mul!(CtC_tmp, C', C) # C'C
-        @inbounds for i in 1:n
-            CtC_tmp[i,i] += μ^2 # C'C + μ^2*I
+    @timeit_debug TIMER() "Aμ" begin
+        if extract_subproblem
+            # Extract equivalent unconstrained least squares subproblem from NNLS problem
+            # by extracting columns of C which correspond to nonzero components of x
+            n′ = 0
+            for (j,xⱼ) in enumerate(solution(work.nnls_work_smooth))
+                xⱼ ≈ 0 && continue
+                n′ += 1
+                @inbounds @simd ivdep for i in 1:m
+                    C_buf[i,n′] = C[i,j]
+                end
+            end
+            C′ = reshape(uview(C_buf, 1:m*n′), m, n′)
+            Ct′ = reshape(uview(Ct_buf, 1:n′*m), n′, m)
+            CtC′ = reshape(uview(CtC_buf, 1:n′*n′), n′, n′)
+        else
+            # Use full matrix
+            C′ = C
+            Ct′ = Ct_buf
+            CtC′ = CtC_buf
         end
-        ldiv!(Ct_tmp, cholesky!(Symmetric(CtC_tmp)), C') # (C'C + μ^2*I)^-1 * C'
-        mul!(A_mu, C, Ct_tmp) # C * (C'C + μ^2*I)^-1 * C'
-    end
 
-    # Return Generalized cross-validation. See equations 27 and 32 in
-    #   Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580
-    #   https://doi.org/10.1137/1034115
-    trace = m - tr(A_mu) # tr(I - A_mu) = m - tr(A_mu) for m x m matrix A_mu
-    gcv = χ² / trace^2 # ||C*X_reg - d||^2 / tr(I - A_mu)^2
+        # Efficient compution of
+        #   Aμ = C * (C'C + μ^2*I)^-1 * C'
+        # where the matrices have sizes
+        #   C: (m,n), Aμ: (m,m), Ct: (n,m), CtC: (n,n)
+        mul!(CtC′, C′', C′) # C'C
+        @inbounds @simd ivdep for i in 1:n
+            CtC′[i,i] += μ^2 # C'C + μ^2*I
+        end
+        ldiv!(Ct′, cholesky!(Symmetric(CtC′)), C′') # (C'C + μ^2*I)^-1 * C'
+        mul!(Aμ, C′, Ct′) # C * (C'C + μ^2*I)^-1 * C'
+
+        # Return Generalized cross-validation. See equations 27 and 32 in
+        #   Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580
+        #   https://doi.org/10.1137/1034115
+        trace = m - tr(Aμ) # tr(I - Aμ) = m - tr(Aμ) for m x m matrix Aμ
+        gcv = χ² / trace^2 # ||C*X_reg - d||^2 / tr(I - Aμ)^2
+    end
 
     return gcv
 end
+
+# Equation (27) from Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115),
+# specialized for L = identity:
+# 
+#   tr(I_m - A * (A'A + λ^2 * L'L)^-1 * A') = m - n + sum_i λ^2 / (γ_i^2 + λ^2)
+# 
+# where γ_i are the generalized singular values, which are equivalent to ordinary
+# singular values when L = identity, and size(A) = (m,n).
+function gcv_tr!(A, λ)
+    m, n = size(A)
+    γ  = svdvals!(A)
+    γ .= λ.^2 ./ (γ.^2 .+ λ.^2)
+    max(m - n, 0) + sum(γ)
+end
+gcv_tr(A, λ) = gcv_tr!(copy(A), λ)
+gcv_tr_brute(A, λ) = tr(I - A * ((A'A + λ^2 * I) \ A'))
+
