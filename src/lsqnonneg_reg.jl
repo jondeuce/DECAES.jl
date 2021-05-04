@@ -62,7 +62,7 @@ struct NNLSTikhonovRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T
 end
 function NNLSTikhonovRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
-    nnls_work = NNLSProblem(TikhonovPaddedMatrix(C, zero(T)), PaddedVector(d, n))
+    nnls_work = NNLSProblem(TikhonovPaddedMatrix(C, T(NaN)), PaddedVector(d, n))
     NNLSTikhonovRegProblem(C, d, m, n, nnls_work)
 end
 
@@ -139,6 +139,37 @@ function chi2factor_loss!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = nothin
     return loss
 end
 
+"""
+Helper struct which wraps `N` caches of `NNLSTikhonovRegProblem` workspaces.
+Useful for optimization problems where the last function call may not be
+the optimium, but perhaps it was one or two calls previous and is still in the
+`NNLSTikhonovRegProblemCache` and a recomputation can be avoided.
+"""
+struct NNLSTikhonovRegProblemCache{N,W}
+    cache::NTuple{N,W}
+    idx::Base.RefValue{Int}
+end
+function NNLSTikhonovRegProblemCache(C::AbstractMatrix{T}, d::AbstractVector{T}, ::Val{N} = Val(5)) where {T,N}
+    cache = ntuple(_ -> NNLSTikhonovRegProblem(C, d), N)
+    idx = Ref(1)
+    return NNLSTikhonovRegProblemCache(cache, idx)
+end
+increment_cache_index!(work::NNLSTikhonovRegProblemCache{N}) where {N} = (work.idx[] = mod1(work.idx[] + 1, N))
+set_cache_index!(work::NNLSTikhonovRegProblemCache{N}, i) where {N} = (work.idx[] = mod1(i, N))
+reset_cache!(work::NNLSTikhonovRegProblemCache{N}) where {N} = foreach(w -> mu!(w, NaN), work.cache)
+get_cache(work::NNLSTikhonovRegProblemCache) = work.cache[work.idx[]]
+
+function solve!(work::NNLSTikhonovRegProblemCache, μ)
+    i = findfirst(w -> μ == mu(w), work.cache)
+    if i === nothing
+        increment_cache_index!(work)
+        solve!(get_cache(work), μ)
+    else
+        set_cache_index!(work, i)
+    end
+    return solution(get_cache(work))
+end
+
 
 ####
 #### Chi2 method for choosing Tikhonov regularization parameter
@@ -150,13 +181,13 @@ struct NNLSChi2RegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W
     m::Int
     n::Int
     nnls_work::W1
-    nnls_work_smooth::W2
+    nnls_work_smooth_cache::W2
 end
 function NNLSChi2RegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
     nnls_work = NNLSProblem(C, d)
-    nnls_work_smooth = NNLSTikhonovRegProblem(C, d)
-    NNLSChi2RegProblem(C, d, m, n, nnls_work, nnls_work_smooth)
+    nnls_work_smooth_cache = NNLSTikhonovRegProblemCache(C, d)
+    NNLSChi2RegProblem(C, d, m, n, nnls_work, nnls_work_smooth_cache)
 end
 
 """
@@ -195,69 +226,80 @@ function lsqnonneg_chi2(C, d, Chi2Factor)
 end
 lsqnonneg_chi2_work(C, d) = NNLSChi2RegProblem(C, d)
 
-function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T) where {T}
+function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection = true) where {T}
     # Non-regularized solution
     @timeit_debug TIMER() "Non-Reg. lsqnonneg!" begin
         solve!(work.nnls_work)
         chi2_min = chi2(work.nnls_work)
     end
 
+    # Prepare to solve
+    χ²target = Chi2Factor * chi2_min
+    reset_cache!(work.nnls_work_smooth_cache)
+
     @timeit_debug TIMER() "chi2factor search" begin
         if LEGACY[]
+            # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit 
             mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor) do μ
-                solve!(work.nnls_work_smooth, μ)
-                return chi2(work.nnls_work_smooth)
+                μ == 0 && return chi2_min
+                solve!(work.nnls_work_smooth_cache, μ)
+                return chi2(get_cache(work.nnls_work_smooth_cache))
             end
-        else
-            # Find bracketing interval, then bisect
-            f = logμ -> chi2factor_relerr!(work.nnls_work_smooth, logμ; χ²target = Chi2Factor * chi2_min)
+            if mu_final == 0
+                x_final = solution(work.nnls_work)
+            else
+                x_final = solve!(work.nnls_work_smooth_cache, mu_final)
+            end
+
+        elseif bisection
+            # Find bracketing interval containing root, then perform bisection search
+            f = function (logμ)
+                increment_cache_index!(work.nnls_work_smooth_cache)
+                return chi2factor_relerr!(get_cache(work.nnls_work_smooth_cache), logμ; χ²target)
+            end
             cache = NamedTuple{(:x, :f), NTuple{2,T}}[]
             a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6, cache)
-            bisect(f, a, b, fa, fb; atol = T(0.05), cache)
+            bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor-1)/100, cache)
 
             # Spline rootfinding on evaluated points to improve accuracy
             sort!(cache; by = d -> d.x)
             logmu_root = spline_root([d.x for d in cache], [d.f for d in cache]; deg_spline = 1)
-            logmu_root !== nothing && cache!(cache, logmu_root, f(logmu_root))
+            logmu_root !== nothing && !any(d -> d.x ≈ logmu_root, cache) && cache!(cache, logmu_root, f(logmu_root))
 
             # Return regularization which minimizes relerr
             _, i = findmin([abs(d.f) for d in cache])
             logmu_final, relerr_final = cache[i]
-            mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target = Chi2Factor * chi2_min)
+            mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
+            x_final = solve!(work.nnls_work_smooth_cache, mu_final)
 
-            #= Optimize using NLopt
-            # Gradient-free:
-            opt = NLopt.Opt(:LN_COBYLA, 1) # local, gradient-free, linear approximation of objective
-            # opt = NLopt.Opt(:LN_BOBYQA, 1) # local, gradient-free, quadratic approximation of objective
-            # opt = NLopt.Opt(:GN_AGS, 1)
-            # opt = NLopt.Opt(:LN_NELDERMEAD, 1) # local, gradient-free, linear approximation of objective
-            # opt = NLopt.Opt(:LN_SBPLX, 1) # local, gradient-free, linear approximation of objective
+        else
+            # Instead of rootfinding, reformulate as a minimization problem. Solve using NLopt.
+            alg = :LN_COBYLA # local, gradient-free, linear approximation of objective
+            # alg = :LN_BOBYQA # local, gradient-free, quadratic approximation of objective
+            # alg = :GN_AGS # global, gradient-free, hilbert curve based dimension reduction
+            # alg = :LN_NELDERMEAD # local, gradient-free, simplex method
+            # alg = :LN_SBPLX # local, gradient-free, subspace searching simplex method
+            # alg = :LD_CCSAQ # local, first-order (rough ranking: [:LD_MMA, :LD_SLSQP, :LD_LBFGS, :LD_CCSAQ, :LD_AUGLAG])
 
-            # First-order methods
-            #   -Rough algorithm ranking: [:LD_MMA, :LD_SLSQP, :LD_LBFGS, :LD_CCSAQ, :LD_AUGLAG]
-            # opt = NLopt.Opt(:LD_CCSAQ, 1)
-
-            opt.lower_bounds  = [log(eps(T))]
-            opt.upper_bounds  = [log(one(T))]
-            opt.maxeval       = 10
-            μbest, χ²best = Ref(zero(T)), Ref(T(Inf))
+            opt = NLopt.Opt(alg, 1)
+            opt.lower_bounds  = -8.0
+            opt.upper_bounds  = 2.0
+            opt.xtol_rel      = 0.05
             opt.min_objective = function (logμ, ∇logμ)
                 @inbounds _logμ = logμ[1]
-                χ²target = Chi2Factor * chi2_min
-                loss = chi2factor_loss!(work.nnls_work_smooth, _logμ, ∇logμ; χ²target)
-                if abs(χ² - χ²target) < abs(χ²best[] - χ²target)
-                    μbest[] = exp(_logμ)
-                    χ²best[] = chi2(work.nnls_work_smooth)
-                end
-                return loss
+                increment_cache_index!(work.nnls_work_smooth_cache)
+                loss = chi2factor_loss!(get_cache(work.nnls_work_smooth_cache), _logμ, ∇logμ; χ²target)
+                return Float64(loss)
             end
-            NLopt.optimize(opt, [log(T(1e-2))])
-            mu_final, chi2_final = μbest[], χ²best[]
-            =#
+            minf, minx, ret   = NLopt.optimize(opt, [-4.0])
+
+            mu_final = exp(T(minx[1]))
+            x_final = solve!(work.nnls_work_smooth_cache, mu_final)
+            chi2_final = chi2(get_cache(work.nnls_work_smooth_cache))
         end
     end
 
-    return (x = solution(work.nnls_work_smooth), mu = mu_final, chi2factor = chi2_final/chi2_min)
+    return (x = x_final, mu = mu_final, chi2factor = chi2_final/chi2_min)
 end
 
 function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0)) where {T}
@@ -287,13 +329,13 @@ function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T
     else
         if length(μ_cache) == 2
             # Solution is contained in [0,μmin]; `spline_root` with two points performs root finding via simple linear interpolation
-            μ = spline_root(μ_cache, χ²_cache, χ²fact * χ²min)
+            μ = spline_root(μ_cache, χ²_cache, χ²fact * χ²min; deg_spline = 1)
             μ = μ === nothing ? μmin : μ
         else
             # Perform spline fit on log-log scale on data with μ > 0. This solves the above problems with the legacy algorithm:
             #   1) Root is found in terms of logμ, guaranteeing μ > 0
             #   2) logμ is linearly spaced, leading to well-conditioned splines
-            logμ = @views spline_root(log.(μ_cache[2:end]), log.(χ²_cache[2:end]), log(χ²fact * χ²min))
+            logμ = spline_root(log.(μ_cache[2:end]), log.(χ²_cache[2:end]), log(χ²fact * χ²min); deg_spline = 1)
             μ = logμ === nothing ? μmin : exp(logμ)
         end
     end
@@ -313,13 +355,12 @@ function chi2factor_search_from_guess(f, χ²min::T, χ²fact::T, μ₀::T = T(1
     logχ²_cache = T[log(χ²new)]
 
     if χ²new > χ²target
-        while true
-            (logμ_cache[1] ≈ μmin) && break # in case μmin is approximately μ₀/μfact^k for some k, e.g. μ₀ = 1e-2, μfact = 10, μmin = 1e-4
+        while μnew > μmin && !(μnew ≈ μmin)
             μnew = max(μnew/μfact, μmin)
             χ²new = f(μnew)
             pushfirst!(logμ_cache, log(μnew))
             pushfirst!(logχ²_cache, log(χ²new))
-            ((χ²new < χ²target && length(logμ_cache) >= 3) || μnew ≈ μmin) && break
+            (χ²new < χ²target && length(logμ_cache) >= 3) && break
         end
     else
         while true
@@ -356,8 +397,7 @@ end
 #### The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 #### THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function secant_method(f, xs; atol = zero(float(real(first(xs)))), rtol = 8*eps(one(float(real(first(xs))))), maxiters = 1000, cache = nothing)
-
+function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8*eps(one(float(real(first(xs))))), maxiters = 1000, cache = nothing)
     if length(xs) == 1 # secant needs a, b; only a given
         a  = float(xs[1])
         h  = eps(one(real(a)))^(1/3)
@@ -369,18 +409,19 @@ function secant_method(f, xs; atol = zero(float(real(first(xs)))), rtol = 8*eps(
     fa, fb = f(a), f(b)
     cache!(cache, a, fa)
     cache!(cache, b, fb)
-    secant(f, a, b, fa, fb; atol, rtol, maxiters, cache)
+    secant(f, a, b, fa, fb; xtol, xrtol, maxiters, cache)
 end
 
-function secant(f, a::T, b::T, fa::T, fb::T; atol = zero(T), rtol = 8eps(T), maxiters = 1000, cache = nothing) where {T}
-
+function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), maxiters = 1000, cache = nothing) where {T}
     # No function change; return arbitrary endpoint
-    fb == fa && return (a, fa)
+    if fb == fa
+        return (a, fa)
+    end
 
     cnt = 0
     mbest = abs(fa) < abs(fb) ? a : b
     fbest = min(abs(fa), abs(fb))
-    uatol = atol / oneunit(atol) * oneunit(real(a))
+    uatol = xtol / oneunit(xtol) * oneunit(real(a))
     adjustunit = oneunit(real(fb)) / oneunit(real(b))
 
     while cnt < maxiters
@@ -391,7 +432,7 @@ function secant(f, a::T, b::T, fa::T, fb::T; atol = zero(T), rtol = 8eps(T), max
         abs(fm) < abs(fbest) && ((mbest, fbest) = (m, fm))
         iszero(fm) && return (m, fm)
         isnan(fm) || isinf(fm) && return (mbest, fbest) # function failed; bail out
-        abs(fm) <= adjustunit * max(uatol, abs(m) * rtol) && return (m, fm)
+        abs(fm) <= adjustunit * max(uatol, abs(m) * xrtol) && return (m, fm)
         fm == fb && return (m, fm)
 
         a, b, fa, fb = b, m, fb, fm
@@ -401,53 +442,54 @@ function secant(f, a::T, b::T, fa::T, fb::T; atol = zero(T), rtol = 8eps(T), max
     return (mbest, fbest) # maxiters reached
 end
 
-function bisection_method(f, a::Number, b::Number; atol = nothing, rtol = nothing, cache = nothing, maxiters = 1000)
-
+function bisection_method(f, a::Number, b::Number; xtol = nothing, xrtol = nothing, ftol = nothing, cache = nothing, maxiters = 1000)
     x₁, x₂ = float.((a,b))
     y₁, y₂ = f(x₁), f(x₂)
     cache!(cache, x₁, y₁)
     cache!(cache, x₂, y₂)
 
     T = eltype(x₁)
-    atol = atol === nothing ? zero(T) : abs(atol)
-    rtol = rtol === nothing ? zero(one(T)) : abs(rtol)
+    xtol = xtol === nothing ? zero(T) : abs(xtol)
+    xrtol = xrtol === nothing ? zero(one(T)) : abs(xrtol)
+    ftol = ftol === nothing ? zero(T) : abs(ftol)
 
-    bisect(f, x₁, x₂, y₁, y₂; atol, rtol, cache, maxiters)
+    bisect(f, x₁, x₂, y₁, y₂; xtol, xrtol, ftol, cache, maxiters)
 end
 
-function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; atol = zero(T), rtol = zero(one(T)), cache = nothing, maxiters = 1000) where {T}
-
-    y₁ * y₂ >= 0 && return (x₁, y₁) # arbitrary
+function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = zero(one(T)), ftol = zero(T), cache = nothing, maxiters = 1000) where {T}
+    # No sign change; return arbitrary endpoint
+    if y₁ * y₂ >= 0
+        return (x₁, y₁)
+    end
 
     if y₂ < 0
         x₁, x₂, y₁, y₂ = x₂, x₁, y₂, y₁
     end
 
-    xm = (x₁ + x₂)/2
-    ym = f(xm)
-    cache!(cache, xm, ym)
+    xₘ = (x₁ + x₂)/2
+    yₘ = f(xₘ)
+    cache!(cache, xₘ, yₘ)
 
     cnt = 1
     while cnt < maxiters
-
-        if iszero(ym) || isnan(ym) || abs(x₁ - x₂) <= atol + max(abs(x₁), abs(x₂)) * rtol
-            return (xm, ym)
+        if iszero(yₘ) || isnan(yₘ) || abs(x₁ - x₂) <= xtol + max(abs(x₁), abs(x₂)) * xrtol || abs(yₘ) <= ftol
+            return (xₘ, yₘ)
         end
 
-        if ym < 0
-            x₁, y₁ = xm, ym
+        if yₘ < 0
+            x₁, y₁ = xₘ, yₘ
         else
-            x₂, y₂ = xm, ym
+            x₂, y₂ = xₘ, yₘ
         end
 
-        xm = (x₁ + x₂)/2
-        ym = f(xm)
-        cache!(cache, xm, ym)
+        xₘ = (x₁ + x₂)/2
+        yₘ = f(xₘ)
+        cache!(cache, xₘ, yₘ)
 
         cnt += 1
     end
 
-    return (xm, ym)
+    return (xₘ, yₘ)
 end
 
 function bracketing_interval(f, a, δ, dilate = 1; maxiters = 1000, cache = nothing)
@@ -489,17 +531,19 @@ end
 #### L-curve method for choosing Tikhonov regularization parameter
 ####
 
-struct NNLSLCurveRegProblem{T, N, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W}
+struct NNLSLCurveRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W1, W2}
     C::MC
     d::Vd
     m::Int
     n::Int
-    nnls_work_cache::NTuple{N,W}
+    nnls_work::W1
+    nnls_work_smooth_cache::W2
 end
-function NNLSLCurveRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}, ::Val{N} = Val(3)) where {T,N}
+function NNLSLCurveRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
-    nnls_work_cache = ntuple(_ -> NNLSTikhonovRegProblem(C, d), N)
-    NNLSLCurveRegProblem(C, d, m, n, nnls_work_cache)
+    nnls_work = NNLSProblem(C, d)
+    nnls_work_smooth_cache = NNLSTikhonovRegProblemCache(C, d)
+    NNLSLCurveRegProblem(C, d, m, n, nnls_work, nnls_work_smooth_cache)
 end
 
 """
@@ -511,8 +555,8 @@ Returns the regularized NNLS solution, X, of the equation
 X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu^2 ||L x||_2^2
 ```
 
-where ``L`` is the identity matrix and ``\\mu`` is chosen by the L-curve theory using the Generalized Cross-Validation method.
-Details of L-curve and GCV methods can be found in:
+where ``L`` is the identity matrix and ``\\mu`` is chosen by locating the corner of the "L-curve".
+Details of L-curve theory and the Generalized Cross-Validation (GCV) method can be found in:
 [Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580](https://doi.org/10.1137/1034115)
 
 # Arguments
@@ -532,22 +576,22 @@ lsqnonneg_lcurve_work(C, d) = NNLSLCurveRegProblem(C, d)
 
 function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
     # Compute the regularization using the L-curve method
+    reset_cache!(work.nnls_work_smooth_cache)
     logmu_bounds = (T(-8), T(2))
-    cache_idx = Ref(1)
     logmu_final = lcurve_corner!(logmu_bounds...) do μ
-        cache_idx[] = mod1(cache_idx[] + 1, N)
-        nnls_work = work.nnls_work_cache[cache_idx[]]
-        solve!(nnls_work, μ)
-        ξ = log(resnorm(nnls_work))
-        η = log(seminorm(nnls_work))
+        solve!(work.nnls_work_smooth_cache, μ)
+        ξ = log(resnorm(get_cache(work.nnls_work_smooth_cache)))
+        η = log(seminorm(get_cache(work.nnls_work_smooth_cache)))
         return SA{T}[ξ, η]
     end
+
+    # Return the final regularized solution
     mu_final = exp(logmu_final)
-    x_idx = findfirst(nnls_work -> mu_final ≈ mu(nnls_work), work.nnls_work_cache)
-    x_final = x_idx === nothing ?
-        solve!(work.nnls_work_cache[1], mu_final) :
-        solution(work.nnls_work_cache[x_idx])
-    return (x = x_final, mu = mu_final, chi2factor = T(NaN))
+    x_final = solve!(work.nnls_work_smooth_cache, mu_final)
+    x_unreg = solve!(work.nnls_work)
+    chi2factor_final = chi2(get_cache(work.nnls_work_smooth_cache)) / chi2(work.nnls_work)
+
+    return (x = x_final, mu = mu_final, chi2factor = chi2factor_final)
 end
 
 """
@@ -560,9 +604,8 @@ The implementation follows Algorithm 1 from the following work:
     A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”
     IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
-function lcurve_corner!(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.1, Ptol::T = 0.05, Ctol::T = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
-
-    # Initialize
+function lcurve_corner!(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::T = 0.05, Ctol::T = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
+    # Initialize state
     msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [cache[x].C for x in state.x⃗])))
     cache === nothing && (cache = Dict{T,NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}}())
     state = LCurveCornerState(f, T(xlow), T(xhigh), cache; kwargs...)
@@ -889,76 +932,91 @@ struct NNLSGCVRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W1
     Ct_buf::Matrix{T}
     CtC_buf::Matrix{T}
     nnls_work::W1
-    nnls_work_smooth::W2
+    nnls_work_smooth_cache::W2
 end
 function NNLSGCVRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
-    nnls_work = NNLSProblem(C, d)
-    nnls_work_smooth = NNLSTikhonovRegProblem(C, d)
     Aμ = zeros(T, m, m)
     C_buf = zeros(T, m, n)
     Ct_buf = zeros(T, n, m)
     CtC_buf = zeros(T, n, n)
-    NNLSGCVRegProblem(C, d, m, n, Aμ, C_buf, Ct_buf, CtC_buf, nnls_work, nnls_work_smooth)
+    nnls_work = NNLSProblem(C, d)
+    nnls_work_smooth_cache = NNLSTikhonovRegProblemCache(C, d)
+    NNLSGCVRegProblem(C, d, m, n, Aμ, C_buf, Ct_buf, CtC_buf, nnls_work, nnls_work_smooth_cache)
 end
 
+"""
+    lsqnonneg_gcv(C::AbstractMatrix, d::AbstractVector)
+
+Returns the regularized NNLS solution, X, of the equation
+
+```math
+X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu^2 ||L x||_2^2
+```
+
+where ``L`` is the identity matrix and ``\\mu`` is chosen by the Generalized Cross-Validation (GCV) method.
+Details of the GCV method and L-curve theory generally can be can be found in:
+[Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580](https://doi.org/10.1137/1034115)
+
+# Arguments
+- `C::AbstractMatrix`: Decay basis matrix
+- `d::AbstractVector`: Decay curve data
+
+# Outputs
+- `X::AbstractVector`: Regularized NNLS solution
+- `mu::Real`: Resulting regularization parameter ``\\mu``
+- `Chi2Factor::Real`: Resulting increase in ``\\chi^2`` relative to unregularized (``\\mu = 0``) solution
+"""
 function lsqnonneg_gcv(C, d)
     work = lsqnonneg_gcv_work(C, d)
     lsqnonneg_gcv!(work)
 end
 lsqnonneg_gcv_work(C, d) = NNLSGCVRegProblem(C, d)
 
-function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}) where {T}
+function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T,N}) where {T,N}
     # Find μ by minimizing the function G(μ) (GCV method)
     @timeit_debug TIMER() "L-curve Optimization" begin
-        opt = NLopt.Opt(:LN_BOBYQA, 1)
-        opt.lower_bounds  = [T(-8)]
-        opt.upper_bounds  = [T(2)]
-        opt.xtol_rel      = T(0.05)
-        opt.min_objective = (logμ, ∇logμ) -> gcv!(work, logμ[1])
-        minf, minx, ret   = NLopt.optimize(opt, [T(-4)])
-        mu_final = exp(minx[1])
+        reset_cache!(work.nnls_work_smooth_cache)
+        # opt = NLopt.Opt(:LN_COBYLA, 1) # local, gradient-free, linear approximation of objective
+        opt = NLopt.Opt(:LN_BOBYQA, 1) # local, gradient-free, quadratic approximation of objective
+        opt.lower_bounds  = -8.0
+        opt.upper_bounds  = 2.0
+        opt.xtol_rel      = 0.05
+        opt.min_objective = (logμ, ∇logμ) -> Float64(gcv!(work, logμ[1]))
+        minf, minx, ret   = NLopt.optimize(opt, [-4.0])
     end
 
-    # Non-regularized solution
-    @timeit_debug TIMER() "Non-Reg. lsqnonneg!" begin
-        solve!(work.nnls_work)
-        chi2_min = chi2(work.nnls_work)
-    end
+    # Return the final regularized solution
+    mu_final = exp(T(minx[1]))
+    x_final  = solve!(work.nnls_work_smooth_cache, mu_final)
+    x_unreg  = solve!(work.nnls_work)
+    chi2factor_final = chi2(get_cache(work.nnls_work_smooth_cache)) / chi2(work.nnls_work)
 
-    # Compute the final regularized solution
-    @timeit_debug TIMER() "Final Reg. lsqnonneg!" begin
-        solve!(work.nnls_work_smooth, mu_final)
-        chi2_final = chi2(work.nnls_work_smooth)
-    end
-
-    return (x = solution(work.nnls_work_smooth), mu = mu_final, chi2factor = chi2_final/chi2_min)
+    return (x = x_final, mu = mu_final, chi2factor = chi2factor_final)
 end
 
 # Implements equation (32) from:
+# 
 #   Analysis of Discrete Ill-Posed Problems by Means of the L-Curve
 #   Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115)
 # 
-# Notation dictionary (this function -> the above work)
-#   C -> A
-#   d -> b
-#   μ -> λ
-#   I -> L (i.e. L == identity here)
+# where here A = C, b = d, λ = μ, and L = identity.
 function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
     # Unpack buffers
     @unpack C, d, m, n, Aμ, C_buf, Ct_buf, CtC_buf = work
 
     # Solve regularized NNLS problem and record chi2 = ||C*X_reg - d||^2 which is returned
     μ = exp(logμ)
-    solve!(work.nnls_work_smooth, μ)
-    χ² = chi2(work.nnls_work_smooth)
+    solve!(work.nnls_work_smooth_cache, μ)
+    χ² = chi2(get_cache(work.nnls_work_smooth_cache))
+    x = solution(get_cache(work.nnls_work_smooth_cache))
 
     @timeit_debug TIMER() "Aμ" begin
         if extract_subproblem
             # Extract equivalent unconstrained least squares subproblem from NNLS problem
             # by extracting columns of C which correspond to nonzero components of x
             n′ = 0
-            for (j,xⱼ) in enumerate(solution(work.nnls_work_smooth))
+            for (j,xⱼ) in enumerate(x)
                 xⱼ ≈ 0 && continue
                 n′ += 1
                 @inbounds @simd ivdep for i in 1:m

@@ -204,7 +204,7 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     :MPWin            => [(38e-3, 180e-3)],
     :MinRefAngle      => [55.0],
     :RefConAngle      => [172.0],
-    :Reg              => ["no", "chi2", "lcurve"],
+    :Reg              => ["no", "chi2", "gcv", "lcurve"],
     :SPWin            => [(13e-3, 37e-3)],
     :SaveResidualNorm => [false, true],
     :SaveDecayCurve   => [false, true],
@@ -251,7 +251,7 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
             cli_t2map_args = construct_args(paramdict; settings_kwargs_cli...)
 
-            t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_tempfiles() do
+            t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_devnull() do
                 run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
             end
             t2map_passed = test_compare_t2map((t2map, t2dist), (t2maps_cli, t2dist_cli); rtol = 1e-14)
@@ -273,7 +273,7 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             settings_kwargs_cli[:T2map] = false
             cli_t2part_args = construct_args(paramdict; settings_kwargs_cli...)
 
-            t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_tempfiles() do
+            t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_devnull() do
                 run_main(t2dist, cli_t2part_args; make_settings_file = make_settings_file)
             end
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
@@ -349,9 +349,10 @@ function matlab_tests()
         settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
 
         for (param,valuelist) in mat_t2map_params_perms, paramval in valuelist
-            # The MATLAB implementation of the L-Curve method uses an internal call to `fminbnd`
-            # with a tolerance of 1e-3, and therefore the Julia outputs would only match to at best
-            # a tolerance of 1e-3. Additionally, there is a typo in the `G(mu,C_g,d_g)` subfunction:
+            # The MATLAB flag "lcurve" for choosing the regularization parameter uses the Generalized Cross-Validation (GCV) method.
+            # GCV involves minimizing a functional GCV(mu), which is implemented using an internal call to `fminbnd` with a tolerance of 1e-3,
+            # and therefore the Julia outputs would only match to at best a tolerance of 1e-3.
+            # Additionally, there is a typo in the `G(mu,C_g,d_g)` subfunction:
             #   - Numerator should be ||A*x_mu - b||^2, not ||A*x_mu - b||
             #   - See e.g. equation (1.4) in Fenu, C. et al., 2017, GCV for Tikhonov regularization by partial SVD (https://doi.org/10.1007/s10543-017-0662-0)
             # There is also a small error in methodology:
@@ -375,7 +376,7 @@ function matlab_tests()
             t2map_out_jl = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
                 T2mapSEcorr(image; io = io, jl_t2map_kwargs...)
             end
-            t2map_out_mat = DECAES.redirect_to_tempfiles() do
+            t2map_out_mat = DECAES.redirect_to_devnull() do
                 mxT2mapSEcorr(image; mat_t2map_kwargs...)
             end
             allpassed = test_compare_t2map(t2map_out_jl, t2map_out_mat; rtol = rtol)
@@ -399,7 +400,7 @@ function matlab_tests()
             t2part_jl = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
                 T2partSEcorr(T2dist; io = io, jl_t2part_kwargs...)
             end
-            t2part_mat = DECAES.redirect_to_tempfiles() do
+            t2part_mat = DECAES.redirect_to_devnull() do
                 mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
             end
             allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
