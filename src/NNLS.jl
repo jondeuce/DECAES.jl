@@ -28,8 +28,7 @@
 module NNLS
 
 using LinearAlgebra
-# using LoopVectorization: @avx
-using UnsafeArrays: @uviews, uviews, uview
+using ..DECAES: @uviews, uviews, uview #, @avx
 
 export nnls,
        nnls!,
@@ -105,6 +104,35 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
     end
 end
 
+function apply_householder!(A::AbstractMatrix{T}, up, cols, nsetp, j) where {T}
+    m, n = size(A)
+    if m - nsetp <= 0
+        return
+    end
+
+    @inbounds u1 = A[nsetp,j]
+    cl = abs(u1)
+    @assert cl > 0
+    b = up * u1
+    if b >= 0
+        return
+    end
+
+    @inbounds for jj in cols
+        sm = A[nsetp,jj] * up
+        @inbounds @simd for k in nsetp+1:m #@avx
+            sm += A[k,jj] * A[k,j]
+        end
+        @inbounds if sm != 0
+            sm /= b
+            A[nsetp,jj] += sm * up
+            @inbounds @simd ivdep for i in nsetp+1:m #@avx
+                A[i,jj] += sm * A[i,j]
+            end
+        end
+    end
+end
+
 """
    COMPUTE ORTHOGONAL ROTATION MATRIX..
 The original version of this code was developed by
@@ -154,7 +182,7 @@ function solve_triangular_system!(zz, A, idx, nsetp, jj)
     @inbounds for l in 2:nsetp
         ip = nsetp + 1 - l
         zz1 = zz[ip + 1]
-        @simd ivdep for ii in 1:ip #@avx
+        @inbounds @simd ivdep for ii in 1:ip #@avx
             zz[ii] -= A[ii, jj] * zz1
         end
         jj = idx[ip]
@@ -322,7 +350,7 @@ function nnls!(
         @inbounds for i in iz1:iz2
             idxi = idx[i]
             sm = zero(T)
-            @simd ivdep for l in (nsetp + 1):m #@avx
+            @inbounds @simd ivdep for l in (nsetp + 1):m #@avx
                 sm += A[l, idxi] * b[l]
             end
             w[idxi] = sm
@@ -348,7 +376,7 @@ function nnls!(
             Asave = A[nsetp + 1, j]
             up = construct_householder!(uview(A, nsetp+1:m, j), up)
             unorm = zero(T)
-            @simd for l in 1:nsetp #@avx
+            @inbounds @simd for l in 1:nsetp #@avx
                 unorm += A[l, j]^2
             end
             unorm = sqrt(unorm)
@@ -389,10 +417,7 @@ function nnls!(
         nsetp += 1
 
         if iz1 <= iz2
-            @inbounds for jz in iz1:iz2
-                jj = idx[jz]
-                apply_householder!(uview(A, nsetp:m, j), up, uview(A, nsetp:m, jj))
-            end
+            apply_householder!(A, up, uview(idx, iz1:iz2), nsetp, j)
         end
 
         if nsetp != m
