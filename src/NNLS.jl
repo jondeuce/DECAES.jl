@@ -52,18 +52,14 @@ function construct_householder!(u::AbstractVector{T}, up::T)::T where {T}
         return up
     end
 
-    cl = maximum(abs, u)
-    @assert cl > 0
-    clinvsq = 1 / cl^2
     sm = zero(T)
-    @inbounds @simd for i in eachindex(u) #@avx
-        sm += clinvsq * u[i]^2
+    @inbounds @simd for i in 1:m #@avx
+        sm += u[i]^2
     end
-    cl *= sqrt(sm)
+    cl = sqrt(sm)
+
     @inbounds u1 = u[1]
-    if u1 > 0
-        cl = -cl
-    end
+    cl = ifelse(u1 > 0, -cl, cl)
     result = u1 - cl
     @inbounds u[1] = cl
 
@@ -82,25 +78,29 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
 function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
     m = length(u)
-    @inbounds if m > 1
-        cl = abs(u[1])
-        @assert cl > 0
-        b = up * u[1]
-        if b >= 0
-            return
-        end
-        b = 1 / b
+    if m <= 1
+        return
+    end
 
-        sm = c[1] * up
-        @simd for i in 2:m #@avx
-            sm += c[i] * u[i]
-        end
-        if sm != 0
-            sm *= b
-            c[1] += sm * up
-            @simd for i in 2:m #@avx
-                c[i] += sm * u[i]
-            end
+    @inbounds u1 = u[1]
+    cl = abs(u1)
+    @assert cl > 0
+    b = up * u1
+    if b >= 0
+        return
+    end
+
+    @inbounds c1 = c[1]
+    sm = c1 * up
+    @inbounds @simd for i in 2:m #@avx
+        sm += c[i] * u[i]
+    end
+
+    if sm != 0
+        sm /= b
+        @inbounds c[1] += sm * up
+        @inbounds @simd ivdep for i in 2:m #@avx
+            c[i] += sm * u[i]
         end
     end
 end
@@ -123,13 +123,13 @@ function orthogonal_rotmat(a::T, b::T)::Tuple{T, T, T} where {T}
     if abs(a) > abs(b)
         xr = b / a
         yr = sqrt(1 + xr^2)
-        c = (1 / yr) * sign(a)
+        c = inv(yr) * sign(a)
         s = c * xr
         sig = abs(a) * yr
     elseif b != 0
         xr = a / b
         yr = sqrt(1 + xr^2)
-        s = (1 / yr) * sign(b)
+        s = inv(yr) * sign(b)
         c = s * xr
         sig = abs(b) * yr
     else
@@ -154,7 +154,7 @@ function solve_triangular_system!(zz, A, idx, nsetp, jj)
     @inbounds for l in 2:nsetp
         ip = nsetp + 1 - l
         zz1 = zz[ip + 1]
-        @simd for ii in 1:ip #@avx
+        @simd ivdep for ii in 1:ip #@avx
             zz[ii] -= A[ii, jj] * zz1
         end
         jj = idx[ip]
@@ -175,7 +175,7 @@ mutable struct NNLSWorkspace{T, I <: Integer}
     nsetp::I
 end
 
-function NNLSWorkspace{T,I}(m, n) where {T, I<:Integer}
+function NNLSWorkspace{T,I}(m, n) where {T, I <: Integer}
     NNLSWorkspace{T,I}(
         zeros(T, m, n), # A
         zeros(T, m),    # b
@@ -250,9 +250,9 @@ function largest_positive_dual(
         w::AbstractVector{T},
         idx::AbstractVector{TI},
         range
-    ) where {T,TI}
+    ) where {T, TI}
     wmax = zero(T)
-    izmax = zero(TI)
+    izmax = 0
     @inbounds for i in range
         j = idx[i]
         if w[j] > wmax
@@ -284,7 +284,6 @@ function nnls!(
     checkargs(work)
 
     A = work.QA
-    Ainds = LinearIndices(A)
     b = work.Qb
     x = work.x
     w = work.w
@@ -293,19 +292,19 @@ function nnls!(
     factor = T(0.01)
     work.mode = 1
 
-    m = convert(TI, size(A, 1))
-    n = convert(TI, size(A, 2))
+    m = size(A, 1)
+    n = size(A, 2)
 
     iter = 0
-    fill!(x, 0)
+    fill!(x, zero(T))
     copyto!(idx, 1:n)
 
     iz2 = n
     iz1 = 1
-    iz = zero(TI)
-    j = zero(TI)
-    jj = zero(TI)
-    nsetp = zero(TI)
+    iz = 0
+    j = 0
+    jj = 0
+    nsetp = 0
     up = zero(T)
 
     terminated = false
@@ -323,7 +322,7 @@ function nnls!(
         @inbounds for i in iz1:iz2
             idxi = idx[i]
             sm = zero(T)
-            @simd for l in (nsetp + 1):m #@avx
+            @simd ivdep for l in (nsetp + 1):m #@avx
                 sm += A[l, idxi] * b[l]
             end
             w[idxi] = sm
@@ -347,8 +346,7 @@ function nnls!(
             # BEGIN THE TRANSFORMATION AND CHECK NEW DIAGONAL ELEMENT TO AVOID
             # NEAR LINEAR DEPENDENCE.
             Asave = A[nsetp + 1, j]
-            up = construct_householder!(
-                 fastview(A, Ainds[nsetp + 1, j], m - nsetp), up)
+            up = construct_householder!(uview(A, nsetp+1:m, j), up)
             unorm = zero(T)
             @simd for l in 1:nsetp #@avx
                 unorm += A[l, j]^2
@@ -360,10 +358,7 @@ function nnls!(
                 # AND SOLVE FOR ZTEST ( = PROPOSED NEW VALUE FOR X(J) ).
                 # println("copying b into zz")
                 copyto!(zz, b)
-                apply_householder!(
-                    fastview(A, Ainds[nsetp + 1, j], m - nsetp),
-                    up,
-                    fastview(zz, nsetp + 1, m - nsetp))
+                apply_householder!(uview(A, nsetp+1:m, j), up, uview(zz, nsetp+1:m))
                 ztest = zz[nsetp + 1] / A[nsetp + 1, j]
 
                 # SEE IF ZTEST IS POSITIVE
@@ -376,7 +371,7 @@ function nnls!(
             # RESTORE A(NPP1,J), SET W(J)=0., AND LOOP BACK TO TEST DUAL
             # COEFFS AGAIN.
             A[nsetp + 1, j] = Asave
-            w[j] = 0
+            w[j] = zero(T)
         end
         if terminated
             break
@@ -396,20 +391,17 @@ function nnls!(
         if iz1 <= iz2
             @inbounds for jz in iz1:iz2
                 jj = idx[jz]
-                apply_householder!(
-                    fastview(A, Ainds[nsetp, j], m - nsetp + 1),
-                    up,
-                    fastview(A, Ainds[nsetp, jj], m - nsetp + 1))
+                apply_householder!(uview(A, nsetp:m, j), up, uview(A, nsetp:m, jj))
             end
         end
 
         if nsetp != m
-            @inbounds @simd for l in (nsetp + 1):m #@avx
-                A[l, j] = 0
+            @inbounds @simd ivdep for l in (nsetp + 1):m #@avx
+                A[l, j] = zero(T)
             end
         end
 
-        w[j] = 0
+        w[j] = zero(T)
 
         # SOLVE THE TRIANGULAR SYSTEM.
         # STORE THE SOLUTION TEMPORARILY IN ZZ().
@@ -459,7 +451,7 @@ function nnls!(
             i = idx[jj]
             kk = 1
             @inbounds while true
-                x[i] = 0
+                x[i] = zero(T)
 
                 if jj != nsetp
                     jj += 1
@@ -468,7 +460,7 @@ function nnls!(
                         idx[j - 1] = ii
                         cc, ss, sig = orthogonal_rotmat(A[j - 1, ii], A[j, ii])
                         A[j - 1, ii] = sig
-                        A[j, ii] = 0
+                        A[j, ii] = zero(T)
                         @inbounds for l in 1:n
                             if l != ii
                                 # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
@@ -533,7 +525,7 @@ function nnls!(
             sm += b[i]^2
         end
     else
-        fill!(w, 0)
+        fill!(w, zero(T))
     end
     work.rnorm = sqrt(sm)
     work.nsetp = nsetp
@@ -544,7 +536,7 @@ function nnls!(
         work::NNLSWorkspace{T},
         A::AbstractMatrix{T},
         b::AbstractVector{T},
-        max_iter = 3*size(A, 2)
+        max_iter::Integer = 3*size(A, 2)
     ) where {T}
     load!(work, A, b)
     nnls!(work, max_iter)
@@ -567,7 +559,7 @@ References:
 function nnls(
         A,
         b::AbstractVector{T};
-        max_iter::Int = 3*size(A, 2)
+        max_iter::Integer = 3*size(A, 2)
     ) where {T}
     work = NNLSWorkspace(A, b)
     nnls!(work, max_iter)
