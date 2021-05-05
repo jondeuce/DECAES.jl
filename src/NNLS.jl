@@ -118,19 +118,22 @@ function apply_householder!(A::AbstractMatrix{T}, up, cols, nsetp, j) where {T}
         return
     end
 
+    @inbounds A[nsetp,j] = up
     @inbounds for jj in cols
-        sm = A[nsetp,jj] * up
-        @inbounds @simd for k in nsetp+1:m #@avx
+        sm = zero(T)
+        @inbounds @simd for k in nsetp:m #@avx
             sm += A[k,jj] * A[k,j]
         end
         @inbounds if sm != 0
             sm /= b
-            A[nsetp,jj] += sm * up
-            @inbounds @simd ivdep for i in nsetp+1:m #@avx
+            @inbounds @simd ivdep for i in nsetp:m #@avx
                 A[i,jj] += sm * A[i,j]
             end
         end
     end
+    @inbounds A[nsetp,j] = u1
+
+    return
 end
 
 """
@@ -176,11 +179,13 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
 function solve_triangular_system!(zz, A, idx, nsetp, jj)
+    if nsetp <= 0
+        return jj
+    end
     ip = nsetp
     @inbounds jj = idx[ip]
     @inbounds zz[ip] /= A[ip, jj]
-    @inbounds for l in 2:nsetp
-        ip = nsetp + 1 - l
+    @inbounds for ip in nsetp-1:-1:1
         zz1 = zz[ip + 1]
         @inbounds @simd ivdep for ii in 1:ip #@avx
             zz[ii] -= A[ii, jj] * zz1
@@ -350,7 +355,7 @@ function nnls!(
         @inbounds for i in iz1:iz2
             idxi = idx[i]
             sm = zero(T)
-            @inbounds @simd ivdep for l in (nsetp + 1):m #@avx
+            @inbounds @simd for l in (nsetp + 1):m #@avx
                 sm += A[l, idxi] * b[l]
             end
             w[idxi] = sm
@@ -375,13 +380,7 @@ function nnls!(
             # NEAR LINEAR DEPENDENCE.
             Asave = A[nsetp + 1, j]
             up = construct_householder!(uview(A, nsetp+1:m, j), up)
-            unorm = zero(T)
-            @inbounds @simd for l in 1:nsetp #@avx
-                unorm += A[l, j]^2
-            end
-            unorm = sqrt(unorm)
-
-            if ((unorm + abs(A[nsetp + 1, j]) * factor) - unorm) > 0
+            if abs(A[nsetp + 1, j]) > 0
                 # COL J IS SUFFICIENTLY INDEPENDENT.  COPY B INTO ZZ, UPDATE ZZ
                 # AND SOLVE FOR ZTEST ( = PROPOSED NEW VALUE FOR X(J) ).
                 # println("copying b into zz")
@@ -466,7 +465,7 @@ function nnls!(
 
             # OTHERWISE USE ALPHA WHICH WILL BE BETWEEN 0 AND 1 TO
             # INTERPOLATE BETWEEN THE OLD X AND THE NEW ZZ.
-            @inbounds for ip in 1:nsetp
+            @inbounds @simd for ip in 1:nsetp
                 l = idx[ip]
                 x[l] = x[l] + alpha * (zz[ip] - x[l])
             end
@@ -474,31 +473,35 @@ function nnls!(
             # MODIFY A AND B AND THE INDEX ARRAYS TO MOVE COEFFICIENT I
             # FROM SET P TO SET Z.
             i = idx[jj]
-            kk = 1
             @inbounds while true
                 x[i] = zero(T)
 
                 if jj != nsetp
                     jj += 1
-                    @inbounds for j in jj:nsetp
-                        ii = idx[j]
-                        idx[j - 1] = ii
-                        cc, ss, sig = orthogonal_rotmat(A[j - 1, ii], A[j, ii])
-                        A[j - 1, ii] = sig
-                        A[j, ii] = zero(T)
-                        @inbounds for l in 1:n
-                            if l != ii
-                                # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
-                                temp = A[j - 1, l]
-                                A[j - 1, l] = cc * temp + ss * A[j, l]
-                                A[j, l] = -ss * temp + cc * A[j, l]
-                            end
+                    @inbounds for jji in jj:nsetp
+                        ii = idx[jji]
+                        idx[jji - 1] = ii
+                        cc, ss, sig = orthogonal_rotmat(A[jji - 1, ii], A[jji, ii])
+                        A[jji - 1, ii] = sig
+                        A[jji, ii] = zero(T)
+
+                        # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
+                        @inbounds @simd for l in 1:ii-1
+                            tmp = A[jji-1, l]
+                            A[jji-1, l] = cc * tmp + ss * A[jji, l]
+                            A[jji, l] = -ss * tmp + cc * A[jji, l]
+                        end
+
+                        @inbounds @simd for l in ii+1:n
+                            tmp = A[jji-1, l]
+                            A[jji-1, l] = cc * tmp + ss * A[jji, l]
+                            A[jji, l] = -ss * tmp + cc * A[jji, l]
                         end
 
                         # Apply procedure G2 (CC,SS,B(J-1),B(J))
-                        temp = b[j - 1]
-                        b[j - 1] = cc * temp + ss * b[j]
-                        b[j] = -ss * temp + cc * b[j]
+                        tmp = b[jji - 1]
+                        b[jji - 1] = cc * tmp + ss * b[jji]
+                        b[jji] = -ss * tmp + cc * b[jji]
                     end
                 end
 
@@ -512,11 +515,11 @@ function nnls!(
                 # THAT ARE NONPOSITIVE WILL BE SET TO ZERO
                 # AND MOVED FROM SET P TO SET Z.
                 allfeasible = true
-                @inbounds for jj in 1:nsetp
-                    i = idx[jj]
+                @inbounds for jji in 1:nsetp
+                    i = idx[jji]
                     if x[i] <= 0
                         allfeasible = false
-                        kk = jj
+                        jj = jji
                         break
                     end
                 end
@@ -527,14 +530,14 @@ function nnls!(
 
             # COPY B( ) INTO ZZ( ).  THEN SOLVE AGAIN AND LOOP BACK.
             copyto!(zz, b)
-            jj = solve_triangular_system!(zz, A, idx, nsetp, kk)
+            jj = solve_triangular_system!(zz, A, idx, nsetp, jj)
         end
         if terminated
             break
         end
         # ******  END OF SECONDARY LOOP  ******
 
-        @inbounds for i in 1:nsetp
+        @inbounds @simd for i in 1:nsetp
             x[idx[i]] = zz[i]
         end
         # ALL NEW COEFFS ARE POSITIVE.  LOOP BACK TO BEGINNING.
