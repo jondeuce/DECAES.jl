@@ -27,8 +27,8 @@ end
 end
 
 @inline EPGdecaycurve_work(::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve_work(T, ETL)
-@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
-@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
+@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = ETL <= 16 ? EPGWork_ReIm_Generated(T, ETL) : EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
+@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = ETL <= 16 ? EPGWork_ReIm_Generated(T, ETL) : EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
 
 """
     EPGdecaycurve(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)
@@ -189,6 +189,86 @@ function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm{T,E
     @inbounds decay_curve[ETL] = abs(F̄⋅MPSV[1])
 
     return decay_curve
+end
+
+####
+#### EPGWork_ReIm_Generated
+####
+
+struct EPGWork_ReIm_Generated{T, ETL, MPSVType <: AbstractVector{SVector{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+    MPSV::MPSVType
+    decay_curve::DCType
+end
+function EPGWork_ReIm_Generated(T, ETL::Int)
+    mpsv = SizedVector{ETL,SVector{3,T}}(undef)
+    dc = SizedVector{ETL,T}(undef)
+    EPGWork_ReIm_Generated{T,ETL,typeof(mpsv),typeof(dc)}(mpsv, dc)
+end
+
+function epg_decay_curve_impl!(decay_curve::Type{A}, work::Type{W}, o::Type{O}) where {T, ETL, A<:AbstractVector{T}, W<:EPGWork_ReIm_Generated{T,ETL}, O<:EPGOptions{T,ETL}}
+    mpsv(i::Int) = Symbol(:MPSV, i)
+    quote
+        # Unpack workspace
+        @unpack flip_angle, TE, T2, T1, refcon = o
+        α = deg2rad(flip_angle)
+        α₁, αᵢ = α, α*refcon/180
+
+        # Precompute intermediate variables
+        V                = SA{$T} # alias
+        E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
+        sin½α₁,  cos½α₁  = sincos(α₁/2)
+        sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
+        sinα₁            = 2*sin½α₁*cos½α₁
+        sinαᵢ, cosαᵢ     = sincos(αᵢ)
+        cos²½αᵢ          = (1+cosαᵢ)/2
+        sin²½αᵢ          = 1-cos²½αᵢ
+        a₁, b₁, c₁       = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
+        aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
+        F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+
+        # Initialize MPSV vector elements
+        $([
+            :($(mpsv(i)) = zero(SVector{3,$T}))
+            for i in 1:ETL
+        ]...)
+
+        # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+        m₀ = sin½α₁
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        @inbounds decay_curve[1] = abs(Mᵢ⁺[1])
+        $(mpsv(1)) = Mᵢ⁺
+        $(mpsv(2)) = V[a₁*m₀, 0, 0]
+
+        # Main loop
+        $([
+            quote
+                # Initialize and update `decay_curve` (j = 1)
+                Mᵢ, Mᵢ₊₁ = $(mpsv(1)), $(mpsv(2))
+                Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+                @inbounds decay_curve[$i] = abs(Mᵢ⁺[1])
+                $(mpsv(1)) = Mᵢ⁺
+
+                # Inner loop
+                $([
+                    quote
+                        (Mᵢ₋₁, Mᵢ, Mᵢ₊₁) = (Mᵢ, Mᵢ₊₁, $(mpsv(j+1)))
+                        $(mpsv(j)) = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+                    end
+                    for j in 2:min(i, ETL-i)+1
+                ]...)
+            end
+            for i in 2:ETL-1
+        ]...)
+
+        # Last echo
+        @inbounds decay_curve[$ETL] = abs(F̄⋅$(mpsv(1)))
+
+        return decay_curve
+    end
+end
+
+@generated function epg_decay_curve!(decay_curve::AbstractVector{T}, work::EPGWork_ReIm_Generated{T,ETL}, o::EPGOptions{T,ETL}) where {T,ETL}
+    return epg_decay_curve_impl!(decay_curve, work, o)
 end
 
 ####
@@ -871,6 +951,7 @@ const EPGWork_List = [
         [EPGWork_Vec, EPGWork_Cplx_Vec_Unrolled]
     end...,
     EPGWork_ReIm,
+    EPGWork_ReIm_Generated,
     EPGWork_ReIm_DualCache,
     EPGWork_ReIm_DualCache_Split,
     EPGWork_ReIm_DualCache_Unrolled,
