@@ -308,7 +308,7 @@ end
 # T2-distribution fitting
 # =========================================================
 function T2_distribution_work(decay_basis, decay_data, o::T2mapOptions{T}) where {T}
-    work = if o.Reg == "no"
+    work = if o.Reg == "none"
         # Fit T2 distribution using unregularized NNLS
         lsqnonneg_work(decay_basis, decay_data)
     elseif o.Reg == "chi2"
@@ -329,7 +329,7 @@ function fit_T2_distribution!(thread_buffer, o::T2mapOptions{T}) where {T}
     @unpack T2_dist_work, decay_basis, decay_data = thread_buffer
     @unpack T2_dist, mu_opt, chi2fact_opt = thread_buffer
 
-    @unpack x, mu, chi2factor = if o.Reg == "no"
+    @unpack x, mu, chi2factor = if o.Reg == "none"
         # Fit T2 distribution using unregularized NNLS
         (; x = lsqnonneg!(T2_dist_work), mu = zero(T), chi2factor = one(T))
     elseif o.Reg == "chi2"

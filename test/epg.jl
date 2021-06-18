@@ -7,7 +7,7 @@ using Logging
         for T in (Float32, Float64)
             j < i || continue
             # @info i, j, T, algᵢ, algⱼ
-            for ETL in [6,7,11,12,31,32,63,64]
+            for ETL in [5,6,7,8,31,32,49,50]
                 α  = T(1.0) + T(179.0) * rand(T)
                 TE = T(5e-3) + T(5e-3) * rand(T)
                 T2 = T(10e-3) + T(190e-3) * rand(T)

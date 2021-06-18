@@ -1,3 +1,157 @@
+####
+#### CLI settings
+####
+
+const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz", ".par", ".xml", ".rec")
+const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
+
+const T2MAP_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2mapOptions{Float64}) .=> fieldtypes(T2mapOptions{Float64}))
+const T2PART_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2partOptions{Float64}) .=> fieldtypes(T2partOptions{Float64}))
+
+const ARGPARSE_SETTINGS = ArgParseSettings(
+    prog = "",
+    fromfile_prefix_chars = "@",
+    error_on_conflict = false,
+    exit_after_help = false,
+)
+
+@add_arg_table! ARGPARSE_SETTINGS begin
+    "input"
+        nargs = '+' # At least one input is required
+        arg_type = String
+        required = true
+        help = "one or more input filenames. Valid file types are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
+    "--mask", "-m"
+        nargs = '+' # If --mask is passed, at least one input is required
+        arg_type = String
+        help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. The number of mask files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
+    "--output", "-o"
+        arg_type = String
+        help = "output directory. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). Outputs are stored with the same basename as inputs and additional suffixes; see --T2map and --T2part"
+    "--T2map"
+        action = :store_true
+        help = "call T2mapSEcorr to compute T2 distributions from 4D multi spin-echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat"
+    "--T2part"
+        action = :store_true
+        help = "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi spin-echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Output T2 parts are saved as a MAT file with extension .t2parts.mat"
+    "--quiet", "-q"
+        action = :store_true
+        help = "suppress printing to the terminal. Note: all terminal output, including errors and warnings, is still printed to the log file"
+    "--dry"
+        action = :store_true
+        help = "execute dry run of processing without saving any results"
+    "--legacy"
+        action = :store_true
+        help = "use legacy settings and algorithms from the original MATLAB version. This ensures that the exact same T2-distributions and T2-parts will be produced as those from MATLAB (to machine precision). Note that execution time will be much slower."
+end
+
+add_arg_group!(ARGPARSE_SETTINGS,
+    "T2map/T2part arguments",
+    "internal arguments for performing T2map and T2part analyses",
+)
+
+@add_arg_table! ARGPARSE_SETTINGS begin
+    "--MatrixSize"
+        nargs = 3
+        arg_type = Int
+        help = "Size of first 3 dimensions of input 4D image. Inferred automatically"
+    "--nTE"
+        arg_type = Int
+        help = "Number of echoes in input signal. Inferred automatically when --T2map is passed"
+    "--TE"
+        arg_type = Float64
+        help = "Interecho spacing (Units: seconds). Required when --T2map is passed"
+    "--nT2"
+        arg_type = Int
+        help = "Number of T2 times to estimate in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension if only --T2part is passed"
+    "--T2Range"
+        nargs = 2
+        arg_type = Float64
+        help = "Tuple of min and max T2 values (Units: seconds). Required parameter."
+    "--SPWin"
+        nargs = 2
+        arg_type = Float64
+        help = "Tuple of min and max T2 values of the short peak window (Units: seconds). Required parameter when --T2part is passed"
+    "--MPWin"
+        nargs = 2
+        arg_type = Float64
+        help = "Tuple of min and max T2 values of the middle peak window (Units: seconds). Required parameter when --T2part is passed"
+    "--T1"
+        arg_type = Float64
+        help = "Assumed value of T1 (Units: seconds)."
+    "--Reg"
+        arg_type = String
+        help = "Regularization routine to use. One of \"none\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, --Chi2Factor based Tikhonov regularization, Generalized Cross-Validation based regularization, or L-Curve based regularization, respectively."
+    "--Chi2Factor"
+        arg_type = Float64
+        help = "Constraint on \$\\chi^2\$ used for regularization when --Reg==\"chi2\"."
+    "--Sigmoid"
+        arg_type = Float64
+        help = "Apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small peak window cutoff time. --Sigmoid is the delta-T2 parameter, which is the distance in seconds on either side of the --SPWin upper limit where the sigmoid curve reaches 10% and 90% (Units: seconds)."
+    "--Threshold"
+        arg_type = Float64
+        help = "First echo intensity cutoff for empty voxels."
+end
+
+add_arg_group!(ARGPARSE_SETTINGS,
+    "B1 correction and stimulated echo correction",
+    "optional additional output maps",
+)
+@add_arg_table! ARGPARSE_SETTINGS begin
+    "--nRefAngles"
+        arg_type = Int
+        help = "During flip angle optimization, goodness of fit is checked for up to --nRefAngles angles in the range [--MinRefAngle, 180]. The optimal angle is then determined through interpolation from these samples."
+    "--nRefAnglesMin"
+        arg_type = Int
+        help = "Initial number of angles to check during flip angle optimization before refinement near likely optima. Setting --nRefAnglesMin equal to --nRefAngles forces all angles to be checked."
+    "--MinRefAngle"
+        arg_type = Float64
+        help = "Minimum refocusing angle for flip angle optimization (Units: degrees)."
+    "--SetFlipAngle"
+        arg_type = Float64
+        help = "Instead of optimizing flip angle, use --SetFlipAngle for all voxels (Units: degrees)."
+    "--RefConAngle"
+        arg_type = Float64
+        help = "Refocusing pulse control angle for stimulated echo correction; 180 degrees is equivalent to no correction (Units: degrees)."
+end
+
+add_arg_group!(ARGPARSE_SETTINGS,
+    "Save options",
+    "optional additional output maps",
+)
+@add_arg_table! ARGPARSE_SETTINGS begin
+    "--SaveDecayCurve"
+        action = :store_true
+        help = "Boolean flag to include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary."
+    "--SaveNNLSBasis"
+        action = :store_true
+        help = "Boolean flag to include a 5D (or 2D if --SetFlipAngle is used) array of NNLS basis matrices in the output maps dictionary."
+    "--SaveRegParam"
+        action = :store_true
+        help = "Boolean flag to include 3D arrays of the regularization parameters \$\\mu\$ and resulting \$\\chi^2\$-factors in the output maps dictionary."
+    "--SaveResidualNorm"
+        action = :store_true
+        help = "Boolean flag to include a 3D array of the \$\\ell^2\$-norms of the residuals from the NNLS fits in the output maps dictionary."
+end
+
+add_arg_group!(ARGPARSE_SETTINGS,
+    "BET settings",
+    "arguments for mask generation using BET",
+)
+@add_arg_table! ARGPARSE_SETTINGS begin
+    "--bet"
+        action = :store_true
+        help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and --bet will be ignored."
+    "--betargs"
+        arg_type = String
+        default = "-m -n -f 0.25 -R"
+        help = "BET optional arguments. Must be passed as a single string with arguments separated by spaces, e.g. '-m -n'. The flag '-m' creates the binary mask and will be added to the list of arguments if not provided."
+    "--betpath"
+        arg_type = String
+        default = "bet"
+        help = "path to BET executable."
+end
+
 """
     main(command_line_args = ARGS)
 
@@ -140,132 +294,6 @@ function _main(
     printheader(io, "Finished ($(round(toc(t_start); digits = 2)) seconds)")
 
     return nothing
-end
-
-function create_argparse_settings(;legacy = false, add_defaults = false)
-    settings = ArgParseSettings(
-        prog = "",
-        fromfile_prefix_chars = "@",
-        error_on_conflict = false,
-        exit_after_help = false,
-        # exc_handler = ArgParse.debug_handler,
-    )
-
-    @add_arg_table! settings begin
-        "input"
-            help = "one or more input filenames. Valid file types are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
-            required = true
-            nargs = '+' # At least one input is required
-        "--mask", "-m"
-            help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. The number of mask files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
-            nargs = '+' # At least one input is required
-        "--output", "-o"
-            help = "output directory. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). Outputs are stored with the same basename as inputs and additional suffixes; see --T2map and --T2part"
-        "--T2map"
-            help = "call T2mapSEcorr to compute T2 distributions from 4D multi spin-echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat"
-            action = :store_true
-        "--T2part"
-            help = "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi spin-echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Output T2 parts are saved as a MAT file with extension .t2parts.mat"
-            action = :store_true
-        "--quiet", "-q"
-            help = "suppress printing to the terminal. Note: all terminal output, including errors and warnings, is still printed to the log file"
-            action = :store_true
-        "--dry"
-            help = "execute dry run of processing without saving any results"
-            action = :store_true
-        "--legacy"
-            help = "use legacy settings and algorithms from the original MATLAB version. This ensures that the exact same T2-distributions and T2-parts will be produced as those from MATLAB (to machine precision). Note that execution time will be much slower."
-            action = :store_true
-    end
-
-    add_arg_group!(settings,
-        "T2mapSEcorr/T2partSEcorr arguments",
-        "internal arguments",
-    )
-    t2map_opts = T2mapOptions{Float64}(MatrixSize = (1,1,1), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40, legacy = legacy)
-    t2part_opts = T2partOptions{Float64}(MatrixSize = (1,1,1), nT2 = 40, T2Range = (10e-3, 2.0), SPWin = (10e-3, 40e-3), MPWin = (40e-3, 200.0e-3), legacy = legacy)
-    opts_args = sorted_arg_table_entries(t2map_opts, t2part_opts; add_defaults = add_defaults)
-    add_arg_table!(settings, opts_args...)
-
-    add_arg_group!(settings,
-        "BET arguments",
-        "arguments for mask generation using BET",
-    )
-    @add_arg_table! settings begin
-        "--bet"
-            help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and --bet will be ignored."
-            action = :store_true
-        "--betargs"
-            help = "BET optional arguments. Must be passed as a single string with arguments separated by spaces, e.g. '-m -n'. The flag '-m' creates the binary mask and will be added to the list of arguments if not provided."
-            arg_type = String
-            default = "-m -n -f 0.25 -R"
-        "--betpath"
-            help = "path to BET executable."
-            arg_type = String
-            default = "bet"
-    end
-
-    return settings
-end
-
-function sorted_arg_table_entries(
-        @nospecialize(t2map_opts),
-        @nospecialize(t2part_opts);
-        add_defaults = false
-    )
-    required_fields = (:MatrixSize, :nTE, :nT2, :TE, :T2Range, :SPWin, :MPWin)
-    fields, types, values = Symbol[], Type[], Any[]
-    for o in [t2map_opts, t2part_opts], (f,T) in zip(fieldnames(typeof(o)), fieldtypes(typeof(o)))
-        push!(fields, f)
-        push!(types, T)
-        if f ∈ required_fields
-            push!(values, nothing) # automatically determined or required parameters
-        else
-            push!(values, getfield(o, f)) # default parameters
-        end
-    end
-
-    defaults = collect(zip(fields, values, types)) |> triplets -> vcat(
-        [triplets[findfirst(first.(triplets) .== f)] for f in required_fields], # required fields first
-        sort(filter(t -> t[1] ∉ required_fields, triplets); by = tup -> uppercase(string(first(tup)))), # followed by remaining fields alphabetically
-    )
-
-    args = []
-    for (f, v, T) in defaults
-        (f === :vTEparam || f == :legacy) && continue # vTEparam not implemented; legacy grouped with main ArgParse settings
-        push!(args, "--" * string(f))
-        if T <: Bool
-            if add_defaults
-                push!(args, Dict{Symbol,Any}(:action => ifelse(v, :store_false, :store_true)))
-            else
-                push!(args, Dict{Symbol,Any}(:action => :store_const, :constant => !v, :default => nothing))
-            end
-        elseif T <: Union{<:Tuple, Nothing}
-            nargs = length(fieldtypes(_get_tuple_type(T)))
-            props = Dict{Symbol,Any}(
-                :nargs   => nargs,
-                :default => (add_defaults && !isnothing(v)) ? [v...] : nothing,
-            )
-            push!(args, props)
-        else
-            push!(args, Dict{Symbol,Any}(:default => add_defaults ? v : nothing))
-        end
-        if f === :MatrixSize
-            args[end][:help] = "Required parameter; inferred from first three dimensions of input image"
-        elseif f === :nTE
-            args[end][:help] = "Required parameter; inferred from fourth dimension of input image if --T2map is passed"
-        elseif f === :nT2
-            args[end][:help] = "Required parameter; inferred from fourth dimension of input image if --T2part (and not --T2map) is passed"
-        elseif f === :TE
-            args[end][:help] = "Required parameter when --T2map is passed"
-        elseif f === :T2Range
-            args[end][:help] = "Required parameter when --T2map or --T2part is passed"
-        elseif f === :SPWin || f === :MPWin
-            args[end][:help] = "Required parameter when --T2part is passed"
-        end
-    end
-
-    return args
 end
 
 function get_parsed_args_subset(
@@ -460,9 +488,9 @@ _strip_union_nothing(::Type{Union{T, Nothing}}) where {T} = T
 _strip_union_nothing(T::Type) = T
 _get_tuple_type(::Type{Union{Tup, Nothing}}) where {Tup <: Tuple} = Tup
 _get_tuple_type(::Type{Tup}) where {Tup <: Tuple} = Tup
-_maybe_get_first(f, xs) = findfirst(f, xs) |> I -> isnothing(I) ? nothing : xs[I]
 
-maybe_get_suffix(filename) = _maybe_get_first(ext -> endswith(lowercase(filename), ext), ALLOWED_FILE_SUFFIXES) # case-insensitive
+maybe_get_first(f, xs) = findfirst(f, xs) |> I -> isnothing(I) ? nothing : xs[I]
+maybe_get_suffix(filename) = maybe_get_first(ext -> endswith(lowercase(filename), ext), ALLOWED_FILE_SUFFIXES) # case-insensitive
 is_allowed_suffix(filename) = !isnothing(maybe_get_suffix(filename))
 
 function chop_allowed_suffix(filename::AbstractString)
@@ -525,17 +553,3 @@ function redirect_to_devnull(f)
         end
     end
 end
-
-####
-#### Global constants
-####
-
-const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz", ".par", ".xml", ".rec")
-const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
-
-const T2MAP_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2mapOptions{Float64}) .=> fieldtypes(T2mapOptions{Float64}))
-const T2PART_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2partOptions{Float64}) .=> fieldtypes(T2partOptions{Float64}))
-
-const ARGPARSE_SETTINGS = create_argparse_settings(legacy = false, add_defaults = false)
-const ARGPARSE_SETTINGS_DECAES = create_argparse_settings(legacy = false, add_defaults = true)
-const ARGPARSE_SETTINGS_LEGACY = create_argparse_settings(legacy = true, add_defaults = true)

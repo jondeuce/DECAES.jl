@@ -20,7 +20,7 @@ See also:
     "Perform T2-mapping using legacy algorithms."
     legacy::Bool = false
 
-    "Size of first 3 dimensions of input 4D image. This argument is has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`."
+    "Size of first 3 dimensions of input 4D image. This argument has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`."
     MatrixSize::NTuple{3,Int}
     @assert all(MatrixSize .>= 1)
 
@@ -31,6 +31,14 @@ See also:
     "Interecho spacing (Units: seconds). This argument has no default."
     TE::T # seconds
     @assert TE > 0.0
+
+    "Number of T2 times to estimate in the multi-exponential analysis. This argument has no default."
+    nT2::Int
+    @assert nT2 >= 2
+
+    "Tuple of min and max T2 values (Units: seconds). This argument has no default."
+    T2Range::NTuple{2,T} # seconds
+    @assert 0.0 < T2Range[1] < T2Range[2]
 
     # "Variable interecho spacing"
     # vTEparam::Union{Tuple{T,T,Int}, Nothing} = nothing
@@ -51,15 +59,7 @@ See also:
     Chi2Factor::T = 1.02
     @assert Chi2Factor > 1.0
 
-    "Number of T2 times to use. This argument has no default."
-    nT2::Int
-    @assert nT2 >= 2
-
-    "Tuple of min and max T2 values (Units: seconds). This argument has no default."
-    T2Range::NTuple{2,T} # seconds
-    @assert 0.0 < T2Range[1] < T2Range[2]
-
-    "Refocusing pulse control angle (Units: degrees)."
+    "Refocusing pulse control angle for stimulated echo correction (Units: degrees)."
     RefConAngle::T = 180.0 # degrees
     @assert 0.0 <= RefConAngle <= 180.0
 
@@ -75,9 +75,9 @@ See also:
     nRefAnglesMin::Int = !legacy ? min(5, nRefAngles) : nRefAngles
     @assert 2 <= nRefAnglesMin <= nRefAngles
 
-    "Regularization routine to use. One of \"no\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, `Chi2Factor`-based Tikhonov regularization, Generalized Cross-Validation method, or L-Curve based regularization, respectively."
+    "Regularization routine to use. One of \"none\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, `Chi2Factor`-based Tikhonov regularization, Generalized Cross-Validation method, or L-Curve based regularization, respectively."
     Reg::String = "chi2"
-    @assert Reg ∈ ("no", "chi2", "gcv", "lcurve")
+    @assert Reg ∈ ("none", "chi2", "gcv", "lcurve")
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
     SetFlipAngle::Union{T,Nothing} = nothing
@@ -93,7 +93,7 @@ See also:
     SaveRegParam::Bool = false
 
     "Boolean flag to include a 5D (or 2D if `SetFlipAngle` is used) array of NNLS basis matrices in the output maps dictionary."
-    SaveNNLSBasis::Bool = false
+    SaveNNLSBasis::Bool = !isnothing(SetFlipAngle)
 
     "Suppress printing to the console."
     Silent::Bool = false

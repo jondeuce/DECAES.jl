@@ -156,6 +156,8 @@ function jl_to_mat_param!(opts, param, paramval)
         opts[:nAngles] = paramval
     elseif param == :RefConAngle # renamed parameter
         opts[:RefCon] = paramval
+    elseif param == :Reg # renamed Reg="no" to Reg="none"
+        opts[:Reg] = paramval == "none" ? "no" : paramval
     elseif param == :SPWin # renamed parameter
         opts[:spwin] = paramval
     elseif param == :MPWin # renamed parameter
@@ -204,7 +206,7 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     :MPWin            => [(38e-3, 180e-3)],
     :MinRefAngle      => [55.0],
     :RefConAngle      => [172.0],
-    :Reg              => ["no", "chi2", "gcv", "lcurve"],
+    :Reg              => ["none", "chi2", "gcv", "lcurve"],
     :SPWin            => [(13e-3, 37e-3)],
     :SaveResidualNorm => [false, true],
     :SaveDecayCurve   => [false, true],
@@ -324,7 +326,7 @@ const mat_t2map_params_perms = Dict{Symbol, Vector{Any}}(
     :RefConAngle      => [175.0],
     :MinRefAngle      => [60.0],
     :nRefAngles       => [7, 12],
-    :Reg              => ["no", "chi2", "lcurve"],
+    :Reg              => ["none", "chi2", "lcurve"],
     :SetFlipAngle     => [178.0],
     :SaveResidualNorm => [false, true],
     :SaveDecayCurve   => [false, true],

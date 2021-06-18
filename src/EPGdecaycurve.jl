@@ -27,8 +27,8 @@ end
 end
 
 @inline EPGdecaycurve_work(::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve_work(T, ETL)
-@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = ETL <= 16 ? EPGWork_ReIm_Generated(T, ETL) : EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
-@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = ETL <= 16 ? EPGWork_ReIm_Generated(T, ETL) : EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
+@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
+@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
 
 """
     EPGdecaycurve(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)
@@ -951,7 +951,8 @@ const EPGWork_List = [
         [EPGWork_Vec, EPGWork_Cplx_Vec_Unrolled]
     end...,
     EPGWork_ReIm,
-    EPGWork_ReIm_Generated,
+    # TODO: generated function approach is extremely slow to test and provides a small speedup only for ETL <= 16
+    # EPGWork_ReIm_Generated,
     EPGWork_ReIm_DualCache,
     EPGWork_ReIm_DualCache_Split,
     EPGWork_ReIm_DualCache_Unrolled,
