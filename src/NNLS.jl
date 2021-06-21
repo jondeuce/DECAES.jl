@@ -28,7 +28,8 @@
 module NNLS
 
 using LinearAlgebra
-using ..DECAES: @uviews, uviews, uview #, @avx
+using UnsafeArrays: @uviews, uviews, uview
+# using LoopVectorization: @avx
 
 export nnls,
        nnls!,

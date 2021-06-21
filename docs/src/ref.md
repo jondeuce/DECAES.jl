@@ -1,5 +1,9 @@
 # API Reference
 
+```@index
+Pages = ["ref.md"]
+```
+
 ## [$T_2$-distribution mapping](@id t2map)
 
 ```@docs
@@ -21,6 +25,7 @@ lsqnonneg
 lsqnonneg_chi2
 lsqnonneg_gcv
 lsqnonneg_lcurve
+lcurve_corner
 ```
 
 ## [Extended phase graph algorithm](@id epg)

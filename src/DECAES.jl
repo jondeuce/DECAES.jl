@@ -17,7 +17,7 @@ include("NNLS.jl")
 using .NNLS
 
 include("ParXRec.jl")
-import .ParXRec
+using .ParXRec
 
 include("types.jl")
 include("utils.jl")
@@ -29,11 +29,11 @@ include("T2partSEcorr.jl")
 include("main.jl")
 
 # Exported symbols
-export MAT, NIfTI, ParXRec
+export MAT, NIfTI, ParXRec, load_image
 export T2mapSEcorr, T2mapOptions, T2partSEcorr, T2partOptions
 export EPGdecaycurve, EPGdecaycurve!, EPGdecaycurve_work
-export lsqnonneg, lsqnonneg_chi2, lsqnonneg_gcv, lsqnonneg_lcurve
-export main, julia_main, load_image
+export lsqnonneg, lsqnonneg_chi2, lsqnonneg_gcv, lsqnonneg_lcurve, lcurve_corner
+export main, julia_main
 
 # include("precompile.jl")
 # _precompile_()

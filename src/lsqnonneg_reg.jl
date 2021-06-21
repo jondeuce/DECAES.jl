@@ -556,6 +556,7 @@ X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu^2 ||L x||_2^2
 ```
 
 where ``L`` is the identity matrix and ``\\mu`` is chosen by locating the corner of the "L-curve".
+
 Details of L-curve theory and the Generalized Cross-Validation (GCV) method can be found in:
 [Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580](https://doi.org/10.1137/1034115)
 
@@ -578,7 +579,7 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_work_smooth_cache)
     logmu_bounds = (T(-8), T(2))
-    logmu_final = lcurve_corner!(logmu_bounds...) do μ
+    logmu_final = lcurve_corner(logmu_bounds...) do μ
         solve!(work.nnls_work_smooth_cache, μ)
         ξ = log(resnorm(get_cache(work.nnls_work_smooth_cache)))
         η = log(seminorm(get_cache(work.nnls_work_smooth_cache)))
@@ -595,16 +596,14 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
 end
 
 """
-    lcurve_corner!(f, xlow, xhigh)
+    lcurve_corner(f, xlow, xhigh)
 
-Find the corner of the L-curve via curvature maximization.
+Find the corner of the L-curve via curvature maximization using Algorithm 1 from:
 
-The implementation follows Algorithm 1 from the following work:
-
-    A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”
-    IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
+A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”
+IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
-function lcurve_corner!(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::T = 0.05, Ctol::T = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
+function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::T = 0.05, Ctol::T = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
     # Initialize state
     msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [cache[x].C for x in state.x⃗])))
     cache === nothing && (cache = Dict{T,NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}}())
@@ -917,7 +916,6 @@ function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2,T}}
 end
 kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(Pⱼ - Pₖ, Pₗ - Pₖ)
 
-
 ####
 #### GCV method for choosing Tikhonov regularization parameter
 ####
@@ -955,7 +953,8 @@ X = \\mathrm{argmin}_{x \\ge 0} ||Cx - d||_2^2 + \\mu^2 ||L x||_2^2
 ```
 
 where ``L`` is the identity matrix and ``\\mu`` is chosen by the Generalized Cross-Validation (GCV) method.
-Details of the GCV method and L-curve theory generally can be can be found in:
+
+Details of the GCV method and L-curve theory can be can be found in:
 [Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580](https://doi.org/10.1137/1034115)
 
 # Arguments
