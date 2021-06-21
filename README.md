@@ -2,11 +2,9 @@
 
 <!-- [![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://jondeuce.github.io/DECAES.jl/stable) -->
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jondeuce.github.io/DECAES.jl/dev)
-[![Build Status](https://travis-ci.com/jondeuce/DECAES.jl.svg?branch=master)](https://travis-ci.com/jondeuce/DECAES.jl)
-[![Build Status](https://ci.appveyor.com/api/projects/status/github/jondeuce/DECAES.jl?svg=true)](https://ci.appveyor.com/project/jondeuce/DECAES-jl)
-[![Codecov](https://codecov.io/gh/jondeuce/DECAES.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/jondeuce/DECAES.jl)
-[![Coveralls](https://coveralls.io/repos/github/jondeuce/DECAES.jl/badge.svg?branch=master)](https://coveralls.io/github/jondeuce/DECAES.jl?branch=master)
-[![Build Status](https://api.cirrus-ci.com/github/jondeuce/DECAES.jl.svg)](https://cirrus-ci.com/github/jondeuce/DECAES.jl)
+[![Build Status](https://github.com/jondeuce/DECAES.jl/workflows/CI/badge.svg)](https://github.com/jondeuce/DECAES.jl/actions?query=workflow%3ACI)
+[![Coverage Status](https://coveralls.io/repos/github/jondeuce/DECAES.jl/badge.svg?branch=master)](https://coveralls.io/github/jondeuce/DECAES.jl?branch=master)
+[![codecov.io](https://codecov.io/github/jondeuce/DECAES.jl/branch/master/graph/badge.svg)](http://codecov.io/github/jondeuce/DECAES.jl/branch/master)
 
 DECAES is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) from multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
 Post-processing of these T2-distributions allows for the computation of measures such as the [myelin water fraction (MWF)](https://doi.org/10.1002/mrm.1910310614) or the [luminal water fraction (LWF)](https://doi.org/10.1148/radiol.2017161687).
