@@ -8,14 +8,14 @@ const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
 const T2MAP_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2mapOptions{Float64}) .=> fieldtypes(T2mapOptions{Float64}))
 const T2PART_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2partOptions{Float64}) .=> fieldtypes(T2partOptions{Float64}))
 
-const ARGPARSE_SETTINGS = ArgParseSettings(
+const CLI_SETTINGS = ArgParseSettings(
     prog = "",
     fromfile_prefix_chars = "@",
     error_on_conflict = false,
     exit_after_help = false,
 )
 
-@add_arg_table! ARGPARSE_SETTINGS begin
+@add_arg_table! CLI_SETTINGS begin
     "input"
         nargs = '+' # At least one input is required
         arg_type = String
@@ -27,7 +27,7 @@ const ARGPARSE_SETTINGS = ArgParseSettings(
         help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. The number of mask files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
     "--output", "-o"
         arg_type = String
-        help = "output directory. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). Outputs are stored with the same basename as inputs and additional suffixes; see --T2map and --T2part"
+        help = "output directory. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). Outputs are stored with the same basename as the input files with additional suffixes; see --T2map and --T2part"
     "--T2map"
         action = :store_true
         help = "call T2mapSEcorr to compute T2 distributions from 4D multi spin-echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat"
@@ -36,116 +36,116 @@ const ARGPARSE_SETTINGS = ArgParseSettings(
         help = "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi spin-echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Output T2 parts are saved as a MAT file with extension .t2parts.mat"
     "--quiet", "-q"
         action = :store_true
-        help = "suppress printing to the terminal. Note: all terminal output, including errors and warnings, is still printed to the log file"
+        help = "suppress printing to the terminal. Note: all terminal outputs, including errors and warnings, are still printed to the log file"
     "--dry"
         action = :store_true
         help = "execute dry run of processing without saving any results"
     "--legacy"
         action = :store_true
-        help = "use legacy settings and algorithms from the original MATLAB version. This ensures that the exact same T2-distributions and T2-parts will be produced as those from MATLAB (to machine precision). Note that execution time will be much slower."
+        help = "use legacy settings and algorithms from the original MATLAB pipeline. This ensures that the same T2-distributions and T2-parts will be produced as those from MATLAB. Note that execution time will be much slower, and less robust algorithms will be used."
 end
 
-add_arg_group!(ARGPARSE_SETTINGS,
+add_arg_group!(CLI_SETTINGS,
     "T2map/T2part arguments",
     "internal arguments for performing T2map and T2part analyses",
 )
 
-@add_arg_table! ARGPARSE_SETTINGS begin
+@add_arg_table! CLI_SETTINGS begin
     "--MatrixSize"
         nargs = 3
         arg_type = Int
-        help = "Size of first 3 dimensions of input 4D image. Inferred automatically"
+        help = "first three dimensions of input 4D image. Inferred automatically"
     "--nTE"
         arg_type = Int
-        help = "Number of echoes in input signal. Inferred automatically when --T2map is passed"
+        help = "number of echoes in input signal. Inferred automatically when --T2map is passed"
     "--TE"
         arg_type = Float64
-        help = "Interecho spacing (Units: seconds). Required when --T2map is passed"
+        help = "inter-echo spacing (Units: seconds). Required when --T2map is passed"
     "--nT2"
         arg_type = Int
-        help = "Number of T2 times to estimate in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension if only --T2part is passed"
+        help = "number of T2 components used in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension of input image if only --T2part is passed"
     "--T2Range"
         nargs = 2
         arg_type = Float64
-        help = "Tuple of min and max T2 values (Units: seconds). Required parameter."
+        help = "minimum and maximum T2 values (Units: seconds). T2 components are logarithmically spaced between these bounds. Required parameter."
     "--SPWin"
         nargs = 2
         arg_type = Float64
-        help = "Tuple of min and max T2 values of the short peak window (Units: seconds). Required parameter when --T2part is passed"
+        help = "minimum and maximum T2 values of the short peak window (Units: seconds). Required parameter when --T2part is passed"
     "--MPWin"
         nargs = 2
         arg_type = Float64
-        help = "Tuple of min and max T2 values of the middle peak window (Units: seconds). Required parameter when --T2part is passed"
+        help = "minimum and maximum T2 values of the middle peak window (Units: seconds). Required parameter when --T2part is passed"
     "--T1"
         arg_type = Float64
-        help = "Assumed value of T1 (Units: seconds)."
+        help = "assumed value of longitudinal T1 relaxation (Units: seconds)."
     "--Reg"
         arg_type = String
-        help = "Regularization routine to use. One of \"none\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, --Chi2Factor based Tikhonov regularization, Generalized Cross-Validation based regularization, or L-Curve based regularization, respectively."
+        help = "routine used for choosing regularization parameter. One of \"none\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, --Chi2Factor based Tikhonov regularization, generalized cross-validation based regularization, and L-curve based regularization, respectively."
     "--Chi2Factor"
         arg_type = Float64
-        help = "Constraint on \$\\chi^2\$ used for regularization when --Reg==\"chi2\"."
+        help = "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution"
     "--Sigmoid"
         arg_type = Float64
-        help = "Apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small peak window cutoff time. --Sigmoid is the delta-T2 parameter, which is the distance in seconds on either side of the --SPWin upper limit where the sigmoid curve reaches 10% and 90% (Units: seconds)."
+        help = "replace the hard upper limit cutoff time of the short peak window, --SPWin[2], with a smoothed sigmoidal cutoff function, f, scaled and shifted such that f(--SPWin[2] +/- --Sigmoid) = 0.5 -/+ 0.4. --Sigmoid is the time scale of the smoothing (Units: seconds)"
     "--Threshold"
         arg_type = Float64
-        help = "First echo intensity cutoff for empty voxels."
+        help = "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold"
 end
 
-add_arg_group!(ARGPARSE_SETTINGS,
+add_arg_group!(CLI_SETTINGS,
     "B1 correction and stimulated echo correction",
     "optional additional output maps",
 )
-@add_arg_table! ARGPARSE_SETTINGS begin
+@add_arg_table! CLI_SETTINGS begin
     "--nRefAngles"
         arg_type = Int
-        help = "During flip angle optimization, goodness of fit is checked for up to --nRefAngles angles in the range [--MinRefAngle, 180]. The optimal angle is then determined through interpolation from these samples."
+        help = "in estimating the local refocusing flip angle to correct for B1 inhomogeneities, up to --nRefAngles angles in the range [--MinRefAngle, 180] are explicitly checked. The optimal angle is then determined through interpolation from these --nRefAngles observations."
     "--nRefAnglesMin"
         arg_type = Int
-        help = "Initial number of angles to check during flip angle optimization before refinement near likely optima. Setting --nRefAnglesMin equal to --nRefAngles forces all angles to be checked."
+        help = "initial number of angles to check during flip angle estimation before refinement near likely optima. Setting --nRefAnglesMin equal to --nRefAngles forces all angles to be checked."
     "--MinRefAngle"
         arg_type = Float64
-        help = "Minimum refocusing angle for flip angle optimization (Units: degrees)."
+        help = "minimum refocusing angle for flip angle estimation (Units: degrees)."
     "--SetFlipAngle"
         arg_type = Float64
-        help = "Instead of optimizing flip angle, use --SetFlipAngle for all voxels (Units: degrees)."
+        help = "to skip B1 inhomogeneity correction, use --SetFlipAngle to assume a fixed refocusing flip angle for all voxels (Units: degrees)."
     "--RefConAngle"
         arg_type = Float64
-        help = "Refocusing pulse control angle for stimulated echo correction; 180 degrees is equivalent to no correction (Units: degrees)."
+        help = "refocusing pulse control angle for stimulated echo correction. Unlike B1 inhomogeneity correction, stimulated echo correction must be performed manually. By default, --RefConAngle is set to 180 degrees, equivalent to no stimulated echo correction (Units: degrees)."
 end
 
-add_arg_group!(ARGPARSE_SETTINGS,
+add_arg_group!(CLI_SETTINGS,
     "Save options",
     "optional additional output maps",
 )
-@add_arg_table! ARGPARSE_SETTINGS begin
+@add_arg_table! CLI_SETTINGS begin
     "--SaveDecayCurve"
         action = :store_true
-        help = "Boolean flag to include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary."
+        help = "include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary"
     "--SaveNNLSBasis"
         action = :store_true
-        help = "Boolean flag to include a 5D (or 2D if --SetFlipAngle is used) array of NNLS basis matrices in the output maps dictionary."
+        help = "include a 5D (or 2D if --SetFlipAngle is used) array of NNLS basis matrices in the output maps dictionary. Note: this 5D array is extremely large for typical image sizes; in most cases, this flag should only be set when debugging small datasets"
     "--SaveRegParam"
         action = :store_true
-        help = "Boolean flag to include 3D arrays of the regularization parameters \$\\mu\$ and resulting \$\\chi^2\$-factors in the output maps dictionary."
+        help = "include 3D arrays of the regularization parameters and resulting chi^2-factors in the output maps dictionary"
     "--SaveResidualNorm"
         action = :store_true
-        help = "Boolean flag to include a 3D array of the \$\\ell^2\$-norms of the residuals from the NNLS fits in the output maps dictionary."
+        help = "include a 3D array of the l2-norms of the residuals from the NNLS fits in the output maps dictionary"
 end
 
-add_arg_group!(ARGPARSE_SETTINGS,
+add_arg_group!(CLI_SETTINGS,
     "BET settings",
     "arguments for mask generation using BET",
 )
-@add_arg_table! ARGPARSE_SETTINGS begin
+@add_arg_table! CLI_SETTINGS begin
     "--bet"
         action = :store_true
-        help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and --bet will be ignored."
+        help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and the --bet flag will be ignored"
     "--betargs"
         arg_type = String
         default = "-m -n -f 0.25 -R"
-        help = "BET optional arguments. Must be passed as a single string with arguments separated by spaces, e.g. '-m -n'. The flag '-m' creates the binary mask and will be added to the list of arguments if not provided."
+        help = "BET command line interface arguments. Must be passed as a single string with arguments separated by spaces, e.g. '-m -n'. The flag '-m' indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided"
     "--betpath"
         arg_type = String
         default = "bet"
@@ -164,7 +164,7 @@ See also:
 """
 function main(command_line_args::Vector{String} = ARGS)
     # Parse command line arguments
-    opts = parse_args(command_line_args, ARGPARSE_SETTINGS; as_symbols = true)
+    opts = parse_args(command_line_args, CLI_SETTINGS; as_symbols = true)
     if opts === nothing
         # Help message was triggered. Return nothing instead of exit(0)
         return nothing

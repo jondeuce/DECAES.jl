@@ -43,6 +43,7 @@ See also:
     # "Variable interecho spacing"
     # vTEparam::Union{Tuple{T,T,Int}, Nothing} = nothing
     # @assert isnothing(vTEparam) || begin
+    #     error("Variable interecho spacing is not yet supported")
     #     TE1, TE2, nTE1 = vTEparam
     #     0.0 < TE1 < TE2 && nTE1 < nTE && round(Int, TE2/TE1) ≈ TE2/TE1
     # end

@@ -60,7 +60,7 @@ Available command line arguments are broken into four categories:
 
 ```@example
 using DECAES # hide
-DECAES.ArgParse.show_help(DECAES.ARGPARSE_SETTINGS_DECAES; exit_when_done = false) # hide
+DECAES.ArgParse.show_help(DECAES.CLI_SETTINGS; exit_when_done = false) # hide
 ```
 
 !!! note
@@ -275,10 +275,3 @@ The `--legacy` flag is available if *exact* reproducibility is required compared
 This will ensure that all outputs match to nearly machine precision (a relative tolerance of ``10^{-10}`` is used during testing).
 Note however that the `--legacy` flag may cause a significant slowdown in processing time due to less efficient algorithms being used internally, and is therefore not recommended unless absolutely necessary.
 Differences due to changes in default parameters can always be overridden by passing in the desired value explicitly (e.g. `--SPWin 0.014 0.040`) without the need for the `--legacy` flag.
-
-**Default options with the `--legacy` flag**
-
-```@example
-using DECAES # hide
-DECAES.ArgParse.show_help(DECAES.ARGPARSE_SETTINGS_LEGACY; exit_when_done = false) # hide
-```

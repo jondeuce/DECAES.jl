@@ -3,7 +3,7 @@
 ####
 
 ndigits(x::Int) = x == 0 ? 1 : floor(Int, log10(abs(x))) + 1
-logrange(a::T, b::T, len::Int) where {T} = (r = T(10) .^ range(log10(a), log10(b); length = len); r[1] = a; r[end] = b; return r)
+logrange(a::Real, b::Real, len::Int) = (r = exp.(range(log(a), log(b); length = len)); r[1] = a; r[end] = b; return r)
 normcdf(x::T) where {T} = erfc(-x/sqrt(T(2)))/2 # Cumulative distribution for normal distribution
 normccdf(x::T) where {T} = erfc(x/sqrt(T(2)))/2 # Compliment of normcdf, i.e. 1 - normcdf(x)
 
