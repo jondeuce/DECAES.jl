@@ -215,7 +215,7 @@ function main_(io::IO, file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
     )
 
     # Apply mask
-    if !isnothing(file_info[:maskfile])
+    if file_info[:maskfile] !== nothing
         @showtime(io,
             "Applying mask from file: '$(file_info[:maskfile])'",
             try_apply_maskfile!(image, file_info[:maskfile]),
@@ -339,7 +339,7 @@ function get_file_infos(opts::Dict{Symbol, Any})
     end
 
     # Get output folders
-    outputfolders = if isnothing(output)
+    outputfolders = if output === nothing
         dirname.(inputfiles)
     else
         [output for _ in 1:length(inputfiles)]
@@ -374,7 +374,7 @@ function load_image(filename, ::Val{dim} = Val(4)) where {dim}
         # Load first `dim`-dimensional array which is found, or throw an error if none are found
         data = MAT.matread(filename)
         key = findfirst(x -> x isa AbstractArray{T,dim} where {T}, data)
-        if isnothing(key)
+        if key === nothing
             error("No 4D array was found in the input file: $filename")
         end
         data[key]
@@ -456,13 +456,13 @@ function make_bet_mask(image::Array{T,3}, betpath, betargs) where {T}
 end
 make_bet_mask(image::Array{T,4}, args...; kwargs...) where {T} = make_bet_mask(image[:,:,:,1], args...; kwargs...) # use first echo
 
-maybe_get_first(f, xs) = findfirst(f, xs) |> I -> isnothing(I) ? nothing : xs[I]
+maybe_get_first(f, xs) = findfirst(f, xs) |> I -> I === nothing ? nothing : xs[I]
 maybe_get_suffix(filename) = maybe_get_first(ext -> endswith(lowercase(filename), ext), ALLOWED_FILE_SUFFIXES) # case-insensitive
-is_allowed_suffix(filename) = !isnothing(maybe_get_suffix(filename))
+is_allowed_suffix(filename) = maybe_get_suffix(filename) !== nothing
 
 function chop_allowed_suffix(filename::AbstractString)
     ext = maybe_get_suffix(filename)
-    if !isnothing(ext)
+    if ext !== nothing
         return filename[1:end-length(ext)]
     else
         error("Currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported")

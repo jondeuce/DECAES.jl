@@ -46,19 +46,13 @@ function local_gridsearch(f, i::Int)
     return y, i
 end
 
-function mapfindmax(f, xs)
+function mapfind(f, finder, xs)
     ys = map(f, xs)
-    y, i = findmax(ys)
+    y, i = finder(ys)
     xs[i], y, i
 end
-mapfindmax(f, xs::Dict) = mapfindmax(f, collect(xs))
-
-function mapfindmin(f, xs)
-    ys = map(f, xs)
-    y, i = findmin(ys)
-    xs[i], y, i
-end
-mapfindmin(f, xs::Dict) = mapfindmin(f, collect(xs))
+mapfindmax(f, xs) = mapfind(f, findmax, xs)
+mapfindmin(f, xs) = mapfind(f, findmin, xs)
 
 # Threaded `foreach` construct, borrowing implementation from ThreadTools.jl:
 # 
@@ -283,7 +277,7 @@ _spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector; deg_spline = min(3
 function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
     knots = Dierckx.get_knots(spl)
     polys = _build_polynomials(spl)
-    x = nothing
+    x = eltype(knots)(NaN)
     @inbounds for (i,p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
         # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
@@ -291,17 +285,11 @@ function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
             if imag(rᵢ) ≈ 0 # real roots only
                 xᵢ = x₀ + real(rᵢ)
                 if x₀ <= xᵢ <= x₁ # filter roots within range
-                    x = isnothing(x) ? xᵢ : min(x, xᵢ)
+                    x = isnan(x) ? xᵢ : min(x, xᵢ)
                 end
             end
         end
-        if !isnothing(x)
-            return x
-        end
     end
-    # if isnothing(x)
-    #     warn("No root was found on the spline domain; returning nothing")
-    # end
 
     return x
 end
@@ -401,7 +389,7 @@ end
 ####
 
 # Mock CPMG image
-function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40); kwargs...) where {T}
+function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40, Reg = "lcurve"); kwargs...) where {T}
     oldseed = Random.seed!(0)
 
     @unpack MatrixSize, TE, nTE = T2mapOptions(o; kwargs...)
@@ -423,5 +411,5 @@ function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2
 end
 
 # Mock T2 distribution, computed with default parameters
-mock_T2_dist(o::T2mapOptions = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40); kwargs...) =
+mock_T2_dist(o::T2mapOptions = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40, Reg = "lcurve"); kwargs...) =
     T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]

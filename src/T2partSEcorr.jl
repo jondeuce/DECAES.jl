@@ -104,7 +104,7 @@ function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOpti
 
     # Compute T2 distribution parts
     if Σ_dist > 0
-        @inbounds maps["sfr"][I] = !isnothing(o.Sigmoid) ? dot(dist, weights) / Σ_dist : Σ_dist_sp / Σ_dist
+        @inbounds maps["sfr"][I] = o.Sigmoid !== nothing ? dot(dist, weights) / Σ_dist : Σ_dist_sp / Σ_dist
         @inbounds maps["mfr"][I] = Σ_dist_mp / Σ_dist
     end
     if Σ_dist_sp > 0
@@ -133,7 +133,7 @@ function thread_buffer_maker(o::T2partOptions{T}) where {T}
 end
 
 function sigmoid_weights(o::T2partOptions{T}) where {T}
-    if !isnothing(o.Sigmoid)
+    if o.Sigmoid !== nothing
         # Curve reaches 50% at T2_50perc and is (k and 1-k)*100 percent at T2_50perc +/- T2_kperc  
         k, T2_kperc, T2_50perc = T(0.1), o.Sigmoid, o.SPWin[2]
         sigma = abs(T2_kperc / (sqrt(T(2)) * erfinv(2*k-1)))

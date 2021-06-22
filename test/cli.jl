@@ -9,6 +9,7 @@ const default_paramdict = Dict{Symbol,Any}(
     :T2Range => (12e-3, 1.8),
     :SPWin => (12e-3, 37e-3),
     :MPWin => (37e-3, 650e-3),
+    :Reg => "lcurve",
 )
 
 # Legacy settings which previously had defaults
@@ -18,6 +19,8 @@ const legacy_default_paramdict = Dict{Symbol,Any}(
     :T2Range => (15e-3, 2.0),
     :SPWin => (14e-3, 40e-3),
     :MPWin => (40e-3, 200e-3),
+    :Reg => "chi2",
+    :Chi2Factor => 1.02,
 )
 
 # Write 4D image to disk
@@ -95,7 +98,7 @@ function construct_args(paramdict;
 
         for (param, paramval) in paramdict
             # Default flag/value pairs for `nothing` values; `nothing` is always default if allowable, therefore no flag/val is passed
-            if !isnothing(paramval)
+            if paramval !== nothing
                 push!(args, "--" * string(param)) # CLI flags are prepended with "--"
                 append!(args,
                     paramval isa Tuple ? [string(x) for x in paramval] : # Pass each arg separately
@@ -156,8 +159,8 @@ function jl_to_mat_param!(opts, param, paramval)
         opts[:nAngles] = paramval
     elseif param == :RefConAngle # renamed parameter
         opts[:RefCon] = paramval
-    elseif param == :Reg # renamed Reg="no" to Reg="none"
-        opts[:Reg] = paramval == "none" ? "no" : paramval
+    elseif param == :Reg # renamed value: "no" => "none", "lcurve" => "gcv"
+        opts[:Reg] = paramval == "none" ? "no" : paramval == "gcv" ? "lcurve" : paramval
     elseif param == :SPWin # renamed parameter
         opts[:spwin] = paramval
     elseif param == :MPWin # renamed parameter
@@ -201,27 +204,29 @@ end
 # CLI parameter settings to loop over
 #   -Each param value will be tested individually, with all other params set to default values
 #   -Each list should contain some non-default/edge case values
-const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
-    :Chi2Factor       => [1.025],
-    :MPWin            => [(38e-3, 180e-3)],
-    :MinRefAngle      => [55.0],
-    :RefConAngle      => [172.0],
-    :Reg              => ["none", "chi2", "gcv", "lcurve"],
-    :SPWin            => [(13e-3, 37e-3)],
-    :SaveResidualNorm => [false, true],
-    :SaveDecayCurve   => [false, true],
-    :SaveNNLSBasis    => [false, true],
-    :SaveRegParam     => [false, true],
-    :SetFlipAngle     => [nothing, 170.0],
-    :Sigmoid          => [nothing, 1.0],
-    :T1               => [0.95],
-    :T2Range          => [(16e-3, 1.8)],
-    :TE               => [8e-3, 11e-3],
-    :Threshold        => [125_000.0, Inf], # Include non-zero and infinite (i.e. either some or all voxels skipped)
-    :nRefAngles       => [9, 10], # Include odd number
-    :nRefAnglesMin    => [4, 5], # Include odd number
-    :nT2              => [2, 47], # Include odd number
-)
+const cli_params_perms = Any[
+    (:MPWin            .=> [(38e-3, 180e-3)],),
+    (:MinRefAngle      .=> [55.0],),
+    (:RefConAngle      .=> [172.0],),
+    (
+        :Reg           .=> ["none", "chi2", "gcv", "lcurve"],
+        :Chi2Factor    .=> [nothing, 1.025, nothing, nothing],
+    ),
+    (:SPWin            .=> [(13e-3, 37e-3)],),
+    (:SaveResidualNorm .=> [false, true],),
+    (:SaveDecayCurve   .=> [false, true],),
+    (:SaveNNLSBasis    .=> [false, true],),
+    (:SaveRegParam     .=> [false, true],),
+    (:SetFlipAngle     .=> [nothing, 170.0],),
+    (:Sigmoid          .=> [nothing, 1.0],),
+    (:T1               .=> [0.95],),
+    (:T2Range          .=> [(16e-3, 1.8)],),
+    (:TE               .=> [8e-3, 11e-3],),
+    (:Threshold        .=> [125_000.0, Inf],), # Include non-zero and infinite (i.e. either some or all voxels skipped)
+    (:nRefAngles       .=> [9, 10],), # Include odd number
+    (:nRefAnglesMin    .=> [4, 5],), # Include odd number
+    (:nT2              .=> [2, 47],), # Include odd number
+]
 
 @testset "CLI" begin
     make_settings_perms = [false, true]
@@ -230,16 +235,18 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
     nloop = max(length.(iters)...)
     repeat_until(x) = Iterators.take(Iterators.cycle(x), nloop)
 
-    for ((param, valuelist), make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), paramval in valuelist, legacy in [false, true]
-        image = DECAES.mock_image(nTE = rand([4,5,20,67]))
+    for (param_val_lists, make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), param_val_pairs in zip(param_val_lists...), legacy in [false, true]
         paramdict = deepcopy(default_paramdict)
-        paramdict[param] = paramval
+        for (param, paramval) in param_val_pairs
+            paramdict[param] = paramval
+        end
 
+        image = DECAES.mock_image(nTE = rand([4,5,20,37]))
         settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
         settings_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
+        jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
 
         # Run T2map and T2part through Julia API for comparison
-        jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
         t2map, t2dist = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
             T2mapSEcorr(io, image; jl_t2map_kwargs...)
         end
@@ -260,10 +267,11 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !(t2map_passed && t2part_passed)
                 println("\n ------------------------------- \n")
-                @show paramdict
+                println("CLI with --T2map and --T2part failed: $param_val_pairs")
                 @show jl_t2map_kwargs
                 @show jl_t2part_kwargs
                 @show cli_t2map_args
+                @show paramdict
                 println("\n ------------------------------- \n")
             end
         end
@@ -281,10 +289,11 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !t2part_passed
                 println("\n ------------------------------- \n")
-                @show paramdict
+                println("CLI with --T2part only failed: $param_val_pairs")
                 @show jl_t2map_kwargs
                 @show jl_t2part_kwargs
                 @show cli_t2part_args
+                @show paramdict
                 println("\n ------------------------------- \n")
             end
         end
@@ -305,7 +314,7 @@ matlabify(x::AbstractArray) = Float64.(x)
 matlabify(x::Tuple) = [Float64.(x)...]
 matlabify(x::Bool) = x
 matlabify(x) = map(Float64, x)
-matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k,v) in kwargs])
+matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k,v) in kwargs if v !== nothing])
 
 mfile_exists(fname) = MATLAB.mxcall(:exist, 1, fname) == 2
 
@@ -316,31 +325,33 @@ mxT2partSEcorr(image; kwargs...) =
     MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
 
 # Arbitrary non-default T2mapSEcorr options for testing
-const mat_t2map_params_perms = Dict{Symbol, Vector{Any}}(
-    :TE               => [9e-3],
-    :T1               => [1.1],
-    :Threshold        => [250.0],
-    :Chi2Factor       => [1.03],
-    :nT2              => [10, 59], # Include odd number
-    :T2Range          => [(8e-3, 1.0)],
-    :RefConAngle      => [175.0],
-    :MinRefAngle      => [60.0],
-    :nRefAngles       => [7, 12],
-    :Reg              => ["none", "chi2", "lcurve"],
-    :SetFlipAngle     => [178.0],
-    :SaveResidualNorm => [false, true],
-    :SaveDecayCurve   => [false, true],
-    :SaveRegParam     => [false, true],
-    :SaveNNLSBasis    => [false, true],
-)
+const mat_t2map_params_perms = Any[
+    (:TE               .=> [9e-3],),
+    (:T1               .=> [1.1],),
+    (:Threshold        .=> [250.0],),
+    (:nT2              .=> [10, 59],), # Include odd number
+    (:T2Range          .=> [(8e-3, 1.0)],),
+    (:RefConAngle      .=> [175.0],),
+    (:MinRefAngle      .=> [60.0],),
+    (:nRefAngles       .=> [7, 12],),
+    (
+        :Reg           .=> ["none", "chi2", "lcurve", "gcv"],
+        :Chi2Factor    .=> [nothing, 1.03, nothing, nothing],
+    ),
+    (:SetFlipAngle     .=> [178.0],),
+    (:SaveResidualNorm .=> [false, true],),
+    (:SaveDecayCurve   .=> [false, true],),
+    (:SaveRegParam     .=> [false, true],),
+    (:SaveNNLSBasis    .=> [false, true],),
+]
 
 # Arbitrary non-default T2partSEcorr options for testing
-const mat_t2part_params_perms = Dict{Symbol, Vector{Any}}(
-    :T2Range    => [(11e-3, 1.5)],
-    :SPWin      => [(12e-3, 28e-3)],
-    :MPWin      => [(35e-3, 150e-3)],
-    :Sigmoid    => [1.5],
-)
+const mat_t2part_params_perms = Any[
+    (:T2Range    .=> [(11e-3, 1.5)],),
+    (:SPWin      .=> [(12e-3, 28e-3)],),
+    (:MPWin      .=> [(35e-3, 150e-3)],),
+    (:Sigmoid    .=> [1.5],),
+]
 
 function matlab_tests()
     # Relative tolerance threshold for legacy algorithms to match MATLAB version
@@ -350,31 +361,42 @@ function matlab_tests()
         settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
         settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
 
-        for (param,valuelist) in mat_t2map_params_perms, paramval in valuelist
-            # The MATLAB flag "lcurve" for choosing the regularization parameter uses the Generalized Cross-Validation (GCV) method.
-            # GCV involves minimizing a functional GCV(mu), which is implemented using an internal call to `fminbnd` with a tolerance of 1e-3,
-            # and therefore the Julia outputs would only match to at best a tolerance of 1e-3.
-            # Additionally, there is a typo in the `G(mu,C_g,d_g)` subfunction:
-            #   - Numerator should be ||A*x_mu - b||^2, not ||A*x_mu - b||
-            #   - See e.g. equation (1.4) in Fenu, C. et al., 2017, GCV for Tikhonov regularization by partial SVD (https://doi.org/10.1007/s10543-017-0662-0)
-            # There is also a small error in methodology:
-            #   - Solving regularized ||Ax-b||^2 via [A; mu*I] \ [b; 0] is equivalent to minimizing (note mu^2, not mu):
-            #       ||Ax-b||^2 + mu^2||x||^2
-            # Below, this test is therefore skipped by default. If you have a version in which these errors are fixed,
-            # the below line can be modified (with rtol set appropriately larger than your solver tolerance)
+        for param_val_lists in mat_t2map_params_perms, param_val_pairs in zip(param_val_lists...)
             rtol = default_rtol
-            if param === :Reg && paramval == "lcurve"
+            paramdict = deepcopy(legacy_default_paramdict)
+            for (param, paramval) in param_val_pairs
+                paramdict[param] = paramval
+            end
+
+            # The MATLAB flag "lcurve" for choosing the regularization parameter uses the Generalized Cross-Validation (GCV) method.
+            # There are several issues with comparing the DECAES implementation with MATLAB:
+            #   1.  GCV involves minimizing a functional GCV(mu), which is implemented using an internal call to `fminbnd` with a tolerance of 1e-3,
+            #       and therefore the Julia outputs would only match to at best a tolerance of 1e-3
+            #   2.  There is an error in the `G(mu,C_g,d_g)` subfunction in the MATLAB MWI Toolbox:
+            #       -   Numerator should be ||A*x_mu - b||^2, not ||A*x_mu - b||
+            #       -   See e.g. equation (1.4) in Fenu, C. et al., 2017, GCV for Tikhonov regularization by partial SVD (https://doi.org/10.1007/s10543-017-0662-0)
+            #   3.  There is an error in methodology:
+            #       -   Solving regularized ||Ax-b||^2 via [A; mu*I] \ [b; 0] is equivalent to minimizing
+            #               ||Ax-b||^2 + mu^2 * ||x||^2
+            #           as opposed to
+            #               ||Ax-b||^2 + mu * ||x||^2
+            #           as is used in the MWI toolbox
+            #   4.  The MATLAB equivalent to --Reg="lcurve" has been replaced with the more accurate --Reg="gcv".
+            #       In DECAES, --Reg="lcurve" implements a different method which utilizes the L-curve method; see:
+            #           A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”
+            #           IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
+            # This comparison is therefore skipped by default. If you have a version in which these errors are fixed,
+            # the below line can be modified (with rtol set appropriately in accordance with your solver tolerance)
+            if any(param === :Reg && paramval ∈ ("lcurve", "gcv") for (param, paramval) in param_val_pairs)
                 continue
                 # rtol = 1e-3
             end
 
-            paramdict = deepcopy(legacy_default_paramdict)
-            paramdict[param] = paramval
             jl_t2map_kwargs,  _ = construct_args(paramdict; settings_kwargs_jl...)
             mat_t2map_kwargs, _ = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2mapSEcorr
-            image = DECAES.mock_image(nTE = rand([4,5,20,67]))
+            image = DECAES.mock_image(nTE = rand([4,5,20,37]))
             t2map_out_jl = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
                 T2mapSEcorr(io, image; jl_t2map_kwargs...)
             end
@@ -382,7 +404,14 @@ function matlab_tests()
                 mxT2mapSEcorr(image; mat_t2map_kwargs...)
             end
             allpassed = test_compare_t2map(t2map_out_jl, t2map_out_mat; rtol = rtol)
-            !allpassed && println("t2map failed: $param = $paramval")
+            if !allpassed
+                println("\n ------------------------------- \n")
+                println("MATLAB T2mapSEcorr comparison failed: $param_val_pairs")
+                @show jl_t2map_kwargs
+                @show mat_t2map_kwargs
+                @show paramdict
+                println("\n ------------------------------- \n")
+            end
         end
     end
 
@@ -390,10 +419,12 @@ function matlab_tests()
         settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
         settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
 
-        for (param,valuelist) in mat_t2part_params_perms, paramval in valuelist
+        for param_val_lists in mat_t2part_params_perms, param_val_pairs in zip(param_val_lists...)
             paramdict = deepcopy(legacy_default_paramdict)
-            paramdict[param] = paramval
             delete!(paramdict, :nT2) # inferred
+            for (param, paramval) in param_val_pairs
+                paramdict[param] = paramval
+            end
             _, jl_t2part_kwargs  = construct_args(paramdict; settings_kwargs_jl...)
             _, mat_t2part_kwargs = construct_args(paramdict; settings_kwargs_mat...)
 
@@ -406,7 +437,14 @@ function matlab_tests()
                 mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
             end
             allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
-            !allpassed && println("t2part failed: $param = $paramval")
+            if !allpassed
+                println("\n ------------------------------- \n")
+                println("MATLAB T2partSEcorr comparison failed: $param_val_pairs")
+                @show jl_t2part_kwargs
+                @show mat_t2part_kwargs
+                @show paramdict
+                println("\n ------------------------------- \n")
+            end
         end
     end
 end

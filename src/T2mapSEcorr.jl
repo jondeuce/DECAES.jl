@@ -138,7 +138,7 @@ function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {
     maps["echotimes"] = convert(Vector{T}, copy(opts.TE .* (1:opts.nTE))) #TODO update if vTEparam is implemented
     maps["t2times"]   = convert(Vector{T}, copy(T2_times))
 
-    if isnothing(opts.SetFlipAngle)
+    if opts.SetFlipAngle === nothing
         maps["refangleset"]   = convert(Vector{T}, copy(flip_angles))
         maps["decaybasisset"] = convert(Array{T,3}, reshape(reduce(hcat, decay_basis_set), size(decay_basis_set[1])..., length(decay_basis_set)))
     else
@@ -169,7 +169,7 @@ function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {
     end
 
     if opts.SaveNNLSBasis
-        if isnothing(opts.SetFlipAngle)
+        if opts.SetFlipAngle === nothing
             maps["decaybasis"] = fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) # unique decay basis set for each voxel
         else
             maps["decaybasis"] = convert(Matrix{T}, copy(decay_basis)) # single decay basis set used for all voxels
@@ -194,14 +194,14 @@ function voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, o
     end
 
     # Find optimum flip angle
-    if isnothing(opts.SetFlipAngle)
+    if opts.SetFlipAngle === nothing
         @timeit_debug TIMER() "Optimize Flip Angle" begin
             optimize_flip_angle!(thread_buffer, opts)
         end
     end
 
     # Fit decay basis using optimized alpha
-    if isnothing(opts.SetFlipAngle)
+    if opts.SetFlipAngle === nothing
         @timeit_debug TIMER() "Compute Final NNLS Basis" begin
             epg_decay_basis!(thread_buffer, opts)
         end
@@ -263,7 +263,7 @@ end
 function init_epg_decay_basis!(thread_buffer, o::T2mapOptions)
     @unpack decay_curve_work, decay_basis_set, decay_basis, flip_angles, T2_times = thread_buffer
 
-    if isnothing(o.SetFlipAngle)
+    if o.SetFlipAngle === nothing
         # Loop to compute basis for each angle
         @inbounds for i in 1:o.nRefAngles
             epg_decay_basis!(decay_curve_work, decay_basis_set[i], flip_angles[i], T2_times, o)
@@ -390,7 +390,7 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
     end
 
     # Optionally save NNLS basis
-    if o.SaveNNLSBasis && isnothing(o.SetFlipAngle)
+    if o.SaveNNLSBasis && o.SetFlipAngle === nothing
         @unpack decaybasis = maps
         @inbounds @simd for J in CartesianIndices((o.nTE, o.nT2))
             decaybasis[I,J] = decay_basis[J]
@@ -423,7 +423,7 @@ function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
         decay_curve_work = epg_decay_curve_work(o),
         flip_angle_work  = optimize_flip_angle_work(o),
         T2_dist_work     = T2_distribution_work(decay_basis, decay_data, o),
-        alpha_opt        = Ref(ifelse(isnothing(o.SetFlipAngle), T(NaN), o.SetFlipAngle)),
+        alpha_opt        = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle),
         chi2_alpha_opt   = Ref(T(NaN)),
         T2_dist          = zeros(T, o.nT2),
         gva_buf          = zeros(T, o.nT2),

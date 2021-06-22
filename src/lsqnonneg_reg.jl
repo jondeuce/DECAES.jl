@@ -627,7 +627,7 @@ function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::
     while true
         if backtracking
             # Find state with minimum diameter which contains the current best estimate maximum curvature point
-            (x, (P, C)), _, _ = mapfindmax(((x, (P, C)),) -> C, cache)
+            (x, (P, C)), _, _ = mapfindmax(((x, (P, C)),) -> C, collect(cache))
             for s in state_cache
                 if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
                     state = s
@@ -737,7 +737,7 @@ function refine!(f, state::LCurveCornerState{T}, cache; Pfilter = nothing, analy
     end
     maybecall!(f, x_opt, state, cache)
     update_curvature!(state, cache; Pfilter)
-    (x_opt, (_, _)), _, _ = mapfindmax(((x,(P,C)),) -> C, cache)
+    (x_opt, (_, _)), _, _ = mapfindmax(((x, (P, C)),) -> C, collect(cache))
     return x_opt
 end
 

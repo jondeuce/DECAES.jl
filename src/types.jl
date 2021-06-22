@@ -42,7 +42,7 @@ See also:
 
     # "Variable interecho spacing"
     # vTEparam::Union{Tuple{T,T,Int}, Nothing} = nothing
-    # @assert isnothing(vTEparam) || begin
+    # @assert vTEparam === nothing || begin
     #     error("Variable interecho spacing is not yet supported")
     #     TE1, TE2, nTE1 = vTEparam
     #     0.0 < TE1 < TE2 && nTE1 < nTE && round(Int, TE2/TE1) ≈ TE2/TE1
@@ -55,10 +55,6 @@ See also:
     "First echo intensity cutoff for empty voxels."
     Threshold::T = !legacy ? 0.0 : 200.0
     @assert Threshold >= 0.0
-
-    "Constraint on ``\\chi^2`` used for regularization when `Reg == \"chi2\"`."
-    Chi2Factor::T = 1.02
-    @assert Chi2Factor > 1.0
 
     "Refocusing pulse control angle for stimulated echo correction (Units: degrees)."
     RefConAngle::T = 180.0 # degrees
@@ -77,12 +73,16 @@ See also:
     @assert 2 <= nRefAnglesMin <= nRefAngles
 
     "Regularization routine to use. One of \"none\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, `Chi2Factor`-based Tikhonov regularization, Generalized Cross-Validation method, or L-Curve based regularization, respectively."
-    Reg::String = "chi2"
+    Reg::String
     @assert Reg ∈ ("none", "chi2", "gcv", "lcurve")
+
+    "Constraint on ``\\chi^2`` used for regularization when `Reg == \"chi2\"`."
+    Chi2Factor::Union{T,Nothing} = nothing
+    @assert (Reg == "chi2" && Chi2Factor !== nothing && Chi2Factor > 1.0) || Reg != "chi2"
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
     SetFlipAngle::Union{T,Nothing} = nothing
-    @assert isnothing(SetFlipAngle) || 0.0 <= SetFlipAngle <= 180.0
+    @assert SetFlipAngle === nothing || 0.0 <= SetFlipAngle <= 180.0
 
     "Boolean flag to include a 3D array of the ``\\ell^2``-norms of the residuals from the NNLS fits in the output maps dictionary."
     SaveResidualNorm::Bool = false
@@ -94,7 +94,7 @@ See also:
     SaveRegParam::Bool = false
 
     "Boolean flag to include a 5D (or 2D if `SetFlipAngle` is used) array of NNLS basis matrices in the output maps dictionary."
-    SaveNNLSBasis::Bool = !isnothing(SetFlipAngle)
+    SaveNNLSBasis::Bool = SetFlipAngle !== nothing
 
     "Suppress printing to the console."
     Silent::Bool = false
@@ -157,7 +157,7 @@ See also:
 
     "Apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small peak window cutoff time. `Sigmoid` is the delta-T2 parameter, which is the distance in seconds on either side of the `SPWin` upper limit where the sigmoid curve reaches 10% and 90% (Units: seconds)."
     Sigmoid::Union{T,Nothing} = nothing
-    @assert isnothing(Sigmoid) || Sigmoid > 0
+    @assert Sigmoid === nothing || Sigmoid > 0
 
     "Suppress printing to the console."
     Silent::Bool = false
