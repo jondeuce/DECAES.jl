@@ -46,6 +46,20 @@ function local_gridsearch(f, i::Int)
     return y, i
 end
 
+function mapfindmax(f, xs)
+    ys = map(f, xs)
+    y, i = findmax(ys)
+    xs[i], y, i
+end
+mapfindmax(f, xs::Dict) = mapfindmax(f, collect(xs))
+
+function mapfindmin(f, xs)
+    ys = map(f, xs)
+    y, i = findmin(ys)
+    xs[i], y, i
+end
+mapfindmin(f, xs::Dict) = mapfindmin(f, collect(xs))
+
 # Threaded `foreach` construct, borrowing implementation from ThreadTools.jl:
 # 
 #   https://github.com/baggepinnen/ThreadTools.jl/blob/55aaf2bbe735e52cefaad143e7614d4f00e312b0/src/ThreadTools.jl#L57
@@ -84,6 +98,7 @@ end
 
 const GLOBAL_TIMER = TimerOutput() # Global timer object
 const THREAD_LOCAL_TIMERS = [TimerOutput() for _ in 1:Threads.nthreads()] # Thread-local timer objects
+RESET_TIMERS!() = foreach(reset_timer!, THREAD_LOCAL_TIMERS)
 TIMER() = @inbounds THREAD_LOCAL_TIMERS[Threads.threadid()]
 
 tic() = time()

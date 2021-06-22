@@ -1,6 +1,6 @@
 """
-    T2mapSEcorr(image; <keyword arguments>)
-    T2mapSEcorr(image, opts::T2mapOptions)
+    T2mapSEcorr([io = stderr,] image::Array{T,4}; <keyword arguments>)
+    T2mapSEcorr([io = stderr,] image::Array{T,4}, opts::T2mapOptions{T})
 
 Uses nonnegative least squares (NNLS) to compute T2 distributions in the presence of stimulated echos by optimizing the refocusing pulse flip angle.
 Records parameter maps and T2 distributions for further partitioning.
@@ -58,19 +58,12 @@ See also:
 * [`lsqnonneg_lcurve`](@ref)
 * [`EPGdecaycurve`](@ref)
 """
-function T2mapSEcorr(image::Array{T,4}; io::IO = stderr, kwargs...) where {T}
-    map(reset_timer!, THREAD_LOCAL_TIMERS)
-    out = @timeit_debug TIMER() "T2mapSEcorr" begin
-        T2mapSEcorr(image, T2mapOptions(image; kwargs...); io = io)
-    end
-    if timeit_debug_enabled()
-        display(THREAD_LOCAL_TIMERS[1]) #TODO
-        display(TimerOutputs.flatten(THREAD_LOCAL_TIMERS[1])) #TODO
-    end
-    return out
-end
+T2mapSEcorr(image::Array{T,4}; kwargs...) where {T} = T2mapSEcorr(stderr, image; kwargs...)
+T2mapSEcorr(io::IO, image::Array{T,4}; kwargs...) where {T} = T2mapSEcorr(io, image, T2mapOptions(image; kwargs...))
+T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T} = T2mapSEcorr(stderr, image, opts)
+T2mapSEcorr(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T} = @timeit_debug TIMER() "T2mapSEcorr" T2mapSEcorr_(io, image, opts)
 
-function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}; io::IO = stderr) where {T}
+function T2mapSEcorr_(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     # =========================================================================
     # Initialize output data structures and thread-local buffers
     # =========================================================================

@@ -241,10 +241,10 @@ const cli_params_perms = Dict{Symbol, Vector{<:Any}}(
         # Run T2map and T2part through Julia API for comparison
         jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
         t2map, t2dist = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
-            T2mapSEcorr(image; io = io, jl_t2map_kwargs...)
+            T2mapSEcorr(io, image; jl_t2map_kwargs...)
         end
         t2part = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
-            T2partSEcorr(t2dist; io = io, jl_t2part_kwargs...)
+            T2partSEcorr(io, t2dist; jl_t2part_kwargs...)
         end
 
         # Run CLI with both --T2map and --T2part flags
@@ -376,7 +376,7 @@ function matlab_tests()
             # Run T2mapSEcorr
             image = DECAES.mock_image(nTE = rand([4,5,20,67]))
             t2map_out_jl = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
-                T2mapSEcorr(image; io = io, jl_t2map_kwargs...)
+                T2mapSEcorr(io, image; jl_t2map_kwargs...)
             end
             t2map_out_mat = DECAES.redirect_to_devnull() do
                 mxT2mapSEcorr(image; mat_t2map_kwargs...)
@@ -400,7 +400,7 @@ function matlab_tests()
             # Run T2partSEcorr
             T2dist = DECAES.mock_T2_dist(nT2 = rand([5,19,20,40,60])) #rand([4,5,40,41]))
             t2part_jl = DECAES.tee_capture(suppress_terminal = true, suppress_logfile = true) do io
-                T2partSEcorr(T2dist; io = io, jl_t2part_kwargs...)
+                T2partSEcorr(io, T2dist; jl_t2part_kwargs...)
             end
             t2part_mat = DECAES.redirect_to_devnull() do
                 mxT2partSEcorr(T2dist; mat_t2part_kwargs...)

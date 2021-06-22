@@ -5,9 +5,6 @@
 const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz", ".par", ".xml", ".rec")
 const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
 
-const T2MAP_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2mapOptions{Float64}) .=> fieldtypes(T2mapOptions{Float64}))
-const T2PART_FIELDTYPES = Dict{Symbol,Type}(fieldnames(T2partOptions{Float64}) .=> fieldtypes(T2partOptions{Float64}))
-
 const CLI_SETTINGS = ArgParseSettings(
     prog = "",
     fromfile_prefix_chars = "@",
@@ -163,6 +160,7 @@ See also:
 * [`T2partSEcorr`](@ref)
 """
 function main(command_line_args::Vector{String} = ARGS)
+
     # Parse command line arguments
     opts = parse_args(command_line_args, CLI_SETTINGS; as_symbols = true)
     if opts === nothing
@@ -170,41 +168,32 @@ function main(command_line_args::Vector{String} = ARGS)
         return nothing
     end
 
-    # Unpack parsed flags, overriding appropriate options fields
-    t2map_kwargs = get_parsed_args_subset(opts, T2MAP_FIELDTYPES)
-    t2part_kwargs = get_parsed_args_subset(opts, T2PART_FIELDTYPES)
-
-    # If not performing T2-mapping, infer nT2 from input T2 distribution
-    if !opts[:T2map]
-        delete!(t2part_kwargs, :nT2)
-    end
-
     # Get input file list and output folder list
-    for info in get_file_info(opts)
+    for file_info in get_file_infos(opts)
         # Make output path
         if !opts[:dry]
-            mkpath(info[:outputfolder])
+            mkpath(file_info[:outputfolder])
         end
 
         # Save settings files
         if !opts[:dry]
             map(filter(s -> startswith(s, "@"), command_line_args)) do settingsfile
                 src = settingsfile[2:end] # drop "@" character
-                dst = joinpath(info[:outputfolder], info[:choppedinputfile] * "." * basename(src))
+                dst = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * "." * basename(src))
                 cp(src, dst; force = true)
             end
         end
 
         # Main processing
         tee_capture(
-            logfile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".log"),
+            logfile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".log"),
             suppress_terminal = opts[:quiet],
             suppress_logfile = opts[:dry],
         ) do io
             try
-                _main(io, info, opts, t2map_kwargs, t2part_kwargs)
+                main_(io, file_info, opts)
             catch e
-                @warn "Error during processing of file: $(info[:inputfile])"
+                @warn "Error during processing of file: $(file_info[:inputfile])"
                 @warn sprint(showerror, e, catch_backtrace())
             end
         end
@@ -213,13 +202,7 @@ function main(command_line_args::Vector{String} = ARGS)
     return nothing
 end
 
-function _main(
-        io::IO,
-        info::Dict,
-        opts::Dict,
-        t2map_kwargs::Dict,
-        t2part_kwargs::Dict
-    )
+function main_(io::IO, file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
 
     # Starting message/starting time
     t_start = tic()
@@ -227,15 +210,15 @@ function _main(
 
     # Load image(s)
     image = @showtime(io,
-        "Loading input file: $(info[:inputfile])",
-        load_image(info[:inputfile]),
+        "Loading input file: $(file_info[:inputfile])",
+        load_image(file_info[:inputfile]),
     )
 
     # Apply mask
-    if !isnothing(info[:maskfile])
+    if !isnothing(file_info[:maskfile])
         @showtime(io,
-            "Applying mask from file: '$(info[:maskfile])'",
-            try_apply_maskfile!(image, info[:maskfile]),
+            "Applying mask from file: '$(file_info[:maskfile])'",
+            try_apply_maskfile!(image, file_info[:maskfile]),
         )
     elseif opts[:bet]
         @showtime(io,
@@ -247,21 +230,21 @@ function _main(
     # Compute T2 distribution from input 4D multi-echo image
     if opts[:T2map]
         maps, dist = @showtime(io,
-            "Running T2mapSEcorr on file: $(info[:inputfile])",
-            T2mapSEcorr(image; io = io, t2map_kwargs...),
+            "Running T2mapSEcorr on file: $(file_info[:inputfile])",
+            T2mapSEcorr(io, image, t2map_options(image, opts)),
         )
 
         # Save T2-distribution to .mat file
-        savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2dist.mat")
+        savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2dist.mat")
         if !opts[:dry]
             @showtime(io,
                 "Saving T2 distribution to file: $savefile",
-                MAT.matwrite(savefile, Dict("dist" => dist)),
+                MAT.matwrite(savefile, Dict{String, Any}("dist" => dist)),
             )
         end
 
         # Save T2-maps to .mat file
-        savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2maps.mat")
+        savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2maps.mat")
         if !opts[:dry]
             @showtime(io,
                 "Saving T2 parameter maps to file: $savefile",
@@ -277,11 +260,11 @@ function _main(
     if opts[:T2part]
         parts = @showtime(io,
             "Running T2partSEcorr",
-            T2partSEcorr(dist; io = io, t2part_kwargs...),
+            T2partSEcorr(io, dist, t2part_options(dist, opts)),
         )
 
         # Save T2-parts to .mat file
-        savefile = joinpath(info[:outputfolder], info[:choppedinputfile] * ".t2parts.mat")
+        savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2parts.mat")
         if !opts[:dry]
             @showtime(io,
                 "Saving T2 parts maps to file: $savefile",
@@ -296,40 +279,49 @@ function _main(
     return nothing
 end
 
-function get_parsed_args_subset(
-        @nospecialize(opts), # ::Dict{Symbol,Any}
-        @nospecialize(subset_fieldtypes), # ::Dict{Symbol,Type}
-    )
-    kwargs = deepcopy(opts)
-    for (k,v) in kwargs
-        if k ∉ keys(subset_fieldtypes)
-            delete!(kwargs, k)
-            continue
-        end
-        if isnothing(v)
-            # Nothing values are always default; skip them
-            delete!(kwargs, k)
-        elseif v isa AbstractString
-            # Parse v to appropriate type, as determined by subset_fieldtypes
-            T = subset_fieldtypes[k]
-            if !(T <: AbstractString)
-                kwargs[k] = _parse_or_convert(_strip_union_nothing(T), v)
-            end
-        elseif v isa AbstractVector
-            if isempty(v)
-                # Empty vectors correspond to settings not set by user
-                delete!(kwargs, k)
-            else
-                # Convert AbstractVector v to appropriate Tuple type
-                T = _get_tuple_type(subset_fieldtypes[k])
-                kwargs[k] = tuple(_parse_or_convert.(fieldtypes(T), v)...) # each element should be individually parsed
-            end
-        end
+"""
+Entrypoint function for compiling DECAES into an executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
+"""
+function julia_main()::Cint
+    try
+        main(ARGS)
+    catch
+        Base.invokelatest(Base.display_error, Base.catch_stack())
+        return 1
     end
-    return kwargs
+    return 0
 end
 
-function get_file_info(@nospecialize(opts))
+####
+#### Helper functions
+####
+
+function t2map_options(image::Array, opts::Dict{Symbol, Any})
+    fields = fieldnames(T2mapOptions)
+    kwargs = Dict{Symbol, Any}()
+    for (k,v) in opts
+        (v === nothing) && continue # filter unset cli args
+        (v isa AbstractVector && isempty(v)) && continue # filter unset cli args (empty vectors are unset cli varargs)
+        (k ∉ fields) && continue # filter T2mapOptions fields
+        kwargs[k] = v isa AbstractVector ? tuple(v...) : v
+    end
+    T2mapOptions(image; kwargs...)
+end
+
+function t2part_options(dist::Array, opts::Dict{Symbol, Any})
+    fields = fieldnames(T2partOptions)
+    kwargs = Dict{Symbol, Any}()
+    for (k,v) in opts
+        (v === nothing) && continue # filter unset cli args
+        (v isa AbstractVector && isempty(v)) && continue # filter unset cli args (empty vectors are unset cli varargs)
+        (k === :nT2 && !opts[:T2map]) && continue # nT2 must be explicitly passed, unless not performing T2-mapping, in which case it is inferred from `dist`
+        (k ∉ fields) && continue # filter T2mapOptions fields
+        kwargs[k] = v isa AbstractVector ? tuple(v...) : v
+    end
+    T2partOptions(dist; kwargs...)
+end
+
+function get_file_infos(opts::Dict{Symbol, Any})
     @unpack input, output, mask = opts
 
     # Read in input files
@@ -362,19 +354,19 @@ function get_file_info(@nospecialize(opts))
         error("Number of mask files passed does not equal the number of input image files passed")
     end
 
-    # Create info dictionaries
-    info = Dict{Symbol, Union{String, Nothing}}[]
+    # Create file_info dictionaries
+    file_info = Dict{Symbol, Any}[]
     for (inputfile, outputfolder, maskfile) in zip(inputfiles, outputfolders, maskfiles)
-        d = eltype(info)(
+        d = eltype(file_info)(
             :inputfile => inputfile,
             :outputfolder => outputfolder,
             :maskfile => maskfile,
             :choppedinputfile => chop_allowed_suffix(basename(inputfile)),
         )
-        push!(info, d)
+        push!(file_info, d)
     end
 
-    return info
+    return file_info
 end
 
 function load_image(filename, ::Val{dim} = Val(4)) where {dim}
@@ -424,6 +416,16 @@ function try_apply_maskfile!(image, maskfile)
     return image
 end
 
+function try_apply_bet!(image, betpath, betargs)
+    try
+        image .*= make_bet_mask(image, betpath, betargs)
+    catch e
+        @warn "Error while making mask using BET"
+        @warn sprint(showerror, e, catch_backtrace())
+    end
+    return image
+end
+
 function make_bet_mask(image::Array{T,3}, betpath, betargs) where {T}
     # Split betargs, and ensure that "-m" (make binary mask) is among args
     args = convert(Vector{String}, filter!(!isempty, split(betargs, " ")))
@@ -452,42 +454,7 @@ function make_bet_mask(image::Array{T,3}, betpath, betargs) where {T}
 
     return mask
 end
-make_bet_mask(image::Array{T,4}, args...; kwargs...) where {T} =
-    make_bet_mask(image[:,:,:,1], args...; kwargs...) # use first echo
-
-function try_apply_bet!(image, betpath, betargs)
-    try
-        image .*= make_bet_mask(image, betpath, betargs)
-    catch e
-        @warn "Error while making mask using BET"
-        @warn sprint(showerror, e, catch_backtrace())
-    end
-    return image
-end
-
-"""
-Entrypoint function for compiling DECAES into an executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
-"""
-function julia_main()::Cint
-    try
-        main(ARGS)
-    catch
-        Base.invokelatest(Base.display_error, Base.catch_stack())
-        return 1
-    end
-    return 0
-end
-
-####
-#### Helper functions
-####
-
-_parse_or_convert(::Type{T}, s::AbstractString) where {T} = parse(T, s)
-_parse_or_convert(::Type{T}, x) where {T} = convert(T, x)
-_strip_union_nothing(::Type{Union{T, Nothing}}) where {T} = T
-_strip_union_nothing(T::Type) = T
-_get_tuple_type(::Type{Union{Tup, Nothing}}) where {Tup <: Tuple} = Tup
-_get_tuple_type(::Type{Tup}) where {Tup <: Tuple} = Tup
+make_bet_mask(image::Array{T,4}, args...; kwargs...) where {T} = make_bet_mask(image[:,:,:,1], args...; kwargs...) # use first echo
 
 maybe_get_first(f, xs) = findfirst(f, xs) |> I -> isnothing(I) ? nothing : xs[I]
 maybe_get_suffix(filename) = maybe_get_first(ext -> endswith(lowercase(filename), ext), ALLOWED_FILE_SUFFIXES) # case-insensitive

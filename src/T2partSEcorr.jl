@@ -1,6 +1,6 @@
 """
-    T2partSEcorr(T2distributions; <keyword arguments>)
-    T2partSEcorr(T2distributions, opts::T2partOptions)
+    T2partSEcorr([io = stderr,] T2distributions::Array{T,4}; <keyword arguments>)
+    T2partSEcorr([io = stderr,] T2distributions::Array{T,4}, opts::T2partOptions{T})
 
 Analyzes T2 distributions produced by [`T2mapSEcorr`](@ref) to produce data maps of a series of parameters.
 
@@ -32,18 +32,12 @@ Dict{String,Array{Float64,3}} with 4 entries:
 See also:
 * [`T2mapSEcorr`](@ref)
 """
-function T2partSEcorr(T2distributions::Array{T,4}; io::IO = stderr, kwargs...) where {T}
-    # map(reset_timer!, THREAD_LOCAL_TIMERS) #TODO
-    out = @timeit_debug TIMER() "T2partSEcorr" begin
-        T2partSEcorr(T2distributions, T2partOptions(T2distributions; kwargs...); io = io)
-    end
-    # if timeit_debug_enabled()
-    #     map(display, THREAD_LOCAL_TIMERS) #TODO
-    # end
-    return out
-end
+T2partSEcorr(T2distributions::Array{T,4}; kwargs...) where {T} = T2partSEcorr(stderr, T2distributions; kwargs...)
+T2partSEcorr(io::IO, T2distributions::Array{T,4}; kwargs...) where {T} = T2partSEcorr(io, T2distributions, T2partOptions(T2distributions; kwargs...))
+T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T} = T2partSEcorr(stderr, T2distributions, opts)
+T2partSEcorr(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T} = @timeit_debug TIMER() "T2partSEcorr" T2partSEcorr_(io, T2distributions, opts)
 
-function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}; io::IO = stderr) where {T}
+function T2partSEcorr_(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
     @assert size(T2distributions) == (opts.MatrixSize..., opts.nT2)
 
     # Print settings to terminal

@@ -44,7 +44,7 @@ function Base.copyto!(B::AbstractMatrix{T}, A::TikhonovPaddedMatrix{T}) where {T
 end
 
 cache!(cache::AbstractArray, x, f) = cache !== nothing && push!(cache, (; x, f))
-cache!(cache::AbstractDict, x, f) = cache !== nothing && (cache[x] = f)
+cache!(cache::Dict, x, f) = cache !== nothing && (cache[x] = f)
 
 lin_interp(x, x₁, x₂, y₁, y₂) = y₁ + (y₂ - y₁) * (x - x₁)  / (x₂ - x₁)
 exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x₁)  / (x₂ - x₁))
@@ -606,7 +606,7 @@ IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::T = 0.05, Ctol::T = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
     # Initialize state
     msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [cache[x].C for x in state.x⃗])))
-    cache === nothing && (cache = Dict{T,NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}}())
+    cache === nothing && (cache = Dict{T, NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}}())
     state = LCurveCornerState(f, T(xlow), T(xhigh), cache; kwargs...)
     state_cache = backtracking ? [state] : nothing
 
@@ -627,7 +627,7 @@ function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::
     while true
         if backtracking
             # Find state with minimum diameter which contains the current best estimate maximum curvature point
-            _, (x, (P, C)) = findmax(((x, (P, C)),) -> C, cache)
+            (x, (P, C)), _, _ = mapfindmax(((x, (P, C)),) -> C, cache)
             for s in state_cache
                 if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
                     state = s
@@ -713,8 +713,12 @@ function update_curvature!(state::LCurveCornerState{T}, cache; Pfilter = nothing
                 end
             else
                 # Compute curvature from nearest neighbours
-                _, (x₋, (P₋, C₋)) = findmin(((x₋, (P₋, C₋)),) -> x₋ >= x ? T(Inf) : x - x₋, cache)
-                _, (x₊, (P₊, C₊)) = findmin(((x₊, (P₊, C₊)),) -> x₊ <= x ? T(Inf) : x₊ - x, cache)
+                x₋, x₊ = T(-Inf), T(+Inf)
+                P₋, P₊ = P, P
+                for (_x, (_P, _)) in cache
+                    (x₋ < _x < x ) && ((x₋, P₋) = (_x, _P))
+                    (x  < _x < x₊) && ((x₊, P₊) = (_x, _P))
+                end
                 C = Cfun(P₋, P, P₊)
             end
         end
@@ -733,7 +737,7 @@ function refine!(f, state::LCurveCornerState{T}, cache; Pfilter = nothing, analy
     end
     maybecall!(f, x_opt, state, cache)
     update_curvature!(state, cache; Pfilter)
-    _, (x_opt, (P_opt, C_opt)) = findmax(((x,(P,C)),) -> C, cache)
+    (x_opt, (_, _)), _, _ = mapfindmax(((x,(P,C)),) -> C, cache)
     return x_opt
 end
 
