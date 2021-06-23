@@ -64,5 +64,6 @@ jobs:
             doctest(DECAES)'
       - run: julia --project=docs docs/make.jl
         env:
+          JULIA_NUM_THREADS: '4'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
