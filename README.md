@@ -3,7 +3,6 @@
 <!-- [![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://jondeuce.github.io/DECAES.jl/stable) -->
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jondeuce.github.io/DECAES.jl/dev)
 [![Build Status](https://github.com/jondeuce/DECAES.jl/workflows/CI/badge.svg)](https://github.com/jondeuce/DECAES.jl/actions?query=workflow%3ACI)
-[![Coverage Status](https://coveralls.io/repos/github/jondeuce/DECAES.jl/badge.svg?branch=master)](https://coveralls.io/github/jondeuce/DECAES.jl?branch=master)
 [![codecov.io](https://codecov.io/github/jondeuce/DECAES.jl/branch/master/graph/badge.svg)](http://codecov.io/github/jondeuce/DECAES.jl/branch/master)
 
 DECAES is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) from multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
@@ -16,7 +15,7 @@ If you use DECAES in your research, please [cite](CITATION.bib) our work.
 
 ## Installation
 
-In Julia v1.3 or later you can install DECAES from the Pkg REPL:
+In Julia v1.6 or later you can install DECAES from the Pkg REPL:
 ```
 pkg> add DECAES
 ```

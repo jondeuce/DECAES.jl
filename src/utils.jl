@@ -411,5 +411,6 @@ function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2
 end
 
 # Mock T2 distribution, computed with default parameters
-mock_T2_dist(o::T2mapOptions = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40, Reg = "lcurve"); kwargs...) =
+function mock_T2_dist(o::T2mapOptions = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40, Reg = "lcurve"); kwargs...)
     T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]
+end

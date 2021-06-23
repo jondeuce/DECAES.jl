@@ -123,7 +123,7 @@ end
 function st = jl_call_decaes(opts, decaes_args)
 
     % Create temporary script for calling DECAES entrypoint function
-    decaes_script = jl_make_script('DECAES', 'main()', true); %TODO
+    decaes_script = jl_make_script('DECAES', 'main()');
     cleanup_decaes_script = onCleanup(@() delete([decaes_script, '*']));
 
     % Create system command, forwarding decaes_args to julia
@@ -167,7 +167,7 @@ function st = jl_call_decaes_server(opts, decaes_args)
 
     % Call DECAES entrypoint function on DECAES server
     daemon_script = jl_make_script('DaemonMode', 'runargs()');
-    decaes_script = jl_make_script('DECAES', 'main()', true); %TODO
+    decaes_script = jl_make_script('DECAES', 'main()');
     cleanup_daemon_script = onCleanup(@() delete([daemon_script, '*']));
     cleanup_decaes_script = onCleanup(@() delete([decaes_script, '*']));
     cmd = [jl_build_cmd(opts), ' ', daemon_script, ' ', decaes_script, ' ', decaes_args];

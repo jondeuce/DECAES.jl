@@ -1,7 +1,6 @@
 using Pkg
 
-temp_project_folder() = joinpath(@__DIR__, ".bench.tmp")
-temp_project_folder(julia_version::String, pkg_spec::String) = joinpath(temp_project_folder(), julia_version, pkg_spec)
+temp_project_folder(args...) = joinpath(@__DIR__, ".bench.tmp", args...)
 
 function prepare_project(julia_version::String, pkg_spec::String)
     project_folder = temp_project_folder(julia_version, pkg_spec)
@@ -24,4 +23,4 @@ function prepare_project(julia_version::String, pkg_spec::String)
     # Pkg.precompile() # no need to precompile; will occur during untimed warmup run
 end
 
-nothing
+prepare_project(ARGS...)

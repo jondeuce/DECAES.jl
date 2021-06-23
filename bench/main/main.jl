@@ -56,14 +56,14 @@ function main()
     args = parse_commandline()
     dateformat = "yyyy-mm-dd-T-HH-MM-SS"
     timestamp = Dates.format(Dates.now(), dateformat)
-    outfolder = timestamp * "_" * args["output"]
-    outpath(xs...) = joinpath(mkpath(outfolder), xs...)
+    outfolder = mkpath(joinpath(dirname(args["output"]), timestamp * "_" * basename(args["output"])))
+    outpath(xs...) = joinpath(outfolder, xs...)
 
     # Benchmarking command
     cmd = `
     hyperfine
-        "JULIA_NUM_THREADS={threads} {julia} --project=.bench.tmp/{julia}/{version} --startup-file=no --quiet --optimize={optimize} -e 'using DECAES; main()' -- @{input} --quiet"
-        --prepare "{julia} --startup-file=no -e 'include(\"utils.jl\"); prepare_project(\"{julia}\", \"{version}\")'"
+        "JULIA_NUM_THREADS={threads} {julia} --project=$(joinpath(@__DIR__, ".bench.tmp"))/{julia}/{version} --startup-file=no --quiet --optimize={optimize} -e 'using DECAES; main()' -- @{input} --quiet"
+        --prepare "{julia} --startup-file=no --project=$(@__DIR__) $(joinpath(@__DIR__, "prepare.jl")) {julia} {version}"
         --warmup $(args["warmup"])
         --min-runs $(args["min-runs"])
         --parameter-list version $(join(args["decaes-version"], ","))
@@ -95,7 +95,7 @@ function main()
     # Run benchmarks
     @info "Benchmarking DECAES with settings:\n" * readchomp(outpath("settings.txt"))
     run(cmd)
-    rm(".bench.tmp"; force = true, recursive = true)
+    rm(joinpath(@__DIR__, ".bench.tmp"); force = true, recursive = true)
 
     return nothing
 end
