@@ -43,8 +43,8 @@ const CLI_SETTINGS = ArgParseSettings(
 end
 
 add_arg_group!(CLI_SETTINGS,
-    "T2map/T2part arguments",
-    "internal arguments for performing T2map and T2part analyses",
+    "T2mapSEcorr/T2partSEcorr arguments",
+    :t2_map_part,
 )
 
 @add_arg_table! CLI_SETTINGS begin
@@ -52,101 +52,128 @@ add_arg_group!(CLI_SETTINGS,
         nargs = 3
         arg_type = Int
         help = "first three dimensions of input 4D image. Inferred automatically"
+        group = :t2_map_part
     "--nTE"
         arg_type = Int
         help = "number of echoes in input signal. Inferred automatically when --T2map is passed"
+        group = :t2_map_part
     "--TE"
         arg_type = Float64
         help = "inter-echo spacing (Units: seconds). Required when --T2map is passed"
+        group = :t2_map_part
     "--nT2"
         arg_type = Int
         help = "number of T2 components used in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension of input image if only --T2part is passed"
+        group = :t2_map_part
     "--T2Range"
         nargs = 2
         arg_type = Float64
         help = "minimum and maximum T2 values (Units: seconds). T2 components are logarithmically spaced between these bounds. Required parameter."
+        group = :t2_map_part
     "--SPWin"
         nargs = 2
         arg_type = Float64
         help = "minimum and maximum T2 values of the short peak window (Units: seconds). Required parameter when --T2part is passed"
+        group = :t2_map_part
     "--MPWin"
         nargs = 2
         arg_type = Float64
         help = "minimum and maximum T2 values of the middle peak window (Units: seconds). Required parameter when --T2part is passed"
+        group = :t2_map_part
     "--T1"
         arg_type = Float64
         help = "assumed value of longitudinal T1 relaxation (Units: seconds)."
+        group = :t2_map_part
     "--Reg"
         arg_type = String
         help = "routine used for choosing regularization parameter. One of \"none\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, --Chi2Factor based Tikhonov regularization, generalized cross-validation based regularization, and L-curve based regularization, respectively."
+        group = :t2_map_part
     "--Chi2Factor"
         arg_type = Float64
         help = "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution"
+        group = :t2_map_part
     "--Sigmoid"
         arg_type = Float64
         help = "replace the hard upper limit cutoff time of the short peak window, --SPWin[2], with a smoothed sigmoidal cutoff function, f, scaled and shifted such that f(--SPWin[2] +/- --Sigmoid) = 0.5 -/+ 0.4. --Sigmoid is the time scale of the smoothing (Units: seconds)"
+        group = :t2_map_part
     "--Threshold"
         arg_type = Float64
         help = "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold"
+        group = :t2_map_part
 end
 
 add_arg_group!(CLI_SETTINGS,
     "B1 correction and stimulated echo correction",
-    "optional additional output maps",
+    :B1_SE_corr,
 )
+
 @add_arg_table! CLI_SETTINGS begin
     "--nRefAngles"
         arg_type = Int
         help = "in estimating the local refocusing flip angle to correct for B1 inhomogeneities, up to --nRefAngles angles in the range [--MinRefAngle, 180] are explicitly checked. The optimal angle is then determined through interpolation from these --nRefAngles observations."
+        group = :B1_SE_corr
     "--nRefAnglesMin"
         arg_type = Int
         help = "initial number of angles to check during flip angle estimation before refinement near likely optima. Setting --nRefAnglesMin equal to --nRefAngles forces all angles to be checked."
+        group = :B1_SE_corr
     "--MinRefAngle"
         arg_type = Float64
         help = "minimum refocusing angle for flip angle estimation (Units: degrees)."
+        group = :B1_SE_corr
     "--SetFlipAngle"
         arg_type = Float64
         help = "to skip B1 inhomogeneity correction, use --SetFlipAngle to assume a fixed refocusing flip angle for all voxels (Units: degrees)."
+        group = :B1_SE_corr
     "--RefConAngle"
         arg_type = Float64
         help = "refocusing pulse control angle for stimulated echo correction. Unlike B1 inhomogeneity correction, stimulated echo correction must be performed manually. By default, --RefConAngle is set to 180 degrees, equivalent to no stimulated echo correction (Units: degrees)."
+        group = :B1_SE_corr
 end
 
 add_arg_group!(CLI_SETTINGS,
-    "Save options",
-    "optional additional output maps",
+    "Additional save options",
+    :save_opts,
 )
+
 @add_arg_table! CLI_SETTINGS begin
     "--SaveDecayCurve"
         action = :store_true
         help = "include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary"
+        group = :save_opts
     "--SaveNNLSBasis"
         action = :store_true
         help = "include a 5D (or 2D if --SetFlipAngle is used) array of NNLS basis matrices in the output maps dictionary. Note: this 5D array is extremely large for typical image sizes; in most cases, this flag should only be set when debugging small datasets"
+        group = :save_opts
     "--SaveRegParam"
         action = :store_true
         help = "include 3D arrays of the regularization parameters and resulting chi^2-factors in the output maps dictionary"
+        group = :save_opts
     "--SaveResidualNorm"
         action = :store_true
         help = "include a 3D array of the l2-norms of the residuals from the NNLS fits in the output maps dictionary"
+        group = :save_opts
 end
 
 add_arg_group!(CLI_SETTINGS,
-    "BET settings",
-    "arguments for mask generation using BET",
+    "BET arguments",
+    :bet_args,
 )
+
 @add_arg_table! CLI_SETTINGS begin
     "--bet"
         action = :store_true
         help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and the --bet flag will be ignored"
+        group = :bet_args
     "--betargs"
         arg_type = String
         default = "-m -n -f 0.25 -R"
         help = "BET command line interface arguments. Must be passed as a single string with arguments separated by spaces, e.g. '-m -n'. The flag '-m' indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided"
+        group = :bet_args
     "--betpath"
         arg_type = String
         default = "bet"
         help = "path to BET executable."
+        group = :bet_args
 end
 
 """

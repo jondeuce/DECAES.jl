@@ -39,7 +39,7 @@ All output files are saved as `.mat` files in format `v7.3`.
 
 There are two equivalent ways to use the CLI, assuming DECAES is already installed:
 
-**1. Helper script:** Create a script called e.g. `decaes.jl` with the following contents:
+**1. Helper script:** Create a script called e.g. `decaes.jl` with the following contents (or, download the script located [here](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.jl)):
 
 ```julia
 using DECAES # load the package
@@ -49,15 +49,13 @@ main() # call CLI entrypoint function
 This script can then be invoked from the command line as follows:
 
 ```bash
-$ export JULIA_NUM_THREADS=4 # set JULIA_NUM_THREADS > 1 to enable parallel processing
-$ julia decaes.jl <COMMAND LINE ARGS>
+$ julia --threads 4 decaes.jl -- <COMMAND LINE ARGS> # `--threads N` enables parallel processing with `N` threads
 ```
 
 **2. Julia `-e` flag:** The contents of the above script can be written directly at the command line using the `-e` (for "evaluate") flag:
 
 ```bash
-$ export JULIA_NUM_THREADS=4
-$ julia -e 'using DECAES; main()' -- <COMMAND LINE ARGS>
+$ julia --threads 4 -e 'using DECAES; main()' -- <COMMAND LINE ARGS> # `--threads N` enables parallel processing with `N` threads
 ```
 
 ## Documentation

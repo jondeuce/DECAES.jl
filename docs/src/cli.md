@@ -6,7 +6,7 @@ DECAES provides a command line interface (CLI) for calling the main analysis fun
 
 Assuming you have [DECAES installed](@ref installation), there are two equivalent ways to use the CLI:
 
-**1. Helper script:** Create a simple Julia script which calls the entrypoint function [`main`](@ref) provided by this package. For example, save the following code in a Julia script called `decaes.jl`:
+**1. Helper script:** Create a simple Julia script which calls the entrypoint function [`main`](@ref) provided by this package. For example, save the following code in a Julia script called `decaes.jl` (or, download the script located [here](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.jl)):
 
 ```julia
 using DECAES # load the package
@@ -16,7 +16,7 @@ main() # call command line interface
 An image file `image.nii` can be passed to DECAES by running this script with `julia` from the command line:
 
 ```bash
-$ julia decaes.jl image.nii <COMMAND LINE ARGS>
+$ julia decaes.jl -- image.nii <COMMAND LINE ARGS>
 ```
 
 **2. Julia `-e` flag:** The contents of the above script can equivalently be passed directly to `julia` using the `-e` (for "evaluate") flag:
@@ -56,7 +56,9 @@ Available command line arguments are broken into four categories:
 1. **Positional arguments:** these are the input files. Input files are typically placed at the beginning of `<COMMAND LINE ARGS>`.
 2. **Optional arguments:** settings governing the analysis pipeline. See below for details.
 3. **[`T2mapSEcorr`](@ref)/[`T2partSEcorr`](@ref) arguments:** settings for computing the $T_2$-distribution and subsequent $T_2$-parts analysis. Required arguments are listed first; see below for the full parameter list, and see [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) for parameter descriptions. Note: if no default is shown, the parameter is unused by default.
-4. **[BET](@ref bet) arguments:** settings for governing automatic brain mask generation using the BET brain extraction tool; [see below](@ref bet) for details.
+4. **B1 correction and stimulated echo correction:** settings for controlling B1 correction and stimulated echo correction. These settings typically need not be modified. However, the following options are noteworthy: `--SetFlipAngle` for skipping B1 correction; and `--RefConAngle` for enabling stimulated echo correction.
+5. **Additional save options:** optional additional output maps
+6. **[BET](@ref bet) arguments:** settings for governing automatic brain mask generation using the BET brain extraction tool; [see below](@ref bet) for details.
 
 ```@example
 using DECAES # hide
@@ -83,20 +85,13 @@ If the `--dry` flag is passed, none of the above files will be produced.
 
 ## Multithreading
 
-Multithreaded parallel processing can be enabled by setting the `JULIA_NUM_THREADS` environment variable as follows:
+Multithreaded parallel processing can be enabled by setting the `julia` command line flag `--threads`, where `--threads N` enables parallel processing with `N` threads:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads()) # set JULIA_NUM_THREADS > 1 to enable parallel processing") # hide
-println("\$ julia decaes.jl image.nii <COMMAND LINE ARGS>") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- image.nii <COMMAND LINE ARGS>") # hide
 ```
 
 This is highly recommended to speed up computation time, but is not strictly required.
-
-!!! note
-    From the [Julia documentation](https://docs.julialang.org/en/v1/manual/parallel-computing/#Setup-1):
-    > [The keyword `export`] works on bourne shells on Linux and OSX.
-    > Note that if you're using a C shell on these platforms, you should use the keyword `set` instead of `export`.
-    > If you're on Windows, start up the command line in the location of `julia.exe` and use `set` instead of `export`.
 
 ## Examples
 
@@ -117,7 +112,7 @@ function callmain(args...)
     end
     nothing
 end
-callmain(imfile, "--T2map", "--T2part", "--dry", "--quiet", "--TE", "10e-3", "--nT2", "40", "--T2Range", "10e-3", "2.0", "--SPWin", "10e-3", "40e-3", "--MPWin", "40e-3", "200.0e-3") # precompile
+callmain(imfile, "--T2map", "--T2part", "--dry", "--quiet", "--TE", "10e-3", "--nT2", "40", "--T2Range", "10e-3", "2.0", "--SPWin", "10e-3", "40e-3", "--MPWin", "40e-3", "200.0e-3", "--Reg", "lcurve") # precompile
 ```
 
 Suppose you have a multi spin-echo image file `image.nii` which you would like to perform $T_2$ analysis on.
@@ -125,14 +120,13 @@ We can call [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) on the file `image.
 We pass the required arguments with the appropriate flags and leave the remaining parameters at default values:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image.nii --T2map --T2part --TE 10e-3 --nT2 40 --T2Range 10e-3 2.0 --SPWin 10e-3 40e-3 --MPWin 40e-3 200.0e-3") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- image.nii --T2map --T2part --TE 10e-3 --nT2 40 --T2Range 10e-3 2.0 --SPWin 10e-3 40e-3 --MPWin 40e-3 200.0e-3 --Reg lcurve") # hide
 ```
 
 After a few seconds, the script should begin running with the following messages appearing as the script progresses (note that real images will take longer to process than this toy example):
 
 ```@example callmain
-callmain(imfile, "--T2map", "--T2part", "--TE", "10e-3", "--nT2", "40", "--T2Range", "10e-3", "2.0", "--SPWin", "10e-3", "40e-3", "--MPWin", "40e-3", "200.0e-3") # hide
+callmain(imfile, "--T2map", "--T2part", "--TE", "10e-3", "--nT2", "40", "--T2Range", "10e-3", "2.0", "--SPWin", "10e-3", "40e-3", "--MPWin", "40e-3", "200.0e-3", "--Reg", "lcurve") # hide
 ```
 
 ### [Settings files](@id settingsfiles)
@@ -157,13 +151,14 @@ Using the same options from the [previous section](@ref defaultoptions), we crea
 --MPWin
 40e-3
 200.0e-3
+--Reg
+lcurve
 ```
 
 If this file is located at `/path/to/settings.txt`, simply prefix the filepath with the `@` character to have the file contents read into the [`main`](@ref) function:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl @/path/to/settings.txt") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- @/path/to/settings.txt") # hide
 ```
 
 !!! note
@@ -179,8 +174,7 @@ Settings in `default.txt` can be individually overridden.
 For example, if we are interested in changing the number of $T_2$ bins `nT2` to 60, but leaving all other parameters the same, run the following:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl @/path/to/default.txt --nT2 60") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- @/path/to/default.txt --nT2 60") # hide
 ```
 
 ### [Multiple input files](@id multiinput)
@@ -188,8 +182,7 @@ println("\$ julia decaes.jl @/path/to/default.txt --nT2 60") # hide
 Multiple input files (possibly of different file types) can be passed in the obvious way:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image1.nii image2.mat image3.nii.gz image4.par <COMMAND LINE ARGS>") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- image1.nii image2.mat image3.nii.gz image4.par <COMMAND LINE ARGS>") # hide
 ```
 
 Equivalently, place multiple image paths at the top of your settings file, with each path on a new line.
@@ -200,8 +193,7 @@ By default, output files are saved in the same location as the corresponding inp
 If you'd like to save them in a different folder, you can use the `-o` or `--output` flag:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image.nii --output /path/to/output/folder/ <COMMAND LINE ARGS>") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- image.nii --output /path/to/output/folder/ <COMMAND LINE ARGS>") # hide
 ```
 
 The requested output folder will be created if it does not already exist.
@@ -213,17 +205,15 @@ Equivalently, add `--output` and `/path/to/output/folder/` as consecutive lines 
 Image masks can be passed into DECAES using the `-m` or `--mask` flag:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image.nii --mask /path/to/mask.nii <COMMAND LINE ARGS>") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- image.nii --mask /path/to/mask.nii <COMMAND LINE ARGS>") # hide
 ```
 
 The mask file is loaded and applied to the input image via elementwise multiplication over the spatial dimensions, e.g. the mask is applied to each echo of a 4D multi-echo input image.
 
-If multiple image files are passed, a mask can be passed for each input image (note that each mask file can be any valid file type):
+If multiple image files are passed, multiple corresponding mask files can be passed, too:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image1.nii image2.mat --mask /path/to/mask1.mat /path/to/mask2.nii.gz <COMMAND LINE ARGS>") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- image1.nii image2.mat --mask /path/to/mask1.mat /path/to/mask2.nii.gz <COMMAND LINE ARGS>") # hide
 ```
 
 Equivalently, add `--mask`, `/path/to/mask1.mat`, `/path/to/mask2.mat`, ...  as consecutive lines in your settings file.
@@ -239,21 +229,19 @@ Only voxels within the generated brain mask will be processed, greatly reducing 
 To use BET, pass the `--bet` flag:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image.nii --bet <COMMAND LINE ARGS>") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- image.nii --bet <COMMAND LINE ARGS>") # hide
 ```
 
 If `bet` is not on your system path, you can pass the path to the `bet` binary with the `--betpath` flag.
 Additionally, you can pass arguments to `bet` with the `--betargs` flag:
 
 ```@example
-println("\$ export JULIA_NUM_THREADS=$(Threads.nthreads())") # hide
-println("\$ julia decaes.jl image.nii --bet --betpath /path/to/bet --betargs '-m -n' <COMMAND LINE ARGS>") # hide
+println("\$ julia --threads $(Threads.nthreads()) decaes.jl -- image.nii --bet --betpath /path/to/bet --betargs '-m -n' <COMMAND LINE ARGS>") # hide
 ```
 
 Note that `bet` arguments must be passed as a single string to `--betargs`, separated by spaces, as shown above.
 
-Equivalently, add `--bet`, `--betpath`, `/path/to/bet`, `--betargs`, `-m -n`, ... as consecutive lines in your settings file.
+Equivalently, add `--bet`, `--betpath`, `/path/to/bet`, `--betargs`, `-m -n ...` as consecutive lines in your settings file.
 
 !!! note
     If a mask file is passed using the `--mask` flag, the `--bet` flag will be ignored and the mask file will be used

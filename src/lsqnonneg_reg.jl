@@ -600,7 +600,7 @@ end
 
 Find the corner of the L-curve via curvature maximization using Algorithm 1 from:
 
-A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”
+A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”.
 IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
 function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::T = 0.05, Ctol::T = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
