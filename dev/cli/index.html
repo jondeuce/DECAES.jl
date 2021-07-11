@@ -186,7 +186,7 @@ BET arguments:
 
 * Loading input file: image.nii.gz ...
 
-* Done (0.02 seconds)
+* Done (0.06 seconds)
 
 * Running T2mapSEcorr on file: image.nii.gz ...
 T2-distribution analysis settings:
@@ -211,15 +211,15 @@ T2-distribution analysis settings:
     TE               : 0.01
     Threshold        : 0.0
 
-* Done (4.3 seconds)
+* Done (5.15 seconds)
 
 * Saving T2 distribution to file: image.t2dist.mat ...
 
-* Done (0.63 seconds)
+* Done (0.7 seconds)
 
 * Saving T2 parameter maps to file: image.t2maps.mat ...
 
-* Done (0.29 seconds)
+* Done (0.6 seconds)
 
 * Running T2partSEcorr ...
 T2-parts analysis settings:
@@ -238,7 +238,7 @@ T2-parts analysis settings:
 
 * Done (0.0 seconds)
 
-* Finished (5.38 seconds)</pre><h3 id="settingsfiles"><a class="docs-heading-anchor" href="#settingsfiles">Settings files</a><a id="settingsfiles-1"></a><a class="docs-heading-anchor-permalink" href="#settingsfiles" title="Permalink"></a></h3><p>As there are several required parameters, it is convenient to store settings for DECAES in a settings file. Using the same options from the <a href="#defaultoptions">previous section</a>, we create a file <code>settings.txt</code> with the following contents:</p><pre><code class="nohighlight">/path/to/image.nii
+* Finished (6.66 seconds)</pre><h3 id="settingsfiles"><a class="docs-heading-anchor" href="#settingsfiles">Settings files</a><a id="settingsfiles-1"></a><a class="docs-heading-anchor-permalink" href="#settingsfiles" title="Permalink"></a></h3><p>As there are several required parameters, it is convenient to store settings for DECAES in a settings file. Using the same options from the <a href="#defaultoptions">previous section</a>, we create a file <code>settings.txt</code> with the following contents:</p><pre><code class="nohighlight">/path/to/image.nii
 --T2map
 --T2part
 --TE
