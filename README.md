@@ -1,5 +1,9 @@
 # DEcomposition and Component Analysis of Exponential Signals (DECAES)
 
+<p align="left">
+<img width="500px" src="https://github.com/jondeuce/DECAES.jl/blob/c2956262063841c8c2dc27f4e0ee20593ef32697/docs/src/assets/logo.gif">
+</p>
+
 <!-- [![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://jondeuce.github.io/DECAES.jl/stable) -->
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jondeuce.github.io/DECAES.jl/dev)
 [![Build Status](https://github.com/jondeuce/DECAES.jl/workflows/CI/badge.svg)](https://github.com/jondeuce/DECAES.jl/actions?query=workflow%3ACI)
