@@ -19,70 +19,166 @@ begin
 	using Random
 	import PlutoUI
 
-	# Publication-quality static plots; based on Cairo
 	using CairoMakie
-	CairoMakie.activate!(type = "svg")
+	CairoMakie.activate!(type = "png")
 
-	# # Interactive plots; based on OpenGL
-	# using GLMakie
+	using Makie.Colors
+	Makie.set_theme!(resolution=(1600, 900))
 end;
 
 # ╔═╡ 9d4a6681-2b40-442f-8cc8-4ae444bc6215
 md"""
-ETL = $(@bind ETL PlutoUI.Slider(4:32, default=32, show_value=true))
+ETL = $(@bind ETL_slider PlutoUI.Slider(4:32, default=32, show_value=true))
 
-FA = $(@bind flip_angle PlutoUI.Slider(range(50,180,length=100), default=150, show_value=true))
+FA = $(@bind flip_angle_slider PlutoUI.Slider(range(50,180,length=100), default=150, show_value=true))
 
-refcon = $(@bind refcon PlutoUI.Slider(range(50,180,length=100), default=180, show_value=true))
+refcon = $(@bind refcon_slider PlutoUI.Slider(range(50,180,length=100), default=180, show_value=true))
 
-T21 = $(@bind T21 PlutoUI.Slider(range(10e-3, 100e-3, length=100), default=30e-3, show_value=true))
+T21 = $(@bind T21_slider PlutoUI.Slider(range(10e-3, 100e-3, length=100), default=30e-3, show_value=true))
 
-T22 = $(@bind T22 PlutoUI.Slider(range(100e-3, 250e-3, length=100), default=250e-3, show_value=true))
+T22 = $(@bind T22_slider PlutoUI.Slider(range(100e-3, 250e-3, length=100), default=150e-3, show_value=true))
 
-MWF = $(@bind MWF PlutoUI.NumberField(0.1:0.01:0.4, default=0.20))
+MWF = $(@bind MWF_slider PlutoUI.NumberField(0.1:0.01:0.4, default=0.20))
 """
 
 # ╔═╡ dfac902d-bb87-4fea-a898-d6792e9b793b
+let
+	sliders_md = md"""
+	base height = $(@bind base_height PlutoUI.NumberField(5:5:5000, default=750))
+	base width = $(@bind base_width PlutoUI.NumberField(5:5:5000, default=1610))
+
+	E1 size = $(@bind E1_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.69))
+	E1 pos  = $(@bind E1_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.23))
+
+	C size = $(@bind C_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.56))
+	C pos  = $(@bind C_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.41))
+
+	A size = $(@bind A_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.49))
+	A pos  = $(@bind A_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.59))
+
+	E2 size = $(@bind E2_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.41))
+	E2 pos  = $(@bind E2_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.75))
+
+	S size = $(@bind S_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.35))
+	S pos  = $(@bind S_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.87))
+
+	font = $(@bind decaes_font PlutoUI.Select(
+		[
+			"Dejavu Sans (default)",
+			"Courier Mono",
+			"Courier Bold",
+			"Purisa Bold",
+			"FreeMono",
+			"Latin Modern Sans Demi Cond",
+			"Liberation Mono",
+			"Sawasdee Bold",
+			"Carlito",
+			"Chilanka",
+			"Dyuthi",
+			"Latin Modern Sans",
+		];
+		default = "Chilanka",
+	))
+	"""
+
+	# Print current variables to terminal
+	println("""
+	base height = \$(@bind base_height PlutoUI.NumberField(5:5:5000, default=$(base_height)))
+	base width = \$(@bind base_width PlutoUI.NumberField(5:5:5000, default=$(base_width)))
+
+	E1 size = \$(@bind E1_size PlutoUI.NumberField(0.01:0.01:1.0, default=$(E1_size)))
+	E1 pos  = \$(@bind E1_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=$(E1_pos)))
+
+	C size = \$(@bind C_size PlutoUI.NumberField(0.01:0.01:1.0, default=$(C_size)))
+	C pos  = \$(@bind C_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=$(C_pos)))
+
+	A size = \$(@bind A_size PlutoUI.NumberField(0.01:0.01:1.0, default=$(A_size)))
+	A pos  = \$(@bind A_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=$(A_pos)))
+
+	E2 size = \$(@bind E2_size PlutoUI.NumberField(0.01:0.01:1.0, default=$(E2_size)))
+	E2 pos  = \$(@bind E2_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=$(E2_pos)))
+
+	S size = \$(@bind S_size PlutoUI.NumberField(0.01:0.01:1.0, default=$(S_size)))
+	S pos  = \$(@bind S_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=$(S_pos)))
+	""")
+
+	sliders_md
+end
+
+# ╔═╡ 5cf6be3c-fe58-42a8-840e-8a21a5a81584
+begin
+	# Global variables from sliders
+	textsize = base_height .* [1.0, E1_size, C_size, A_size, E2_size, S_size]
+	xposition = 20 .+ base_width .* [0, E1_pos, C_pos, A_pos, E2_pos, S_pos]
+	yposition = 20 .+ [100, 50, 25, 15, 5, 0]
+	textsize .= ceil.(Int, textsize)
+	xposition .= ceil.(Int, xposition)
+	yposition .= ceil.(Int, yposition)
+
+	# Julia logo colors
+	JLcolors = Makie.Colors.JULIA_LOGO_COLORS
+end;
+
+# ╔═╡ 15b31eb3-8ddc-4fab-9bda-41cdbe8bc710
+function plot_decaes_text!(ax; textsize, xposition, yposition)
+	text!(ax,
+		["D", "E", "C", "A", "E", "S"],
+		position = tuple.(xposition ./ 1600, yposition ./ 900),
+		textsize = textsize,
+		align = (:left, :baseline),
+		font = decaes_font,
+	)
+end
+
+# ╔═╡ 446a6ee0-b25b-47ef-b4fc-af59f30d27fd
 md"""
-base height = $(@bind base_height PlutoUI.NumberField(5:5:5000, default=750))
-base width = $(@bind base_width PlutoUI.NumberField(5:5:5000, default=1610))
-
-E1 size = $(@bind E1_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.69))
-E1 pos  = $(@bind E1_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.23))
-
-C size = $(@bind C_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.56))
-C pos  = $(@bind C_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.41))
-
-A size = $(@bind A_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.49))
-A pos  = $(@bind A_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.59))
-
-E2 size = $(@bind E2_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.41))
-E2 pos  = $(@bind E2_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.75))
-
-S size = $(@bind S_size PlutoUI.NumberField(0.01:0.01:1.0, default=0.35))
-S pos  = $(@bind S_pos  PlutoUI.NumberField(0.01:0.005:1.0, default=0.87))
-
-font = $(@bind decaes_font PlutoUI.Select(
-	[
-		"Dejavu Sans (default)",
-		"Courier Mono",
-		"Courier Bold",
-		"Purisa Bold",
-		"FreeMono",
-		"Latin Modern Sans Demi Cond",
-		"Liberation Mono",
-		"Sawasdee Bold",
-		"Carlito",
-		"Chilanka",
-	];
-	default = "Chilanka",
-))
+EPG decay curve
 """
+
+# ╔═╡ 118177e3-2b40-4cea-bba6-ab48ba492fbd
+function plot_epg_curve!(ax, echo_times, epg_curve)
+	epg_line = lines!(ax, echo_times, epg_curve;
+		linewidth = 14,
+		color = JLcolors.purple,
+	)
+	epg_band = band!(
+		ax, echo_times, fill(0, length(echo_times)), epg_curve;
+		color = (JLcolors.purple, 0.12),
+	)
+	return epg_line, epg_band
+end;
 
 # ╔═╡ 499d8be9-ca07-40c9-9a22-79bb99ed58fa
 md"""
 Inset T2 distribution figure:
 """
+
+# ╔═╡ f217fde8-08b8-4f33-8149-69f900847bd3
+function plot_t2_dist!(ax, t2maps, t2dist)
+	ax.backgroundcolor = :white
+	hidespines!(ax)
+	hidedecorations!(ax)
+	logT2 = t2maps["t2times"] .|> log10
+
+	I = findlast(t2maps["t2times"] .<= 50e-3)
+	t2_bands = Any[]
+	t2_lines = Any[]
+	pushinto!(x) = p -> push!(x, p)
+	for (inds, color) in [
+			(1:I, JLcolors.red),
+			(I:length(t2dist), JLcolors.green),
+		]
+		band!(ax,
+			logT2[inds], fill(0.0,length(logT2[inds])), t2dist[inds];
+			color = (color, 0.35),
+		) |> pushinto!(t2_bands)
+		lines!(ax, logT2[inds], t2dist[inds],
+			linewidth = 14, color = color,
+		) |> pushinto!(t2_lines)
+	end
+
+	return t2_bands, t2_lines
+end;
 
 # ╔═╡ 0e7420c8-bfd6-4c91-a7bd-6c205eb24452
 md"""
@@ -90,11 +186,7 @@ Compute EPG decay curve + corresponding T2 distribution:
 """
 
 # ╔═╡ 02d229c2-e2c0-4a36-bc6a-163778be85b9
-begin
-	T1 = 1.0
-	TE = 10e-3
-	SNR = 60
-
+function epg_decay_curve(ETL, flip_angle, TE, T21, T22, T1, refcon, MWF, SNR)
 	x = (0:ETL-1)./(ETL-1)
 	y =    MWF  .* DECAES.EPGdecaycurve(ETL, flip_angle, TE, T21, T1, refcon) .+
 		(1-MWF) .* DECAES.EPGdecaycurve(ETL, flip_angle, TE, T22, T1, refcon)
@@ -103,55 +195,31 @@ begin
 
 	noise(snr, seed) = 10^(-snr/20) .* randn(MersenneTwister(seed), size(y))
 	y .= sqrt.((y .+ noise(SNR, 0)).^2 .+ noise(SNR, 1).^2)
+
+	return x, y
 end;
 
 # ╔═╡ db1d1148-7bf7-4a1d-b568-52b55a8ec1f3
-begin
-	nT2 = 100
-	T2Range = (TE, 1.0)
-	Reg = "lcurve"
+function t2_distribution(y::AbstractVector, nT2, TE, T2Range, Reg)
 	t2maps, t2dist = T2mapSEcorr(
 		reshape(y, 1, 1, 1, :);
 		nT2, TE, T2Range, Reg, Silent = true,
 	)
 	t2dist ./= maximum(t2dist)
-end;
-
-# ╔═╡ f217fde8-08b8-4f33-8149-69f900847bd3
-function plot_t2_dist!(ax)
-	ax.backgroundcolor = :white
-	hidespines!(ax)
-	hidedecorations!(ax)
-	logT2 = t2maps["t2times"] .|> log10
-
-	# Julia logo colors
-	JLcolors = Makie.Colors.JULIA_LOGO_COLORS
-
-	I = findlast(t2maps["t2times"] .<= 50e-3)
-	for (inds, color) in [
-			(1:I, JLcolors.red),
-			(I:nT2, JLcolors.green),
-		]
-		band!(ax,
-			logT2[inds], fill(0.0,length(logT2[inds])), t2dist[inds];
-			color = (color, 0.35),
-		)
-		lines!(ax, logT2[inds], t2dist[inds],
-			linewidth = 14, color = color,
-		)
-	end
-
-	return ax
+	return t2maps, t2dist
 end;
 
 # ╔═╡ 7cd9afdf-6675-4416-aec7-9eba65eafbe2
-begin
-	f = Figure(
+function decaes_logo(;
+		T1, TE, SNR, nT2, T2Range, Reg, ETL, flip_angle, refcon, T21, T22, MWF,
+		save_figs = false,
+	)
+	fig = Figure(
 		resolution = (1600, 900),
 	)
 
 	ax = Axis(
-		f[1, 1],
+		fig[1, 1],
 		aspect = 16/9,
 		grid = false,
 		ticks = false,
@@ -164,55 +232,150 @@ begin
 	hidedecorations!(ax)
 
 	# DECAES text
-	textsize = ceil.(Int,
-		base_height .* [1.0, E1_size, C_size, A_size, E2_size, S_size]
-	)
-	xposition = 20 .+ ceil.(Int,
-		base_width .* [0, E1_pos, C_pos, A_pos, E2_pos, S_pos]
-	)
-	yposition = 20 .+ [100, 50, 25, 15, 5, 0]
-	text!(ax,
-		["D", "E", "C", "A", "E", "S"],
-		position = tuple.(xposition ./ 1600, yposition ./ 900),
-		textsize = textsize,
-		align = (:left, :baseline),
-		font = decaes_font,
-	)
-
-	# Julia logo colors
-	JLcolors = Makie.Colors.JULIA_LOGO_COLORS
+	txt = plot_decaes_text!(ax; textsize, xposition, yposition)
 
 	# Plot EPG decay curve
-	lines!(ax, x, y;
-		linewidth = 14,
-		color = JLcolors.purple,
+	echo_times, epg_curve = epg_decay_curve(
+		ETL, flip_angle, TE, T21, T22, T1, refcon, MWF, SNR
 	)
-    band!(
-		ax, x, fill(0,ETL), y;
-		color = (JLcolors.purple, 0.12),
-	)
+	epg_line, epg_band = plot_epg_curve!(ax, echo_times, epg_curve)
 
 	# Inset T2 distbn
-    ax_sub = Axis(f, bbox = BBox(800, 1600, 450, 900))
-	plot_t2_dist!(ax_sub)
+	ax_sub = Axis(fig, bbox = BBox(800, 1600, 450, 900))
+	t2maps, t2dist = t2_distribution(epg_curve, nT2, TE, T2Range, Reg)
+	t2_bands, t2_lines = plot_t2_dist!(ax_sub, t2maps, t2dist)
 
 	# Save figures
-	save("logo.png", f)
-	save("logo.svg", f)
-	f
+	if save_figs
+		save("logo.png", fig)
+		save("logo.svg", fig)
+	end
+
+	(; fig, ax, ax_sub, txt, epg_line, epg_band, t2_bands, t2_lines)
+end;
+
+# ╔═╡ e55b552a-00a1-44d3-9d0b-dda4ceac1f59
+let
+	fig, = decaes_logo(;
+		# DECAES settings
+		T1 = 1.0,
+		TE = 10e-3,
+		SNR = 60,
+		nT2 = 80,
+		T2Range = (10e-3, 1.0),
+		Reg = "lcurve",
+
+		# Global variables from sliders
+		ETL = ETL_slider,
+		flip_angle = flip_angle_slider,
+		refcon = refcon_slider,
+		T21 = T21_slider,
+		T22 = T22_slider,
+		MWF = MWF_slider,
+
+		save_figs = true,
+	)
+
+	fig
 end
+
+# ╔═╡ 1b62140b-f949-4470-a150-902c4811eb9b
+#=
+let
+    # animation settings
+    nframes = 45
+    framerate = 30
+
+	# DECAES settings
+	T1 = 1.0
+	TE = 10e-3
+	SNR = 60
+	nT2 = 80
+	T2Range = (10e-3, 1.0)
+	Reg = "lcurve"
+
+    T22_iterator = cos_range(150e-3, 300e-3; length = nframes, phase = pi/2)
+    FA_iterator = cos_range(150, 175; length = nframes, phase = pi)
+	tsize_iterator = [
+		# # Periodic grow/shrink
+		# cos_range(0.950, 1.050; length = nframes, phase = pi/2);
+
+		# Heartbeat
+		smooth_bump(1.0, 1.075; width = 0.95, length = 10);
+		smooth_bump(1.0, 0.975; width = 0.95, length = 5);
+		smooth_bump(1.0, 1.050; width = 0.95, length = 10);
+		smooth_bump(1.0, 1.000; width = 0.95, length = 20);
+	]
+	anim_iterator = Iterators.zip(T22_iterator, FA_iterator, tsize_iterator)
+
+    ETL = ETL_slider
+    refcon = refcon_slider
+    T21 = T21_slider
+    MWF = MWF_slider
+
+    fig, ax, ax_sub, txt, epg_line, epg_band, t2_bands, t2_lines = decaes_logo(;
+        # Global variables
+        T1, TE, SNR, nT2, T2Range, Reg,
+
+        # Local variables
+        ETL, refcon, T21, MWF,
+
+        # Variables for gif
+        T22 = T22_iterator[1],
+		flip_angle = FA_iterator[1],
+    )
+
+    record(fig, "logo.gif", anim_iterator; framerate = framerate) do (T22, flip_angle, tsize)
+		# Delete current subplots
+		delete!(ax, txt)
+        delete!(ax, epg_line)
+        delete!(ax, epg_band)
+        delete!.(ax_sub, t2_lines)
+        delete!.(ax_sub, t2_bands)
+
+        # Replace subplots with updated curves
+		txt = plot_decaes_text!(
+			ax; textsize = tsize .* textsize, xposition, yposition)
+        echo_times, epg_curve = epg_decay_curve(
+			ETL, flip_angle, TE, T21, T22, T1, refcon, MWF, SNR)
+        epg_line, epg_band = plot_epg_curve!(ax, echo_times, epg_curve)
+
+        t2maps, t2dist = t2_distribution(epg_curve, nT2, TE, T2Range, Reg)
+        t2_lines, t2_bands = plot_t2_dist!(ax_sub, t2maps, t2dist)
+    end
+
+    PlutoUI.LocalResource("logo.gif")
+end
+=#
+
+# ╔═╡ 801045fa-d596-485e-84f6-f5c74629cb2d
+function cos_range(lo, hi; length, phase)
+	θ = range(0, 2π; length) .- phase
+	x = (lo+hi)/2 .+ (hi-lo)/2 .* cos.(θ)
+	return x
+end;
+
+# ╔═╡ 2fc8ef73-b5c2-455a-a1a1-f85cf45fc4ca
+function smooth_bump(lo, hi; width = 1, length)
+	ϵ = sqrt(eps())
+	u = range(-1, 1; length)
+	x = @. lo + (hi - lo) * exp(-1 / (1 - clamp(u/width, -1+ϵ, 1-ϵ)^2))
+	return x
+end;
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 DECAES = "d84fb938-a666-558e-89d9-d531edc6724f"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [compat]
 CairoMakie = "~0.6.2"
 DECAES = "~0.4.0"
+Makie = "~0.14.2"
 PlutoUI = "~0.7.9"
 """
 
@@ -1424,13 +1587,21 @@ version = "3.5.0+0"
 
 # ╔═╡ Cell order:
 # ╠═c2274306-49b5-45c0-ae4b-a3b8dc3a3835
+# ╠═5cf6be3c-fe58-42a8-840e-8a21a5a81584
 # ╟─9d4a6681-2b40-442f-8cc8-4ae444bc6215
 # ╟─dfac902d-bb87-4fea-a898-d6792e9b793b
+# ╠═e55b552a-00a1-44d3-9d0b-dda4ceac1f59
 # ╠═7cd9afdf-6675-4416-aec7-9eba65eafbe2
+# ╠═15b31eb3-8ddc-4fab-9bda-41cdbe8bc710
+# ╟─446a6ee0-b25b-47ef-b4fc-af59f30d27fd
+# ╠═118177e3-2b40-4cea-bba6-ab48ba492fbd
 # ╟─499d8be9-ca07-40c9-9a22-79bb99ed58fa
 # ╠═f217fde8-08b8-4f33-8149-69f900847bd3
 # ╟─0e7420c8-bfd6-4c91-a7bd-6c205eb24452
 # ╠═02d229c2-e2c0-4a36-bc6a-163778be85b9
 # ╠═db1d1148-7bf7-4a1d-b568-52b55a8ec1f3
+# ╠═1b62140b-f949-4470-a150-902c4811eb9b
+# ╠═801045fa-d596-485e-84f6-f5c74629cb2d
+# ╠═2fc8ef73-b5c2-455a-a1a1-f85cf45fc4ca
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
