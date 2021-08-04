@@ -117,7 +117,7 @@ function T2mapSEcorr_(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
     LEGACY[] = false
 
-    return (; maps, distributions)
+    return maps, distributions
 end
 
 function init_output_t2distributions(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
