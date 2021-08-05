@@ -111,16 +111,18 @@ end
 
 function cmd = jl_build_cmd(opts)
 
-    if nargin < 1
-        threads = maxNumCompThreads;
-    else
-        threads = opts.threads;
-    end
-
     % Set Julia binary path and flags
-    jl_binary_path = 'julia';
-    jl_binary_args = sprintf('--startup-file=no --project=. --optimize=3 --threads=%d', threads); %TODO
-    cmd = [jl_binary_path, ' ', jl_binary_args];
+    jl_cmd_args = {
+        opts.runtime
+        '--startup-file=no'
+        '--optimize=3'
+        sprintf('--threads=%d', opts.threads)
+    };
+    if ~isempty(opts.project)
+        jl_cmd_args{end+1} = sprintf('--project=%s', opts.project); %#ok
+    end
+    cmd = join(jl_cmd_args, ' ');
+    cmd = cmd{1};
 
 end
 
@@ -145,7 +147,7 @@ function st = jl_call_decaes_server(opts, decaes_args)
         fprintf('* Killing DECAES server\n');
         kill_script = jl_make_script('DaemonMode', 'sendExitCode()');
         cleanup_kill_script = onCleanup(@() delete([kill_script, '*']));
-        cmd = [jl_build_cmd, ' ', kill_script];
+        cmd = [jl_build_cmd(opts), ' ', kill_script];
         system(cmd, '-echo');
     end
 
@@ -161,7 +163,7 @@ function st = jl_call_decaes_server(opts, decaes_args)
         system(cmd, '-echo');
 
         % Wait for server ping
-        while ~jl_server_ping()
+        while ~jl_server_ping(opts)
             pause(1)
         end
 
@@ -179,7 +181,7 @@ function st = jl_call_decaes_server(opts, decaes_args)
 
 end
 
-function succ = jl_server_ping()
+function succ = jl_server_ping(opts)
 
     % Create temporary file and try to delete file from julia server
     daemon_script = jl_make_script('DaemonMode', {
@@ -194,7 +196,7 @@ function succ = jl_server_ping()
     cleanup_daemon_script = onCleanup(@() delete([daemon_script, '*']));
     cleanup_ping_script = onCleanup(@() delete([ping_script, '*']));
     cleanup_ping_file = onCleanup(@() delete([ping_file, '*']));
-    cmd = [jl_build_cmd, ' ', daemon_script, ' ', ping_script, ' ', ping_file];
+    cmd = [jl_build_cmd(opts), ' ', daemon_script, ' ', ping_script, ' ', ping_file];
     system(cmd, '-echo');
     succ = ~exist(ping_file, 'file');
 
@@ -284,8 +286,14 @@ function [opts, decaes_args] = parse_args(varargin)
         arg = varargin{ii};
         if ischar(arg)
             switch lower(arg)
+                case '--runtime'
+                    mat_args = {mat_args{:}, 'runtime', varargin{ii+1}}; %#ok
+                    ii = ii + 2;
                 case '--threads'
                     mat_args = {mat_args{:}, 'threads', check_positive_int(varargin{ii+1})}; %#ok
+                    ii = ii + 2;
+                case '--project'
+                    mat_args = {mat_args{:}, 'project', varargin{ii+1}}; %#ok
                     ii = ii + 2;
                 case '--server'
                     mat_args = {mat_args{:}, 'server', true}; %#ok
@@ -307,8 +315,10 @@ function [opts, decaes_args] = parse_args(varargin)
 
     % Parse Matlab inputs
     p = inputParser;
+    addParameter(p, 'runtime', 'julia', @ischar);
     addParameter(p, 'threads', maxNumCompThreads, @(x) ~isnan(check_positive_int(x)));
-    addParameter(p, 'server', false, @(x) islogical(x));
+    addParameter(p, 'project', '', @ischar);
+    addParameter(p, 'server', false, @islogical);
     parse(p, mat_args{:});
     opts = p.Results;
 
