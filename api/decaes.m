@@ -47,14 +47,16 @@ function status = decaes(varargin)
 %     * The required arguments echo time, number of T2 bins, T2 Range,
 %       small peak window, and middle peak window are set using the --TE,
 %       --nT2, --T2Range, --SPWin, and --MPWin flags, respectively
+%     * We specify the L-curve method for choosing the regularization
+%       parameter using the --Reg flag
 %     * Lastly, we indicate that the regularization parameters should be
 %       saved using the --SaveRegParam flag
 % 
-%       decaes image.nii.gz --threads 4 --output results --mask image_mask.mat --T2map --T2part --TE 7e-3 --nT2 60 --T2Range 10e-3 2.0 --SPWin 10e-3 25e-3 --MPWin 25e-3 200.0e-3 --SaveRegParam
+%       decaes image.nii.gz --threads 4 --output results --mask image_mask.mat --T2map --T2part --TE 7e-3 --nT2 60 --T2Range 10e-3 2.0 --SPWin 10e-3 25e-3 --MPWin 25e-3 200.0e-3 --Reg lcurve --SaveRegParam
 % 
 %   Run the same command using function syntax:
 % 
-%       decaes('image.nii.gz', '--threads', 4, '--output', 'results', '--mask', 'image_mask.mat', '--T2map', '--T2part', '--TE', 7e-3, '--nT2', 60, '--T2Range', [10e-3, 2.0], '--SPWin', [10e-3, 25e-3], '--MPWin', [25e-3, 200.0e-3], '--SaveRegParam')
+%       decaes('image.nii.gz', '--threads', 4, '--output', 'results', '--mask', 'image_mask.mat', '--T2map', '--T2part', '--TE', 7e-3, '--nT2', 60, '--T2Range', [10e-3, 2.0], '--SPWin', [10e-3, 25e-3], '--MPWin', [25e-3, 200.0e-3], '--Reg', 'lcurve', '--SaveRegParam')
 % 
 %   Create a settings file called 'settings.txt' containing the settings
 %   from the above example (note: only one value or flag per line):
@@ -79,6 +81,8 @@ function status = decaes(varargin)
 %       --MPWin
 %       25e-3
 %       200.0e-3
+%       --Reg
+%       lcurve
 %       --SaveRegParam
 % 
 %   Run the example using the above settings file 'settings.txt' on a local Julia server:
