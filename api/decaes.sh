@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import argparse
 import os
 import subprocess
@@ -48,10 +49,10 @@ def jlcall(jlargs):
     for jlarg in jlargs:
         cmd.append(str(jlarg))
 
-    subprocess.run(cmd)
+    subprocess.check_call(cmd)
 
 # Import DECAES, installing if not found in project environment
-decaes_cmd = "try import DECAES; catch e; import Pkg; Pkg.add(\"DECAES\"); import DECAES; end; DECAES.main()"
+decaes_cmd = "try using DECAES; catch e; import Pkg; Pkg.add(\"DECAES\"); using DECAES; end; DECAES.main()"
 
 # Silence DECAES, if requested
 if args.quiet:
