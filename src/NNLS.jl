@@ -29,12 +29,12 @@ module NNLS
 
 using LinearAlgebra
 using UnsafeArrays: @uviews, uviews, uview
+using MuladdMacro: @muladd
 # using LoopVectorization: @avx
 
-export nnls,
-       nnls!,
-       NNLSWorkspace,
-       load!
+export nnls, nnls!, NNLSWorkspace, load!
+
+@muladd begin
 
 """
 CONSTRUCTION AND/OR APPLICATION OF A SINGLE
@@ -46,15 +46,14 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function construct_householder!(u::AbstractVector{T}, up::T)::T where {T}
-    m = length(u)
-    if m <= 1
+@inline function construct_householder!(u::AbstractVector{T}, up::T)::T where {T}
+    if length(u) <= 1
         return up
     end
 
     sm = zero(T)
-    @inbounds @simd for i in 1:m #@avx
-        sm += u[i]^2
+    @inbounds @simd for ui in u #@avx
+        sm = sm + ui * ui
     end
     cl = sqrt(sm)
 
@@ -76,7 +75,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
+@inline function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
     m = length(u)
     if m <= 1
         return
@@ -93,19 +92,19 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
     @inbounds c1 = c[1]
     sm = c1 * up
     @inbounds @simd for i in 2:m #@avx
-        sm += c[i] * u[i]
+        sm = sm + c[i] * u[i]
     end
 
     if sm != 0
         sm /= b
-        @inbounds c[1] += sm * up
+        @inbounds c[1] = c[1] + sm * up
         @inbounds @simd ivdep for i in 2:m #@avx
-            c[i] += sm * u[i]
+            c[i] = c[i] + sm * u[i]
         end
     end
 end
 
-function apply_householder!(A::AbstractMatrix{T}, up, cols, nsetp, j) where {T}
+@inline function apply_householder!(A::AbstractMatrix{T}, up, cols, nsetp, j) where {T}
     m, n = size(A)
     if m - nsetp <= 0
         return
@@ -123,12 +122,12 @@ function apply_householder!(A::AbstractMatrix{T}, up, cols, nsetp, j) where {T}
     @inbounds for jj in cols
         sm = zero(T)
         @inbounds @simd for k in nsetp:m #@avx
-            sm += A[k,jj] * A[k,j]
+            sm = sm + A[k,jj] * A[k,j]
         end
         @inbounds if sm != 0
             sm /= b
             @inbounds @simd ivdep for i in nsetp:m #@avx
-                A[i,jj] += sm * A[i,j]
+                A[i,jj] = A[i,jj] + sm * A[i,j]
             end
         end
     end
@@ -151,16 +150,16 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
       SIG IS COMPUTED LAST TO ALLOW FOR THE POSSIBILITY THAT
       SIG MAY BE IN THE SAME LOCATION AS A OR B .
 """
-function orthogonal_rotmat(a::T, b::T)::Tuple{T, T, T} where {T}
+@inline function orthogonal_rotmat(a::T, b::T)::Tuple{T, T, T} where {T}
     if abs(a) > abs(b)
         xr = b / a
-        yr = sqrt(1 + xr^2)
+        yr = sqrt(one(T) + xr * xr)
         c = inv(yr) * sign(a)
         s = c * xr
         sig = abs(a) * yr
     elseif b != 0
         xr = a / b
-        yr = sqrt(1 + xr^2)
+        yr = sqrt(one(T) + xr * xr)
         s = inv(yr) * sign(b)
         c = s * xr
         sig = abs(b) * yr
@@ -179,7 +178,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function solve_triangular_system!(zz, A, idx, nsetp, jj)
+@inline function solve_triangular_system!(zz, A, idx, nsetp, jj)
     if nsetp <= 0
         return jj
     end
@@ -189,7 +188,7 @@ function solve_triangular_system!(zz, A, idx, nsetp, jj)
     @inbounds for ip in nsetp-1:-1:1
         zz1 = zz[ip + 1]
         @inbounds @simd ivdep for ii in 1:ip #@avx
-            zz[ii] -= A[ii, jj] * zz1
+            zz[ii] = zz[ii] - A[ii, jj] * zz1
         end
         jj = idx[ip]
         zz[ip] /= A[ip, jj]
@@ -280,7 +279,7 @@ end
     @assert size(work.idx) == (n,)
 end
 
-function largest_positive_dual(
+@inline function largest_positive_dual(
         w::AbstractVector{T},
         idx::AbstractVector{TI},
         range
@@ -357,7 +356,7 @@ function nnls!(
             idxi = idx[i]
             sm = zero(T)
             @inbounds @simd for l in (nsetp + 1):m #@avx
-                sm += A[l, idxi] * b[l]
+                sm = sm + A[l, idxi] * b[l]
             end
             w[idxi] = sm
         end
@@ -551,7 +550,8 @@ function nnls!(
     sm = zero(T)
     if nsetp < m
         @inbounds @simd for i in (nsetp + 1):m #@avx
-            sm += b[i]^2
+            bi = b[i]
+            sm = sm + bi * bi
         end
     else
         fill!(w, zero(T))
@@ -594,5 +594,7 @@ function nnls(
     nnls!(work, max_iter)
     work.x
 end
+
+end # @muladd
 
 end # module

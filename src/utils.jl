@@ -61,7 +61,7 @@ mapfindmin(f, xs) = mapfind(f, findmin, xs)
 # Updated according to suggestions from the folks at DataFrames.jl:
 # 
 #   https://github.com/jondeuce/DECAES.jl/issues/37
-function tforeach(f, x::AbstractArray; blocksize::Integer)
+function tforeach(f, x::AbstractArray; blocksize::Integer = default_blocksize())
     nt = Threads.nthreads()
     len = length(x)
     if nt > 1 && len > blocksize
@@ -82,9 +82,11 @@ end
 
 function split_indices(len::Integer, basesize::Integer)
     len′ = Int64(len) # Avoid overflow on 32-bit machines
-    np = max(1, div(len, basesize))
+    np = max(1, div(len′, basesize))
     return (Int(1 + ((i - 1) * len′) ÷ np) : Int((i * len′) ÷ np) for i in 1:np)
 end
+
+default_blocksize() = 64
 
 ####
 #### Timing utilities

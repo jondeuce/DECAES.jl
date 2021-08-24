@@ -96,17 +96,16 @@ function T2mapSEcorr_(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T
 
     # Run analysis in parallel
     indices = filter(I -> image[I,1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
-    blocksize = 64
     if opts.Silent
-        tforeach(indices; blocksize = blocksize) do I
+        tforeach(indices) do I
             thread_buffer = thread_buffers[Threads.threadid()]
             voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
         end
     else
-        bigblocks = Iterators.partition(indices, 8 * Threads.nthreads() * blocksize) .|> copy
+        bigblocks = Iterators.partition(indices, 8 * Threads.nthreads() * default_blocksize()) .|> copy
         progmeter = DECAESProgress(io, length(bigblocks), "Computing T2-Distribution: "; dt = 5.0)
         for bigblock in bigblocks
-            tforeach(bigblock; blocksize = blocksize) do I
+            tforeach(bigblock) do I
                 thread_buffer = thread_buffers[Threads.threadid()]
                 voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
             end
