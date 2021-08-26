@@ -21,6 +21,7 @@ using .ParXRec
 
 include("types.jl")
 include("utils.jl")
+include("splines.jl")
 include("lsqnonneg.jl")
 include("lsqnonneg_reg.jl")
 include("EPGdecaycurve.jl")
