@@ -396,31 +396,35 @@ function get_file_infos(opts::Dict{Symbol, Any})
     return file_info
 end
 
-function load_image(filename, ::Val{dim} = Val(4)) where {dim}
+function load_image(filename, ::Val{N}) where {N}
     image = if maybe_get_suffix(filename) == ".mat"
-        # Load first `dim`-dimensional array which is found, or throw an error if none are found
+        # Load first `N`-dimensional array which is found, or throw an error if none are found
         data = MAT.matread(filename)
-        key = findfirst(x -> x isa AbstractArray{T,dim} where {T}, data)
-        if key === nothing
+        array_keys = findall(x -> x isa AbstractArray{T,N} where {T}, data)
+        if isempty(array_keys)
             error("No 4D array was found in the input file: $filename")
         end
-        data[key]
+        if length(array_keys) > 1
+            array_keys = sort(array_keys)
+            @warn "Multiple possible images found in file: $(filename)\nChoosing field $(repr(array_keys[1])) out of the following options: $(join(repr.(array_keys), ", "))"
+        end
+        data[array_keys[1]]
 
     elseif maybe_get_suffix(filename) ∈ (".nii", ".nii.gz")
         # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned
         #   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
-        # Loaded data is coerced to a `dim`-dimensional array
+        # Loaded data is coerced to a `N`-dimensional array
         data = NIfTI.niread(filename)
         if data.header.scl_slope == 0
-            data.raw[ntuple(_ -> Colon(), dim)...] # Return raw data
+            data.raw[ntuple(_ -> Colon(), N)...] # Return raw data
         else
-            data[ntuple(_ -> Colon(), dim)...] # Return scaled data (getindex from the NIfTI package handles scaling)
+            data[ntuple(_ -> Colon(), N)...] # Return scaled data (getindex from the NIfTI package handles scaling)
         end
 
     elseif maybe_get_suffix(filename) ∈ (".par", ".xml", ".rec")
-        # Load PAR/REC or XML/REC file, coercing resulting data into a `dim`-dimensional array
+        # Load PAR/REC or XML/REC file, coercing resulting data into a `N`-dimensional array
         _, data = ParXRec.parxrec(filename)
-        data[ntuple(_ -> Colon(), dim)...]
+        data[ntuple(_ -> Colon(), N)...]
 
     else
         error("Currently, only $ALLOWED_FILE_SUFFIXES_STRING files are supported")
@@ -428,10 +432,11 @@ function load_image(filename, ::Val{dim} = Val(4)) where {dim}
 
     # Currently, the pipeline is ~twice as fast on Float64 arrays than Float32 arrays (unclear why).
     # However, the MATLAB toolbox converts images to double as well, so here we simply do the same
-    image = convert(Array{Float64,dim}, image)
+    image = convert(Array{Float64,N}, image)
 
     return image
 end
+load_image(filename; ndims::Int = 4) = load_image(filename, Val(ndims))
 
 function try_apply_maskfile!(image, maskfile)
     try
@@ -501,19 +506,22 @@ end
 ####
 
 # https://discourse.julialang.org/t/write-to-file-and-stdout/35042/3
-struct Tee{TIO <: Tuple} <: IO
-    streams::TIO
+struct Tee{T <: Tuple} <: IO
+    streams::T
 end
 Tee(streams::IO...) = Tee(streams)
-Base.flush(t::Tee) = do_tee(t, io -> nothing)
-function do_tee(t::Tee, f, args...; kwargs...)
+Base.flush(t::Tee) = tee(t)
+
+function tee(f, t::Tee, args...; kwargs...)
     for io in t.streams
         f(io, args...; kwargs...)
         flush(io)
     end
 end
-for f in [:write, :print, :println, :printstyled], T in [Any, Array, Char, Union{SubString{String},String}]
-    @eval Base.$f(t::Tee, x::$T; kwargs...) = do_tee(t, $f, x; kwargs...)
+tee(t::Tee, args...; kwargs...) = tee(io -> nothing, t, args...; kwargs...)
+
+for f in [:write, :print, :println, :printstyled]
+    @eval Base.$f(t::Tee, x; kwargs...) = tee(Base.$f, t, x; kwargs...)
 end
 
 function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppress_logfile = false)
