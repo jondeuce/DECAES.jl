@@ -30,20 +30,25 @@ function find_nearest(r::AbstractRange, x::Number)
     r[idx], idx # nearest value in r to x and corresponding index
 end
 
-function local_gridsearch(f, i::Int)
-    yleft, y, yright = f(i-1), f(i), f(i+1)
-    while !(yleft ≥ y ≤ yright) # search for local min
-        if yleft < y
+function local_gridsearch(f, xs, i0)
+    get(j) = @inbounds xs[clamp(j, firstindex(xs), lastindex(xs))]
+    i = i0
+    x⁻, x, x⁺ = get(i-1), get(i), get(i+1)
+    y⁻, y, y⁺ = f(x⁻), f(x), f(x⁺)
+    while !(y⁻ ≥ y ≤ y⁺) # search for local min
+        if y⁻ < y
             i -= 1 # shift left
-            yleft, y, yright = f(i-1), yleft, y
-        elseif yright < y
+            x⁻, x, x⁺ = get(i-1), x⁻, x
+            y⁻, y, y⁺ = f(x⁻), y⁻, y
+        elseif y⁺ < y
             i += 1 # shift right
-            yleft, y, yright = y, yright, f(i+1)
+            x⁻, x, x⁺ = x, x⁺, get(i+1)
+            y⁻, y, y⁺ = y, y⁺, f(x⁺)
         else
             break
         end
     end
-    return y, i
+    return (; x, y, i)
 end
 
 function mapfind(f, finder, xs)
@@ -169,6 +174,61 @@ macro showtime(io, msg, ex)
 end
 
 ####
+#### Logging
+####
+
+# https://discourse.julialang.org/t/write-to-file-and-stdout/35042/3
+struct Tee{T <: Tuple} <: IO
+    streams::T
+end
+Tee(streams::IO...) = Tee(streams)
+Base.flush(t::Tee) = tee(t)
+Base.write(t::Tee, args...; kwargs...) = tee(Base.write, t, args...; kwargs...)
+Base.print(t::Tee, args...; kwargs...) = tee(Base.print, t, args...; kwargs...)
+Base.println(t::Tee, args...; kwargs...) = tee(Base.println, t, args...; kwargs...)
+Base.printstyled(t::Tee, args...; kwargs...) = tee(Base.printstyled, t, args...; kwargs...)
+
+function tee(f, t::Tee, args...; kwargs...)
+    for io in t.streams
+        f(io, args...; kwargs...)
+        flush(io)
+    end
+end
+tee(t::Tee, args...; kwargs...) = tee(io -> nothing, t, args...; kwargs...)
+
+function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppress_logfile = false)
+    open(suppress_logfile ? tempname() : logfile, "w+") do io
+        io = Tee(suppress_terminal ? devnull : stderr, io)
+        logger = ConsoleLogger(io)
+        with_logger(logger) do
+            f(io)
+        end
+    end
+end
+
+# https://discourse.julialang.org/t/redirect-stdout-and-stderr/13424/3
+function redirect_to_files(f, outfile, errfile)
+    open(outfile, "w") do out
+        open(errfile, "w") do err
+            redirect_stdout(out) do
+                redirect_stderr(err) do
+                    f()
+                end
+            end
+        end
+    end
+end
+redirect_to_tempfiles(f) = redirect_to_files(f, tempname() * ".log", tempname() * ".err")
+
+function redirect_to_devnull(f)
+    with_logger(ConsoleLogger(devnull)) do
+        redirect_to_tempfiles() do
+            f()
+        end
+    end
+end
+
+####
 #### Spline tools
 ####
 
@@ -195,7 +255,8 @@ coeffs(p::Poly) = p.c
 degree(p::Poly) = length(coeffs(p)) - 1
 (p::Poly)(x) = evalpoly(x, coeffs(p))
 
-shift!(p::Poly, a::Number) = (p.c[1] -= a; return p)
+add!(p::Poly, a::Number) = (p.c[1] += a; return p)
+sub!(p::Poly, a::Number) = (p.c[1] -= a; return p)
 derivative(p::Poly) = Poly([(i-1) * coeffs(p)[i] for i in 2:degree(p)+1])
 integral(p::Poly{T}) where {T} = Poly([i == 0 ? zero(T) : coeffs(p)[i] / i for i in 0:degree(p)+1])
 PolynomialRoots.roots(p::Poly) = PolynomialRoots.roots(coeffs(p))
@@ -247,14 +308,12 @@ _spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-
 function _spline_opt_legacy(spl::Dierckx.Spline1D)
     xopt, yopt = _spline_opt(spl)
     knots = Dierckx.get_knots(spl)
-    Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    _, i0 = find_nearest(Xs, xopt) # find nearest x in Xs to xopt
+    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    _, i0 = find_nearest(xs, xopt) # find nearest x in xs to xopt
 
     # Note that the above finds the x value nearest the true minimizer, but we need the x value corresponding to
     # the y value nearest the true minimum. Since we are near the minimum, search for a local minimum.
-    dy(i) = spl(@inbounds(Xs[clamp(i,1,length(Xs))]))
-    y, i = local_gridsearch(dy, i0)
-    x = Xs[i]
+    @unpack x, y, i = local_gridsearch(spl, xs, i0)
 
     return (; x, y)
 end
@@ -264,9 +323,9 @@ _spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, len
 # exactly what the MATLAB implementation does
 function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     knots = Dierckx.get_knots(spl)
-    Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    x, y = Xs[1], spl(Xs[1])
-    for (i,xᵢ) in enumerate(Xs)
+    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    x, y = xs[1], spl(xs[1])
+    for (i,xᵢ) in enumerate(xs)
         (i == 1) && continue
         yᵢ = spl(xᵢ)
         (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
@@ -283,7 +342,7 @@ function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
     @inbounds for (i,p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
         # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
-        for rᵢ in PolynomialRoots.roots(shift!(p, value))
+        for rᵢ in PolynomialRoots.roots(sub!(p, value))
             if imag(rᵢ) ≈ 0 # real roots only
                 xᵢ = x₀ + real(rᵢ)
                 if x₀ <= xᵢ <= x₁ # filter roots within range
@@ -292,7 +351,6 @@ function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
             end
         end
     end
-
     return x
 end
 _spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X)-1)) = _spline_root(_make_spline(X, Y; deg_spline), value)
@@ -305,15 +363,14 @@ _spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline
 function _spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
     # Find x value nearest to the root
     knots = Dierckx.get_knots(spl)
-    Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
     xroot = _spline_root(spl, value)
-    _, i0 = find_nearest(Xs, xroot) # find nearest x in Xs to xroot
+    _, i0 = find_nearest(xs, xroot) # find nearest x in xs to xroot
 
     # Note that the above finds the x value nearest the true root, but we need the x value corresponding to the
     # y value nearest to `value`. Since we are near the root, search for a local minimum in abs(spl(x)-value).
-    dy(i) = abs(spl(@inbounds(Xs[clamp(i,1,length(Xs))])) - value)
-    y, i = local_gridsearch(dy, i0)
-    x = Xs[i]
+    dy(x) = abs(spl(x) - value)
+    @unpack x, y, i = local_gridsearch(dy, xs, i0)
 
     return x
 end
@@ -323,9 +380,9 @@ _spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline 
 # exactly what the MATLAB implementation does
 function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     knots = Dierckx.get_knots(spl)
-    Xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    x, y = Xs[1], abs(spl(Xs[1]) - value)
-    for (i,xᵢ) in enumerate(Xs)
+    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    x, y = xs[1], abs(spl(xs[1]) - value)
+    for (i,xᵢ) in enumerate(xs)
         (i == 1) && continue
         yᵢ = abs(spl(xᵢ) - value)
         (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
