@@ -56,10 +56,6 @@ See also:
     Threshold::T = !legacy ? 0.0 : 200.0
     @assert Threshold >= 0.0
 
-    "Refocusing pulse control angle for stimulated echo correction (Units: degrees)."
-    RefConAngle::T = 180.0 # degrees
-    @assert 0.0 <= RefConAngle <= 180.0
-
     "Minimum refocusing angle for flip angle optimization (Units: degrees)."
     MinRefAngle::T = 50.0 # degrees
     @assert 0.0 <= MinRefAngle <= 180.0
@@ -79,6 +75,10 @@ See also:
     "Constraint on ``\\chi^2`` used for regularization when `Reg == \"chi2\"`."
     Chi2Factor::Union{T,Nothing} = nothing
     @assert (Reg == "chi2" && Chi2Factor !== nothing && Chi2Factor > 1.0) || Reg != "chi2"
+
+    "Refocusing pulse control angle for stimulated echo correction (Units: degrees)."
+    SetRefConAngle::Union{T,Nothing} = 180.0 # degrees
+    @assert 0.0 <= SetRefConAngle <= 180.0
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
     SetFlipAngle::Union{T,Nothing} = nothing

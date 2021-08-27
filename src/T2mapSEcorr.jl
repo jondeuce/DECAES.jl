@@ -125,7 +125,7 @@ function init_output_t2distributions(image::Array{T,4}, opts::T2mapOptions{T}) w
 end
 
 function init_output_t2maps(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
-    maps = Dict{String, Any}()
+    maps = Dict{String,Any}()
     init_output_t2maps!(thread_buffer_maker(image, opts), maps, opts)
     return maps
 end
@@ -288,8 +288,8 @@ function epg_decay_basis!(decay_curve_work, decay_basis::AbstractMatrix{T}, flip
         @inbounds for j in 1:o.nT2
             # decay_curve = @views decay_basis[:,j] # @views no longer allocates since v1.5
             decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is still a bit faster than `Base.view`
-            EPGdecaycurve!(decay_curve, decay_curve_work, flip_angle, o.TE, T2_times[j], o.T1, o.RefConAngle)
-            # EPGdecaycurve_vTE!(decay_curve_work, o.nTE, flip_angle, o.vTEparam..., T2_times[j], o.T1, o.RefConAngle) #TODO update if vTEparam is implemented
+            EPGdecaycurve!(decay_curve, decay_curve_work, flip_angle, o.TE, T2_times[j], o.T1, o.SetRefConAngle)
+            # EPGdecaycurve_vTE!(decay_curve_work, o.nTE, flip_angle, o.vTEparam..., T2_times[j], o.T1, o.SetRefConAngle) #TODO update if vTEparam is implemented
         end
     end
 

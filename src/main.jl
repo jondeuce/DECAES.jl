@@ -124,9 +124,13 @@ add_arg_group!(CLI_SETTINGS,
         arg_type = Float64
         help = "to skip B1 inhomogeneity correction, use --SetFlipAngle to assume a fixed refocusing flip angle for all voxels (Units: degrees)."
         group = :B1_SE_corr
+    "--SetRefConAngle"
+        arg_type = Float64
+        help = "refocusing pulse control angle for stimulated echo correction. Unlike B1 inhomogeneity correction, stimulated echo correction must be performed manually. By default, --SetRefConAngle is set to 180 degrees, equivalent to no stimulated echo correction (Units: degrees)."
+        group = :B1_SE_corr
     "--RefConAngle"
         arg_type = Float64
-        help = "refocusing pulse control angle for stimulated echo correction. Unlike B1 inhomogeneity correction, stimulated echo correction must be performed manually. By default, --RefConAngle is set to 180 degrees, equivalent to no stimulated echo correction (Units: degrees)."
+        help = "Deprecated flag; see --SetRefConAngle."
         group = :B1_SE_corr
 end
 
@@ -190,10 +194,8 @@ function main(command_line_args::Vector{String} = ARGS)
 
     # Parse command line arguments
     opts = parse_args(command_line_args, CLI_SETTINGS; as_symbols = true)
-    if opts === nothing
-        # Help message was triggered. Return nothing instead of exit(0)
-        return nothing
-    end
+    opts === nothing && return # Help message was triggered. Return nothing instead of exit(0)
+    opts = handle_cli_deprecations!(opts)
 
     # Get input file list and output folder list
     for file_info in get_file_infos(opts)
@@ -229,7 +231,7 @@ function main(command_line_args::Vector{String} = ARGS)
     return nothing
 end
 
-function main_(io::IO, file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
+function main_(io::IO, file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
 
     # Starting message/starting time
     t_start = tic()
@@ -266,7 +268,7 @@ function main_(io::IO, file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
         if !opts[:dry]
             @showtime(io,
                 "Saving T2 distribution to file: $savefile",
-                MAT.matwrite(savefile, Dict{String, Any}("dist" => dist)),
+                MAT.matwrite(savefile, Dict{String,Any}("dist" => dist)),
             )
         end
 
@@ -323,9 +325,27 @@ end
 #### Helper functions
 ####
 
-function t2map_options(image::Array, opts::Dict{Symbol, Any})
+function handle_cli_deprecations!(opts)
+    handle_renamed_cli_flag!(opts, :RefConAngle => :SetRefConAngle)
+end
+
+function handle_renamed_cli_flag!(opts, oldnew::Pair{Symbol, Symbol})
+    oldflag, newflag = oldnew
+    if opts[oldflag] !== nothing
+        if opts[newflag] !== nothing
+            error("The flag --$newflag and the deprecated flag --$oldflag were both passed; use --$newflag only.")
+        else
+            @warn "The flag --$oldflag is deprecated and will be removed in future releases; use --$newflag instead."
+        end
+        opts[newflag] = opts[oldflag]
+        delete!(opts, oldflag)
+    end
+    return opts
+end
+
+function t2map_options(image::Array, opts::Dict{Symbol,Any})
     fields = fieldnames(T2mapOptions)
-    kwargs = Dict{Symbol, Any}()
+    kwargs = Dict{Symbol,Any}()
     for (k,v) in opts
         (v === nothing) && continue # filter unset cli args
         (v isa AbstractVector && isempty(v)) && continue # filter unset cli args (empty vectors are unset cli varargs)
@@ -335,9 +355,9 @@ function t2map_options(image::Array, opts::Dict{Symbol, Any})
     T2mapOptions(image; kwargs...)
 end
 
-function t2part_options(dist::Array, opts::Dict{Symbol, Any})
+function t2part_options(dist::Array, opts::Dict{Symbol,Any})
     fields = fieldnames(T2partOptions)
-    kwargs = Dict{Symbol, Any}()
+    kwargs = Dict{Symbol,Any}()
     for (k,v) in opts
         (v === nothing) && continue # filter unset cli args
         (v isa AbstractVector && isempty(v)) && continue # filter unset cli args (empty vectors are unset cli varargs)
@@ -348,7 +368,7 @@ function t2part_options(dist::Array, opts::Dict{Symbol, Any})
     T2partOptions(dist; kwargs...)
 end
 
-function get_file_infos(opts::Dict{Symbol, Any})
+function get_file_infos(opts::Dict{Symbol,Any})
     @unpack input, output, mask = opts
 
     # Read in input files
@@ -382,7 +402,7 @@ function get_file_infos(opts::Dict{Symbol, Any})
     end
 
     # Create file_info dictionaries
-    file_info = Dict{Symbol, Any}[]
+    file_info = Dict{Symbol,Any}[]
     for (inputfile, outputfolder, maskfile) in zip(inputfiles, outputfolders, maskfiles)
         d = eltype(file_info)(
             :inputfile => inputfile,

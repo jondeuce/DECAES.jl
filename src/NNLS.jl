@@ -2,28 +2,38 @@
 #### NNLS submodule
 ####
 
-# This NNLS submodule has been copied in directly from the forked NonNegLeastSquares.jl repository:
+# This NNLS submodule is modified version of the corresponding NNLS module from
+# the forked NonNegLeastSquares.jl repository:
 # 
-#   https://github.com/jondeuce/NonNegLeastSquares.jl/blob/master/src/NonNegLeastSquares.jl
+#   https://github.com/jondeuce/NonNegLeastSquares.jl/blob/a122bf7acb498efcaf140b719133691e7c4cd03d/src/nnls.jl#L1
 # 
-# This is a temporary measure to get DECAES up and running.
-# Depending on the unregistered package at the above link repeatedly leads to the following error:
+# The original MIT licence from NonNegLeastSquares.jl is included below:
 # 
-#   ERROR: Unsatisfiable requirements detected for package NonNegLeastSquares [e5310699]:
-#    NonNegLeastSquares [e5310699] log:
-#    ├─NonNegLeastSquares [e5310699] has no known versions!
-#    └─restricted to versions * by DECAES [4d91e7b4] — no versions left
-#      └─DECAES [4d91e7b4] log:
-#        ├─possible versions are: 0.1.0 or uninstalled
-#        └─DECAES [4d91e7b4] is fixed to version 0.1.0
+# -----------------------------------------------------------------------------
 # 
-# Due to the fact that this error is possibly related to a know LibGit2 issue:
+# The MIT License (MIT)
 # 
-#   https://github.com/JuliaLang/julia/issues/33111
+# Copyright (c) 2015 Alex Williams
 # 
-# I have resorted to simply copying the required module into this package.
-# Fortunately, it is completely self contained in a single file, and therefore
-# is easily included in this project.
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# 
+# -----------------------------------------------------------------------------
 
 module NNLS
 
@@ -248,13 +258,13 @@ function NNLSWorkspace(
         eltype::Type{T} = Float64,
         indextype::Type{I} = Int
     ) where {T,I}
-    NNLSWorkspace{T, I}(m, n)
+    NNLSWorkspace{T,I}(m, n)
 end
 
 function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}, indextype::Type{I} = Int) where {T,I}
     m, n = size(A)
     @assert size(b) == (m,)
-    work = NNLSWorkspace{T, I}(m, n)
+    work = NNLSWorkspace{T,I}(m, n)
     load!(work, A, b)
     work
 end
@@ -283,7 +293,7 @@ end
         w::AbstractVector{T},
         idx::AbstractVector{TI},
         range
-    ) where {T, TI}
+    ) where {T,TI}
     wmax = zero(T)
     izmax = 0
     @inbounds for i in range
@@ -310,9 +320,9 @@ N-VECTOR, X, THAT SOLVES THE LEAST SQUARES PROBLEM
                  A * X = B  SUBJECT TO X .GE. 0
 """
 function nnls!(
-        work::NNLSWorkspace{T, TI},
+        work::NNLSWorkspace{T,TI},
         max_iter::Integer = 3*size(work.QA, 2)
-    ) where {T, TI}
+    ) where {T,TI}
 
     checkargs(work)
 

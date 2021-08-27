@@ -61,7 +61,7 @@ function T2partSEcorr_(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{
 end
 
 function init_output_t2parts(T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
-    maps = Dict{String, Any}()
+    maps = Dict{String,Any}()
     maps["sfr"] = fill(T(NaN), opts.MatrixSize...)
     maps["sgm"] = fill(T(NaN), opts.MatrixSize...)
     maps["mfr"] = fill(T(NaN), opts.MatrixSize...)

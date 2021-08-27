@@ -118,7 +118,7 @@ function construct_args(paramdict;
         t2part_args = T2part ? Dict{Symbol,Any}() : nothing
 
         # Only these params are used within MATLAB (possibly spelled differently)
-        mat_t2map_params  = [:Chi2Factor, :MinRefAngle, :nRefAngles, :nT2, :RefConAngle, :Reg, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
+        mat_t2map_params  = [:Chi2Factor, :MinRefAngle, :nRefAngles, :nT2, :SetRefConAngle, :Reg, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
         mat_t2part_params = [:T2Range, :SPWin, :MPWin, :Sigmoid]
 
         for (param, paramval) in paramdict
@@ -157,7 +157,7 @@ function jl_to_mat_param!(opts, param, paramval)
         opts[:Save_regparam] = ifelse(paramval, "yes", "no")
     elseif param == :nRefAngles # renamed parameter
         opts[:nAngles] = paramval
-    elseif param == :RefConAngle # renamed parameter
+    elseif param == :SetRefConAngle # renamed parameter
         opts[:RefCon] = paramval
     elseif param == :Reg # renamed value: "no" => "none", "lcurve" => "gcv"
         opts[:Reg] = paramval == "none" ? "no" : paramval == "gcv" ? "lcurve" : paramval
@@ -207,7 +207,7 @@ end
 const cli_params_perms = Any[
     (:MPWin            .=> [(38e-3, 180e-3)],),
     (:MinRefAngle      .=> [55.0],),
-    (:RefConAngle      .=> [172.0],),
+    (:SetRefConAngle   .=> [172.0],),
     (
         :Reg           .=> ["none", "chi2", "gcv", "lcurve"],
         :Chi2Factor    .=> [nothing, 1.025, nothing, nothing],
@@ -242,8 +242,8 @@ const cli_params_perms = Any[
         end
 
         image = DECAES.mock_image(nTE = rand([4,5,20,37]))
-        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
-        settings_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol,Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
+        settings_kwargs_cli = Dict{Symbol,Any}(:argstype => :cli, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
         jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
 
         # Run T2map and T2part through Julia API for comparison
@@ -331,7 +331,7 @@ const mat_t2map_params_perms = Any[
     (:Threshold        .=> [250.0],),
     (:nT2              .=> [10, 59],), # Include odd number
     (:T2Range          .=> [(8e-3, 1.0)],),
-    (:RefConAngle      .=> [175.0],),
+    (:SetRefConAngle   .=> [175.0],),
     (:MinRefAngle      .=> [60.0],),
     (:nRefAngles       .=> [7, 12],),
     (
@@ -358,8 +358,8 @@ function matlab_tests()
     default_rtol = 1e-10
 
     @testset "T2mapSEcorr" begin
-        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
-        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol,Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
+        settings_kwargs_mat = Dict{Symbol,Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
 
         for param_val_lists in mat_t2map_params_perms, param_val_pairs in zip(param_val_lists...)
             rtol = default_rtol
@@ -416,8 +416,8 @@ function matlab_tests()
     end
 
     @testset "T2partSEcorr" begin
-        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
-        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol,Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
+        settings_kwargs_mat = Dict{Symbol,Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
 
         for param_val_lists in mat_t2part_params_perms, param_val_pairs in zip(param_val_lists...)
             paramdict = deepcopy(legacy_default_paramdict)
