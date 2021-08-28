@@ -167,11 +167,15 @@ _spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_sp
 #### Global optimization using surrogate splines
 ####
 
-# Perform global optimization over a function `f` which may be evaluated only
-# on elements of a discrete vector `X` using surrogate spline functions.
-#   `f` is a function taking two inputs `X` and `i` where `i` is an index into `X`
-#   `X` discrete vector in which to evaluate `f`
-#   `min_n_eval` minimum number of elements of `X` which are evaluated
+"""
+    $(TYPEDSIGNATURES)
+
+Perform global optimization over a function `f` which may be evaluated only
+on elements of a discrete vector `X` using surrogate spline functions.
+  `f` is a function taking two inputs `X` and `i` where `i` is an index into `X`
+  `X` discrete vector in which to evaluate `f`
+  `min_n_eval` minimum number of elements of `X` which are evaluated
+"""
 function surrogate_spline_opt(f, X, min_n_eval::Int = length(X))
     # @assert length(X) >= 2
 
@@ -218,3 +222,50 @@ function surrogate_spline_opt(f, X, min_n_eval::Int = length(X))
         end
     end
 end
+
+struct NNLSDiscreteSurrogateSearch{T, N, TA <: AbstractArray{T}, Tα <: NTuple{N, <:AbstractRange{T}}, W}
+    As::TA
+    αs::Tα
+    b::Vector{T}
+    ∂αAx::Vector{T}
+    Axb::Vector{T}
+    nnls_work::W
+end
+
+function NNLSDiscreteSurrogateSearch(
+        As::AbstractArray{T},
+        αs::NTuple{N, <:AbstractRange{T}},
+        b = zeros(T, size(As, 1))
+    ) where {T, N}
+    @assert ndims(As) == N + 2
+    @assert all(size(As)[3:N+2] .== length.(αs))
+    m, n = size(As, 1), size(As, 2)
+    b = convert(Vector{T}, b)
+    ∂αAx = zeros(T, m)
+    Axb = zeros(T, m)
+    nnls_work = lsqnonneg_work(zeros(T, m, n), zeros(T, m))
+    NNLSDiscreteSurrogateSearch(As, αs, b, ∂αAx, Axb, nnls_work)
+end
+
+load!(p::NNLSDiscreteSurrogateSearch{T}, b::AbstractVector{T}) where {T} = copyto!(p.b, b)
+
+function loss!(p::NNLSDiscreteSurrogateSearch{T,N}, I::CartesianIndex{N}) where {T,N}
+    A = uview(p.As, :, :, I)
+    b = p.b
+    x = solve!(p.nnls_work, A, b)
+    l = chi2(p.nnls_work)
+end
+
+function ∇loss!(p::NNLSDiscreteSurrogateSearch{T,N}, I::CartesianIndex{N}, ∇dir::Int) where {T,N}
+    α  = p.αs[∇dir]
+    iα = I[∇dir]
+    dα = α[min(iα + 1, end)] - α[max(iα - 1, begin)]
+    e  = CartesianIndex(ntuple(i -> ifelse(i == ∇dir, 1, 0), N))
+    I⁺ = min(I + e, CartesianIndex(ntuple(i -> lastindex(p.As, 2+i), N)))
+    I⁻ = max(I - e, CartesianIndex(ntuple(i -> firstindex(p.As, 2+i), N)))
+    dA = (p.As[:, :, I⁺] .- p.As[:, :, I⁻]) ./ dα
+    x  = solution(p.nnls_work)
+    ix = x .> 0
+    2 * dot(dA[:,ix] * x[ix], p.As[:, ix, I] * x[ix] - p.b)
+end
+

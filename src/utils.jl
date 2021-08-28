@@ -233,15 +233,32 @@ end
 ####
 
 # Mock CPMG image
-function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40, Reg = "lcurve"); kwargs...) where {T}
+function mock_t2map_opts(::Type{T} = Float64; kwargs...) where {T}
+    T2mapOptions{T}(;
+        MatrixSize = (2,2,2),
+        TE = 10e-3,
+        nTE = 32,
+        T2Range = (10e-3, 2.0),
+        nT2 = 40,
+        Reg = "lcurve",
+        SetFlipAngle = 165.0,
+        SetRefConAngle = 150.0,
+        kwargs...
+    )
+end
+
+# Mock CPMG image
+function mock_image(o::T2mapOptions{T} = mock_t2map_opts(Float64); kwargs...) where {T}
     oldseed = Random.seed!(0)
 
     @unpack MatrixSize, TE, nTE = T2mapOptions(o; kwargs...)
     SNR = T(50)
     eps = T(10^(-SNR/20))
 
-    mag() = T(0.85) .* EPGdecaycurve(nTE, T(165), TE, T(65e-3), T(1), T(180)) .+
-            T(0.15) .* EPGdecaycurve(nTE, T(165), TE, T(15e-3), T(1), T(180)) # bi-exponential signal with EPG correction
+    flipangle = o.SetFlipAngle === nothing ? T(165.0) : o.SetFlipAngle
+    refcon = o.SetRefConAngle === nothing ? T(150.0) : o.SetRefConAngle
+    mag() = T(0.85) .* EPGdecaycurve(nTE, flipangle, TE, T(65e-3), T(1), refcon) .+
+            T(0.15) .* EPGdecaycurve(nTE, flipangle, TE, T(15e-3), T(1), refcon) # bi-exponential signal with EPG correction
     noise(m) = abs(m[1]) .* eps .* randn(T, size(m)) # gaussian noise of size SNR relative to signal amplitude
     noiseysignal() = (m = mag(); sqrt.((m .+ noise(m)).^2 .+ noise(m).^2)) # bi-exponential signal with rician noise
 
@@ -255,6 +272,6 @@ function mock_image(o::T2mapOptions{T} = T2mapOptions{Float64}(MatrixSize = (2,2
 end
 
 # Mock T2 distribution, computed with default parameters
-function mock_T2_dist(o::T2mapOptions = T2mapOptions{Float64}(MatrixSize = (2,2,2), TE = 10e-3, nTE = 32, T2Range = (10e-3, 2.0), nT2 = 40, Reg = "lcurve"); kwargs...)
+function mock_T2_dist(o::T2mapOptions = mock_t2map_opts(Float64); kwargs...)
     T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]
 end
