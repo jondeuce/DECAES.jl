@@ -114,7 +114,6 @@ function _show_string(o::T2mapOptions)
     end
     return String(take!(io))
 end
-# Base.show(io::IO, o::T2mapOptions) = print(io, _show_string(o))
 Base.show(io::IO, ::MIME"text/plain", o::T2mapOptions) = print(io, _show_string(o))
 
 """
@@ -176,5 +175,4 @@ function _show_string(o::T2partOptions)
     end
     return String(take!(io))
 end
-# Base.show(io::IO, o::T2partOptions) = print(io, _show_string(o))
 Base.show(io::IO, ::MIME"text/plain", o::T2partOptions) = print(io, _show_string(o))

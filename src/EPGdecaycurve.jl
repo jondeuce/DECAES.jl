@@ -14,6 +14,9 @@
 
 abstract type AbstractEPGWorkspace{T,ETL} end
 
+@inline Base.eltype(::AbstractEPGWorkspace{T}) where {T} = T
+@inline echotrainlength(::AbstractEPGWorkspace{T,ETL}) where {T,ETL} = ETL
+
 struct EPGOptions{T,ETL}
     flip_angle::T
     TE::T
@@ -21,14 +24,68 @@ struct EPGOptions{T,ETL}
     T1::T
     refcon::T
 end
+
 @inline function EPGOptions(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)
     T = float(promote_type(typeof(flip_angle), typeof(TE), typeof(T2), typeof(T1), typeof(refcon)))
     EPGOptions{T,ETL}(flip_angle, TE, T2, T1, refcon)
 end
+@inline EPGOptions(::EPGOptions{T,ETL}, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real) where {T,ETL} = EPGOptions{T,ETL}(flip_angle, TE, T2, T1, refcon)
+@inline EPGOptions(::AbstractEPGWorkspace{T,ETL}, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real) where {T,ETL} = EPGOptions{T,ETL}(flip_angle, TE, T2, T1, refcon)
 
 @inline EPGdecaycurve_work(::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve_work(T, ETL)
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
+
+####
+#### Jacobian utilities (currently hardcoded for `EPGWork_ReIm_DualMVector_Split`)
+####
+
+struct EPGWorkCacheDict{ETL} <: AbstractDict{DataType, Any}
+    dict::Dict{DataType, Any}
+    EPGWorkCacheDict{ETL}() where {ETL} = new{ETL}(Dict{DataType, Any}())
+end
+@inline Base.keys(caches::EPGWorkCacheDict) = Base.keys(caches.dict)
+@inline Base.values(caches::EPGWorkCacheDict) = Base.values(caches.dict)
+
+@inline function Base.getindex(caches::EPGWorkCacheDict{ETL}, ::Type{T}) where {T,ETL}
+    R = cachetype(caches, T)
+    get!(caches.dict, T) do
+        EPGWork_ReIm_DualMVector_Split(T, ETL)::R
+    end::R
+end
+@inline cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T,ETL} = EPGWork_ReIm_DualMVector_Split{T, ETL, MVector{ETL, SVector{3, T}}, MVector{ETL, T}}
+
+struct EPGJacobianFunctor{T, ETL, O <: EPGOptions{T,ETL}, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
+    caches::EPGWorkCacheDict{ETL}
+    epg_opts::Base.RefValue{O}
+    res::R
+    cfg::C
+end
+
+function EPGJacobianFunctor(θ::EPGOptions{T,ETL}) where {T,ETL}
+    caches = EPGWorkCacheDict{ETL}()
+    res = DiffResults.JacobianResult(zeros(T, ETL), zeros(T, 2))
+    cfg = ForwardDiff.JacobianConfig(nothing, zeros(T, ETL), zeros(T, 2))
+    return EPGJacobianFunctor{T, ETL, typeof(θ), typeof(res), typeof(cfg)}(caches, Ref(θ), res, cfg)
+end
+
+function (jfunc::EPGJacobianFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D}
+    epg_work = jfunc.caches[D]
+    θ = jfunc.epg_opts[]
+    θ = EPGOptions(epg_work, x[1], θ.TE, θ.T2, θ.T1, x[2])
+    DECAES.EPGdecaycurve!(y, epg_work, θ)
+end
+
+function ForwardDiff.jacobian!(J::Union{AbstractMatrix, DiffResults.DiffResult}, jfunc::EPGJacobianFunctor{T,ETL}, y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
+    jfunc.epg_opts[] = θ
+    x = SA{T}[θ.flip_angle, θ.refcon]
+    ForwardDiff.jacobian!(J, jfunc, y, x, jfunc.cfg)
+    return J isa AbstractMatrix ? J : DiffResults.jacobian(J)
+end
+
+function ForwardDiff.jacobian!(jfunc::EPGJacobianFunctor{T,ETL}, y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
+    ForwardDiff.jacobian!(jfunc.res, jfunc, y, θ)
+end
 
 """
     EPGdecaycurve(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)

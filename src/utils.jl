@@ -9,6 +9,14 @@ normccdf(x::T) where {T} = erfc(x/sqrt(T(2)))/2 # Compliment of normcdf, i.e. 1 
 
 @inline mul_im(z::Complex) = Complex(-imag(z), real(z)) # optimized i*(a+b*i) = -b+a*i
 
+@inline function SplitCartesianIndices(sz::NTuple{N,Int}, ::Val{M}) where {N,M}
+    @assert 0 <= M <= N
+    sz1 = sz[1:M]
+    sz2 = sz[M+1:N]
+    return CartesianIndices(sz1), CartesianIndices(sz2)
+end
+@inline SplitCartesianIndices(x::AbstractArray{<:Any,N}, ::Val{M}) where {N,M} = SplitCartesianIndices(size(x), Val(M))
+
 function set_diag!(A::AbstractMatrix, val)
     @inbounds @simd ivdep for i in 1:min(size(A)...)
         A[i,i] = val
