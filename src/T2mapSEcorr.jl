@@ -284,7 +284,7 @@ function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::Abst
     @timeit_debug TIMER() "EPGdecaycurve!" begin
         @inbounds for j in 1:length(T2_times)
             decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is a bit faster than `Base.view`
-            epg_opts = EPGOptions(θ, θ.flip_angle, θ.TE, T2_times[j], θ.T1, θ.refcon) # remake options with T2 of basis `j`
+            epg_opts = EPGOptions(θ, θ.α, θ.TE, T2_times[j], θ.T1, θ.β) # remake options with T2 of basis `j`
             EPGdecaycurve!(decay_curve, decay_curve_work, epg_opts)
         end
     end

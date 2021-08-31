@@ -276,8 +276,8 @@ end
 
 function mock_surrogate_search_problem(
         o::T2mapOptions = mock_t2map_opts(; MatrixSize = (1,1,1));
-        alphas = range(50, 180, length = 64),
-        betas = range(50, 180, length = 64),
+        alphas = range(50, 180, length = o.nRefAngles),
+        betas = range(50, 180, length = o.nRefAngles),
     )
 
     # Mock CPMG image
@@ -287,17 +287,14 @@ function mock_surrogate_search_problem(
     ∇As = zeros(o.nTE, o.nT2, nα, nβ, 2)
     T2s = logrange(o.T2Range..., o.nT2)
     θ = EPGOptions(o.nTE, o.SetFlipAngle, o.TE, 0.0, o.T1, o.SetRefConAngle)
-    jfuncs = [EPGJacobianFunctor(θ, (:flip_angle, :refcon)) for _ in 1:Threads.nthreads()]
+    jfuncs = [EPGJacobianFunctor(θ, (:α, :β)) for _ in 1:Threads.nthreads()]
 
-    @time Threads.@threads for iβ in eachindex(betas)
-        @inbounds for iα in eachindex(alphas)
-            Aαβ = uview(As, :, :, iα, iβ)
-            ∇Aαβ = uview(∇As, :, :, iα, iβ, :)
-            α, β = alphas[iα], betas[iβ]
-            for j in 1:o.nT2
-                j! = jfuncs[Threads.threadid()]
-                j!(uview(∇Aαβ, :, j, :), uview(Aαβ, :, j), EPGOptions(θ, α, θ.TE, T2s[j], θ.T1, β))
-            end
+    _, Rαβ = SplitCartesianIndices(As, Val(2))
+    @time Threads.@threads for Iαβ in Rαβ
+        @inbounds for j in 1:o.nT2
+            α, β = alphas[Iαβ[1]], betas[Iαβ[2]]
+            j!   = jfuncs[Threads.threadid()]
+            j!(uview(∇As, :, j, Iαβ, :), uview(As, :, j, Iαβ), EPGOptions(θ, α, θ.TE, T2s[j], θ.T1, β))
         end
     end
 

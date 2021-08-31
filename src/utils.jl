@@ -263,10 +263,10 @@ function mock_image(o::T2mapOptions{T} = mock_t2map_opts(Float64); kwargs...) wh
     SNR = T(50)
     eps = T(10^(-SNR/20))
 
-    flipangle = o.SetFlipAngle === nothing ? T(165.0) : o.SetFlipAngle
-    refcon = o.SetRefConAngle === nothing ? T(150.0) : o.SetRefConAngle
-    mag() = T(0.85) .* EPGdecaycurve(nTE, flipangle, TE, T(65e-3), T(1), refcon) .+
-            T(0.15) .* EPGdecaycurve(nTE, flipangle, TE, T(15e-3), T(1), refcon) # bi-exponential signal with EPG correction
+    α = o.SetFlipAngle === nothing ? T(165.0) : o.SetFlipAngle
+    β = o.SetRefConAngle === nothing ? T(150.0) : o.SetRefConAngle
+    mag() = T(0.85) .* EPGdecaycurve(nTE, α, TE, T(65e-3), T(1), β) .+
+            T(0.15) .* EPGdecaycurve(nTE, α, TE, T(15e-3), T(1), β) # bi-exponential signal with EPG correction
     noise(m) = abs(m[1]) .* eps .* randn(T, size(m)) # gaussian noise of size SNR relative to signal amplitude
     noiseysignal() = (m = mag(); sqrt.((m .+ noise(m)).^2 .+ noise(m).^2)) # bi-exponential signal with rician noise
 
