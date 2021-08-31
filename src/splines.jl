@@ -287,7 +287,7 @@ function mock_surrogate_search_problem(
     ∇As = zeros(o.nTE, o.nT2, nα, nβ, 2)
     T2s = logrange(o.T2Range..., o.nT2)
     θ = EPGOptions(o.nTE, o.SetFlipAngle, o.TE, 0.0, o.T1, o.SetRefConAngle)
-    jfuncs = [EPGJacobianFunctor(θ) for _ in 1:Threads.nthreads()]
+    jfuncs = [EPGJacobianFunctor(θ, (:flip_angle, :refcon)) for _ in 1:Threads.nthreads()]
 
     @time Threads.@threads for iβ in eachindex(betas)
         @inbounds for iα in eachindex(alphas)
@@ -295,12 +295,8 @@ function mock_surrogate_search_problem(
             ∇Aαβ = uview(∇As, :, :, iα, iβ, :)
             α, β = alphas[iα], betas[iβ]
             for j in 1:o.nT2
-                ForwardDiff.jacobian!(
-                    uview(∇Aαβ, :, j, :),
-                    jfuncs[Threads.threadid()],
-                    uview(Aαβ, :, j),
-                    EPGOptions(θ, α, θ.TE, T2s[j], θ.T1, β),
-                )
+                j! = jfuncs[Threads.threadid()]
+                j!(uview(∇Aαβ, :, j, :), uview(Aαβ, :, j), EPGOptions(θ, α, θ.TE, T2s[j], θ.T1, β))
             end
         end
     end

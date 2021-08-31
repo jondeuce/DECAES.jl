@@ -17,7 +17,7 @@ abstract type AbstractEPGWorkspace{T,ETL} end
 @inline Base.eltype(::AbstractEPGWorkspace{T}) where {T} = T
 @inline echotrainlength(::AbstractEPGWorkspace{T,ETL}) where {T,ETL} = ETL
 
-struct EPGOptions{T,ETL}
+struct EPGOptions{T,ETL} <: FieldVector{5,T}
     flip_angle::T
     TE::T
     T2::T
@@ -46,6 +46,8 @@ struct EPGWorkCacheDict{ETL} <: AbstractDict{DataType, Any}
 end
 @inline Base.keys(caches::EPGWorkCacheDict) = Base.keys(caches.dict)
 @inline Base.values(caches::EPGWorkCacheDict) = Base.values(caches.dict)
+@inline Base.length(caches::EPGWorkCacheDict) = Base.length(caches.dict)
+@inline Base.iterate(caches::EPGWorkCacheDict, state...) = Base.iterate(caches.dict, state...)
 
 @inline function Base.getindex(caches::EPGWorkCacheDict{ETL}, ::Type{T}) where {T,ETL}
     R = cachetype(caches, T)
@@ -55,37 +57,51 @@ end
 end
 @inline cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T,ETL} = EPGWork_ReIm_DualMVector_Split{T, ETL, MVector{ETL, SVector{3, T}}, MVector{ETL, T}}
 
-struct EPGJacobianFunctor{T, ETL, O <: EPGOptions{T,ETL}, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
+struct EPGFunctor{T,ETL,Fs}
     caches::EPGWorkCacheDict{ETL}
-    epg_opts::Base.RefValue{O}
+    θ::EPGOptions{T,ETL}
+end
+EPGFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = EPGFunctor{T,ETL,Fs}(EPGWorkCacheDict{ETL}(), θ)
+EPGFunctor(f!::EPGFunctor{T,ETL,Fs}, θ::EPGOptions{T,ETL}) where {T,ETL,Fs} = EPGFunctor{T,ETL,Fs}(f!.caches, θ)
+
+@generated function destructure(::EPGFunctor{<:Any,ETL,Fs}, θ::EPGOptions{D,ETL}) where {D,ETL,Fs}
+    vals = [:(getproperty(θ, $(QuoteNode(F)))) for F in Fs]
+    :(Base.@_inline_meta; SVector{$(length(Fs)), $D}(tuple($(vals...))))
+end
+
+@generated function restructure(f!::EPGFunctor{<:Any,ETL,Fs}, x::AbstractVector{D}) where {D,ETL,Fs}
+    keymap = NamedTuple{Fs}(1:length(Fs))
+    vals = [F ∈ Fs ? :(x[$(getproperty(keymap, F))]) : :(getproperty(f!.θ, $(QuoteNode(F)))) for F in fieldnames(EPGOptions)]
+    :(Base.@_inline_meta; EPGOptions{D,ETL}(tuple($(vals...))))
+end
+
+function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D,ETL}, x::AbstractVector{D}) where {D,ETL}
+    θ = restructure(f!, x)
+    DECAES.EPGdecaycurve!(y, epg_work, θ)
+end
+(f!::EPGFunctor)(x::AbstractVector{D}) where {D} = f!(f!.caches[D].decay_curve, f!.caches[D], x)
+(f!::EPGFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D} = f!(y, f!.caches[D], x)
+
+struct EPGJacobianFunctor{T, ETL, N, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
+    f!::EPGFunctor{T,ETL,N}
     res::R
     cfg::C
 end
-
-function EPGJacobianFunctor(θ::EPGOptions{T,ETL}) where {T,ETL}
-    caches = EPGWorkCacheDict{ETL}()
-    res = DiffResults.JacobianResult(zeros(T, ETL), zeros(T, 2))
-    cfg = ForwardDiff.JacobianConfig(nothing, zeros(T, ETL), zeros(T, 2))
-    return EPGJacobianFunctor{T, ETL, typeof(θ), typeof(res), typeof(cfg)}(caches, Ref(θ), res, cfg)
+function EPGJacobianFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N}
+    f! = EPGFunctor(θ, Fs)
+    res = DiffResults.JacobianResult(zeros(T, ETL), zeros(T, N))
+    cfg = ForwardDiff.JacobianConfig(f!, zeros(T, ETL), zeros(T, N), ForwardDiff.Chunk(N))
+    return EPGJacobianFunctor(f!, res, cfg)
 end
 
-function (jfunc::EPGJacobianFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D}
-    epg_work = jfunc.caches[D]
-    θ = jfunc.epg_opts[]
-    θ = EPGOptions(epg_work, x[1], θ.TE, θ.T2, θ.T1, x[2])
-    DECAES.EPGdecaycurve!(y, epg_work, θ)
-end
-
-function ForwardDiff.jacobian!(J::Union{AbstractMatrix, DiffResults.DiffResult}, jfunc::EPGJacobianFunctor{T,ETL}, y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
-    jfunc.epg_opts[] = θ
-    x = SA{T}[θ.flip_angle, θ.refcon]
-    ForwardDiff.jacobian!(J, jfunc, y, x, jfunc.cfg)
+function (j!::EPGJacobianFunctor{T,ETL})(J::Union{AbstractMatrix, DiffResults.DiffResult}, y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
+    @unpack f!, cfg = j!
+    f! = EPGFunctor(f!, θ)
+    x = destructure(f!, θ)
+    ForwardDiff.jacobian!(J, f!, y, x, cfg)
     return J isa AbstractMatrix ? J : DiffResults.jacobian(J)
 end
-
-function ForwardDiff.jacobian!(jfunc::EPGJacobianFunctor{T,ETL}, y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
-    ForwardDiff.jacobian!(jfunc.res, jfunc, y, θ)
-end
+(j!::EPGJacobianFunctor{T,ETL})(y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL} = j!(j!.res, y, θ)
 
 """
     EPGdecaycurve(ETL::Int, flip_angle::Real, TE::Real, T2::Real, T1::Real, refcon::Real)
