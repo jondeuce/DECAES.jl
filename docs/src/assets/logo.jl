@@ -32,7 +32,7 @@ ETL = $(@bind ETL_slider PlutoUI.Slider(4:32, default=32, show_value=true))
 
 FA = $(@bind flip_angle_slider PlutoUI.Slider(range(50,180,length=100), default=150, show_value=true))
 
-refcon = $(@bind refcon_slider PlutoUI.Slider(range(50,180,length=100), default=180, show_value=true))
+β = $(@bind refcon_slider PlutoUI.Slider(range(50,180,length=100), default=180, show_value=true))
 
 T21 = $(@bind T21_slider PlutoUI.Slider(range(10e-3, 100e-3, length=100), default=30e-3, show_value=true))
 
@@ -186,10 +186,10 @@ Compute EPG decay curve + corresponding T2 distribution:
 """
 
 # ╔═╡ 02d229c2-e2c0-4a36-bc6a-163778be85b9
-function epg_decay_curve(ETL, flip_angle, TE, T21, T22, T1, refcon, MWF, SNR)
+function epg_decay_curve(ETL, α, TE, T21, T22, T1, β, MWF, SNR)
 	x = (0:ETL-1)./(ETL-1)
-	y =    MWF  .* DECAES.EPGdecaycurve(ETL, flip_angle, TE, T21, T1, refcon) .+
-		(1-MWF) .* DECAES.EPGdecaycurve(ETL, flip_angle, TE, T22, T1, refcon)
+	y =    MWF  .* DECAES.EPGdecaycurve(ETL, α, TE, T21, T1, β) .+
+		(1-MWF) .* DECAES.EPGdecaycurve(ETL, α, TE, T22, T1, β)
 	y .*= 0.995 / maximum(y)
 	y = Vector{Float64}(y)
 
@@ -211,7 +211,7 @@ end;
 
 # ╔═╡ 7cd9afdf-6675-4416-aec7-9eba65eafbe2
 function decaes_logo(;
-		T1, TE, SNR, nT2, T2Range, Reg, ETL, flip_angle, refcon, T21, T22, MWF,
+		T1, TE, SNR, nT2, T2Range, Reg, ETL, α, β, T21, T22, MWF,
 		save_figs = false,
 	)
 	fig = Figure(
@@ -236,7 +236,7 @@ function decaes_logo(;
 
 	# Plot EPG decay curve
 	echo_times, epg_curve = epg_decay_curve(
-		ETL, flip_angle, TE, T21, T22, T1, refcon, MWF, SNR
+		ETL, α, TE, T21, T22, T1, β, MWF, SNR
 	)
 	epg_line, epg_band = plot_epg_curve!(ax, echo_times, epg_curve)
 
@@ -267,8 +267,8 @@ let
 
 		# Global variables from sliders
 		ETL = ETL_slider,
-		flip_angle = flip_angle_slider,
-		refcon = refcon_slider,
+		α = flip_angle_slider,
+		β = refcon_slider,
 		T21 = T21_slider,
 		T22 = T22_slider,
 		MWF = MWF_slider,
@@ -309,7 +309,7 @@ let
 	anim_iterator = Iterators.zip(T22_iterator, FA_iterator, tsize_iterator)
 
     ETL = ETL_slider
-    refcon = refcon_slider
+    β = refcon_slider
     T21 = T21_slider
     MWF = MWF_slider
 
@@ -318,14 +318,14 @@ let
         T1, TE, SNR, nT2, T2Range, Reg,
 
         # Local variables
-        ETL, refcon, T21, MWF,
+        ETL, β, T21, MWF,
 
         # Variables for gif
         T22 = T22_iterator[1],
-		flip_angle = FA_iterator[1],
+		α = FA_iterator[1],
     )
 
-    record(fig, "logo.gif", anim_iterator; framerate = framerate) do (T22, flip_angle, tsize)
+    record(fig, "logo.gif", anim_iterator; framerate = framerate) do (T22, α, tsize)
 		# Delete current subplots
 		delete!(ax, txt)
         delete!(ax, epg_line)
@@ -337,7 +337,7 @@ let
 		txt = plot_decaes_text!(
 			ax; textsize = tsize .* textsize, xposition, yposition)
         echo_times, epg_curve = epg_decay_curve(
-			ETL, flip_angle, TE, T21, T22, T1, refcon, MWF, SNR)
+			ETL, α, TE, T21, T22, T1, β, MWF, SNR)
         epg_line, epg_band = plot_epg_curve!(ax, echo_times, epg_curve)
 
         t2maps, t2dist = t2_distribution(epg_curve, nT2, TE, T2Range, Reg)

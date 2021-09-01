@@ -191,9 +191,10 @@ struct Tee{T <: Tuple} <: IO
 end
 Tee(streams::IO...) = Tee(streams)
 Base.flush(t::Tee) = tee(t)
-Base.write(t::Tee, args...; kwargs...) = tee(Base.write, t, args...; kwargs...)
-Base.print(t::Tee, args...; kwargs...) = tee(Base.print, t, args...; kwargs...)
-Base.println(t::Tee, args...; kwargs...) = tee(Base.println, t, args...; kwargs...)
+Base.write(t::Tee, x::Array) = tee(Base.write, t, x) # needed to resolve method ambiguity
+Base.write(t::Tee, args...) = tee(Base.write, t, args...)
+Base.print(t::Tee, args...) = tee(Base.print, t, args...)
+Base.println(t::Tee, args...) = tee(Base.println, t, args...)
 Base.printstyled(t::Tee, args...; kwargs...) = tee(Base.printstyled, t, args...; kwargs...)
 
 function tee(f, t::Tee, args...; kwargs...)

@@ -7,4 +7,5 @@
 /docs/site/
 /docs/Manifest.toml
 /bench/main/results*
+/bench/main/settings*
 Manifest.toml
