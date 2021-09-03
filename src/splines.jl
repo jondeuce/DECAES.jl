@@ -223,9 +223,9 @@ function surrogate_spline_opt(f, X, min_n_eval::Int = length(X))
     end
 end
 
-struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tα <: NTuple{D, <:AbstractRange{T}}, W}
+struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tα <: AbstractArray{SVector{D,T}}, W}
     As::TA
-    dAs::TdA
+    ∇As::TdA
     αs::Tα
     b::Vector{T}
     ∂αAx::Vector{T}
@@ -235,22 +235,26 @@ end
 
 function NNLSDiscreteSurrogateSearch(
         As::AbstractArray{T},
-        dAs::AbstractArray{T},
+        ∇As::AbstractArray{T},
         αs::NTuple{D, <:AbstractRange{T}},
         b = zeros(T, size(As, 1)),
     ) where {D,T}
+    # size(As)  = (M, N, P1..., PD)
+    # size(∇As) = (M, N, D, P1..., PD)
     @assert D > 0 # require at least one param
-    @assert ndims(As) + 1 == ndims(dAs) # dAs has extra dimension for parameter gradients
-    @assert all(size(As) .== size(dAs)[1:ndims(As)]) # matrix dimensions must match
-    @assert size(dAs)[end] == D # length of gradient dimension must equal number of parameters
-    @assert all(size(As)[end-D+1:end] .== length.(αs)) # dimension size must match parameters lengths
+    @assert ndims(As) == 2 + D
+    @assert ndims(∇As) == 3 + D # ∇As has extra dimension for parameter gradients
+    @assert all(size(As)[1:2] .== size(∇As)[1:2]) # matrix dimensions must match
+    @assert size(∇As)[3] == D # length of gradient dimension equals number of parameters
+    @assert all(size(As)[3:end] .== size(∇As)[4:end] .== length.(αs)) # dimension size must match parameters lengths
 
-    m, n = size(As, 1), size(As, 2)
+    M, N = size(As, 1), size(As, 2)
+    αs = svector_meshgrid(αs...)
     b = convert(Vector{T}, b)
-    ∂αAx = zeros(T, m)
-    Axb = zeros(T, m)
-    nnls_work = lsqnonneg_work(zeros(T, m, n), zeros(T, m))
-    NNLSDiscreteSurrogateSearch(As, dAs, αs, b, ∂αAx, Axb, nnls_work)
+    ∂αAx = zeros(T, M)
+    Axb = zeros(T, M)
+    nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
+    NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, ∂αAx, Axb, nnls_work)
 end
 
 load!(p::NNLSDiscreteSurrogateSearch{D,T}, b::AbstractVector{T}) where {D,T} = copyto!(p.b, b)
@@ -267,8 +271,8 @@ function ∇loss!(p::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) whe
     pos = x .> 0
     x⁺ = x[pos]
     b = p.b
-    return ntuple(D) do d
-        dA = p.dAs[:, pos, I, d]
+    return svector(D) do d
+        dA = p.∇As[:, pos, d, I]
         A = p.As[:, pos, I]
         2 * dot(dA * x⁺, A * x⁺ - b)
     end
@@ -284,7 +288,7 @@ function mock_surrogate_search_problem(
     b = vec(mock_image(o))
     nα, nβ = length(alphas), length(betas)
     As = zeros(o.nTE, o.nT2, nα, nβ)
-    ∇As = zeros(o.nTE, o.nT2, nα, nβ, 2)
+    ∇As = zeros(o.nTE, o.nT2, 2, nα, nβ)
     T2s = logrange(o.T2Range..., o.nT2)
     θ = EPGOptions(o.nTE, o.SetFlipAngle, o.TE, 0.0, o.T1, o.SetRefConAngle)
     jfuncs = [EPGJacobianFunctor(θ, (:α, :β)) for _ in 1:Threads.nthreads()]
@@ -294,7 +298,7 @@ function mock_surrogate_search_problem(
         @inbounds for j in 1:o.nT2
             α, β = alphas[Iαβ[1]], betas[Iαβ[2]]
             j!   = jfuncs[Threads.threadid()]
-            j!(uview(∇As, :, j, Iαβ, :), uview(As, :, j, Iαβ), EPGOptions(θ, α, θ.TE, T2s[j], θ.T1, β))
+            j!(uview(∇As, :, j, :, Iαβ), uview(As, :, j, Iαβ), EPGOptions(θ, α, θ.TE, T2s[j], θ.T1, β))
         end
     end
 

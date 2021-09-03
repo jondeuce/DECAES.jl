@@ -23,7 +23,7 @@ function hermite_spline_opt(spl::nhs.NormalSpline)
 
     # xr = range(minimum(x), maximum(x), length = 50)
     # ymin, imin = findmin(xr) do xi
-    # nhs.evaluate_one(spl, xi)
+    #     nhs.evaluate_one(spl, xi)
     # end
     # xmin = xr[imin]
     # return (; x = xmin, y = ymin, spl = spl, ret = 0)
@@ -84,63 +84,46 @@ function benchmark_spline()
 end
 
 function test_mock_surrogate_search_problem(
-        o::T2mapOptions = mock_t2map_opts(; MatrixSize = (1, 1, 1))
+        o::T2mapOptions = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1))
     )
     function fA(α, β)
-        theta = EPGOptions{Float64,32}(α, o.TE, 0.0, o.T1, β)
-        T2_times = logrange(o.T2Range..., o.nT2)
-        epg_decay_basis(theta, T2_times)
+        theta = DECAES.EPGOptions{Float64,32}(α, o.TE, 0.0, o.T1, β)
+        T2_times = DECAES.logrange(o.T2Range..., o.nT2)
+        DECAES.epg_decay_basis(theta, T2_times)
     end
 
-    p = mock_surrogate_search_problem(o)
-    alphas, betas = p.αs
-    nnls_work = lsqnonneg_work(zeros(o.nTE, o.nT2), zeros(o.nTE))
-
-    function f!(work, α, β)
+    function f!(work, prob, α, β)
         A = fA(α, β)
-        solve!(work, A, p.b)
-        return chi2(work)
+        DECAES.solve!(work, A, prob.b)
+        return DECAES.chi2(work)
     end
 
-    function ∇f_approx!(work, α, β; h)
-        l = f!(work, α, β)
-        lα⁺ = f!(work, α + h, β)
-        lα⁻ = f!(work, α - h, β)
-        lβ⁺ = f!(work, α, β + h)
-        lβ⁻ = f!(work, α, β - h)
-        dl_dα = (lα⁺ - lα⁻) / 2h
-        dl_dβ = (lβ⁺ - lβ⁻) / 2h
-        return l, dl_dα, dl_dβ
+    function ∇f_approx!(work, prob, α, β; h)
+        l   = f!(work, prob, α, β)
+        lα⁺ = f!(work, prob, α + h, β)
+        lα⁻ = f!(work, prob, α - h, β)
+        lβ⁺ = f!(work, prob, α, β + h)
+        lβ⁻ = f!(work, prob, α, β - h)
+        ∂l_∂α = (lα⁺ - lα⁻) / 2h
+        ∂l_∂β = (lβ⁺ - lβ⁻) / 2h
+        ∇l  = SVector((∂l_∂α, ∂l_∂β))
+        return l, ∇l
     end
 
-    function ∇f_surrogate!(work, α, β)
-        _, i = find_nearest(alphas, α)
-        _, j = find_nearest(betas, β)
-        @assert alphas[i] == α
-        @assert betas[j] == β
-        I = CartesianIndex(i, j)
-        l = loss!(p, I)
-        dl_dα, dl_dβ = ∇loss!(p, I)
-        return l, dl_dα, dl_dβ
+    function ∇f_surrogate!(prob, I)
+        l  = DECAES.loss!(prob, I)
+        ∇l = DECAES.∇loss!(prob, I)
+        return l, ∇l
     end
 
-    for α in alphas, β in betas
-        # α = rand(alphas) # alphas[div(end,2)]
-        # β = rand(betas) # betas[div(end,2)]
-        l1, ∂α1, ∂β1 = ∇f_approx!(nnls_work, α, β; h = 1e-1)
-        l2, ∂α2, ∂β2 = ∇f_approx!(nnls_work, α, β; h = 1e-2)
-        l3, ∂α3, ∂β3 = ∇f_approx!(nnls_work, α, β; h = 1e-3)
-        l , ∂α , ∂β  = ∇f_surrogate!(nnls_work, α, β)
-        @test l1 == l2 == l3 == l
-        @test abs(∂α3 - ∂α) < abs(∂α2 - ∂α) < abs(∂α1 - ∂α)
-        @test abs(∂β3 - ∂β) < abs(∂β2 - ∂β) < abs(∂β1 - ∂β)
-    end
+    prob = DECAES.mock_surrogate_search_problem(o)
+    work = DECAES.lsqnonneg_work(zeros(o.nTE, o.nT2), zeros(o.nTE))
 
-    # function chi2_alpha_fun(flip_angles, i)
-    # # First argument `flip_angles` has been used implicitly in creating `decay_basis_set` already
-    # @timeit_debug TIMER() "lsqnonneg!" begin
-    # solve!(nnls_work, decay_basis_set[i], decay_data)
-    # return chi2(nnls_work)
-    # end
-    # end
+    for I in CartesianIndices(prob.αs)
+        α, β = prob.αs[I]
+        l′, ∇l′ = ∇f_approx!(work, prob, α, β; h = 1e-3)
+        l , ∇l  = ∇f_surrogate!(prob, I)
+        @test l == l′
+        @test ∇l ≈ ∇l′ rtol = 1e-3 atol = 1e-6
+    end
 end

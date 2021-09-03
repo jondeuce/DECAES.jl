@@ -9,6 +9,16 @@ normccdf(x::T) where {T} = erfc(x/sqrt(T(2)))/2 # Compliment of normcdf, i.e. 1 
 
 @inline mul_im(z::Complex) = Complex(-imag(z), real(z)) # optimized i*(a+b*i) = -b+a*i
 
+@inline svector(f, n) = SVector(ntuple(f, n))
+
+function svector_meshgrid(iters...)
+    T = promote_type(eltype.(iters)...)
+    D = length(iters)
+    S = SVector{D,T}
+    A = S[S(xs) for xs in Iterators.product(iters...)]
+    reshape(A, length.(iters)...)
+end
+
 @inline function SplitCartesianIndices(sz::NTuple{N,Int}, ::Val{M}) where {N,M}
     @assert 0 <= M <= N
     sz1 = sz[1:M]
