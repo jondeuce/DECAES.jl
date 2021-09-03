@@ -83,22 +83,22 @@ end
 end
 @inline cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T,ETL} = EPGWork_ReIm_DualMVector_Split{T, ETL, MVector{ETL, SVector{3, T}}, MVector{ETL, T}}
 
-struct EPGFunctor{T,ETL,Fs}
+struct EPGFunctor{T,ETL,N,Fs}
     caches::EPGWorkCacheDict{ETL}
     θ::EPGOptions{T,ETL}
 end
-EPGFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = EPGFunctor{T,ETL,Fs}(EPGWorkCacheDict{ETL}(), θ)
-EPGFunctor(f!::EPGFunctor{T,ETL,Fs}, θ::EPGOptions{T,ETL}) where {T,ETL,Fs} = EPGFunctor{T,ETL,Fs}(f!.caches, θ)
+EPGFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = EPGFunctor{T,ETL,N,Fs}(EPGWorkCacheDict{ETL}(), θ)
+EPGFunctor(f!::EPGFunctor{T,ETL,N,Fs}, θ::EPGOptions{T,ETL}) where {T,ETL,N,Fs} = EPGFunctor{T,ETL,N,Fs}(f!.caches, θ)
 
-@generated function destructure(::EPGFunctor{<:Any,ETL,Fs}, θ::EPGOptions{D,ETL}) where {D,ETL,Fs}
+@generated function destructure(::EPGFunctor{<:Any,ETL,N,Fs}, θ::EPGOptions{D,ETL}) where {D,ETL,N,Fs}
     vals = [:(getproperty(θ, $(QuoteNode(F)))) for F in Fs]
-    :(Base.@_inline_meta; SVector{$(length(Fs)), $D}(tuple($(vals...))))
+    :(Base.@_inline_meta; SVector{$N,$D}(tuple($(vals...))))
 end
 
-@generated function restructure(f!::EPGFunctor{<:Any,ETL,Fs}, x::AbstractVector{D}) where {D,ETL,Fs}
-    idxmap = NamedTuple{Fs}(1:length(Fs))
+@generated function restructure(f!::EPGFunctor{<:Any,ETL,N,Fs}, x::AbstractVector{D}) where {D,ETL,N,Fs}
+    idxmap = NamedTuple{Fs}(1:N)
     vals   = [F ∈ Fs ? :(x[$(getproperty(idxmap, F))]) : :(getproperty(f!.θ, $(QuoteNode(F)))) for F in fieldnames(EPGOptions)]
-    :(Base.@_inline_meta; EPGOptions{D,ETL}(tuple($(vals...))))
+    :(Base.@_inline_meta; EPGOptions{$D,$ETL}(tuple($(vals...))))
 end
 
 function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D,ETL}, x::AbstractVector{D}) where {D,ETL}
@@ -108,8 +108,8 @@ end
 (f!::EPGFunctor)(x::AbstractVector{D}) where {D} = f!(get_decaycurve(f!.caches[D]), f!.caches[D], x)
 (f!::EPGFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D} = f!(y, f!.caches[D], x)
 
-struct EPGJacobianFunctor{T, ETL, N, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
-    f!::EPGFunctor{T,ETL,N}
+struct EPGJacobianFunctor{T, ETL, N, Fs, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
+    f!::EPGFunctor{T,ETL,N,Fs}
     res::R
     cfg::C
 end

@@ -223,7 +223,7 @@ function surrogate_spline_opt(f, X, min_n_eval::Int = length(X))
     end
 end
 
-struct NNLSDiscreteSurrogateSearch{T, D, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tα <: NTuple{D, <:AbstractRange{T}}, W}
+struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tα <: NTuple{D, <:AbstractRange{T}}, W}
     As::TA
     dAs::TdA
     αs::Tα
@@ -238,7 +238,7 @@ function NNLSDiscreteSurrogateSearch(
         dAs::AbstractArray{T},
         αs::NTuple{D, <:AbstractRange{T}},
         b = zeros(T, size(As, 1)),
-    ) where {T,D}
+    ) where {D,T}
     @assert D > 0 # require at least one param
     @assert ndims(As) + 1 == ndims(dAs) # dAs has extra dimension for parameter gradients
     @assert all(size(As) .== size(dAs)[1:ndims(As)]) # matrix dimensions must match
@@ -253,16 +253,16 @@ function NNLSDiscreteSurrogateSearch(
     NNLSDiscreteSurrogateSearch(As, dAs, αs, b, ∂αAx, Axb, nnls_work)
 end
 
-load!(p::NNLSDiscreteSurrogateSearch{T}, b::AbstractVector{T}) where {T} = copyto!(p.b, b)
+load!(p::NNLSDiscreteSurrogateSearch{D,T}, b::AbstractVector{T}) where {D,T} = copyto!(p.b, b)
 
-function loss!(p::NNLSDiscreteSurrogateSearch{T,D}, I::CartesianIndex{D}) where {T,D}
+function loss!(p::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
     A = uview(p.As, :, :, I)
     b = p.b
-    x = solve!(p.nnls_work, A, b)
-    l = chi2(p.nnls_work)
+    solve!(p.nnls_work, A, b)
+    return chi2(p.nnls_work)
 end
 
-function ∇loss!(p::NNLSDiscreteSurrogateSearch{T,D}, I::CartesianIndex{D}) where {T,D}
+function ∇loss!(p::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
     x = solution(p.nnls_work)
     pos = x .> 0
     x⁺ = x[pos]

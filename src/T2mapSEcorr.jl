@@ -83,7 +83,7 @@ function T2mapSEcorr_(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T
 
         # Initialize reusable temporary buffers
         thread_buffers = [thread_buffer_maker(image, opts) for _ in 1:Threads.nthreads()]
-        for i in 1:length(thread_buffers)
+        Threads.@threads for i in 1:length(thread_buffers)
             # Compute lookup table of EPG decay bases
             init_epg_decay_basis!(thread_buffers[i], opts)
         end
@@ -139,7 +139,7 @@ function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {
 
     if opts.SetFlipAngle === nothing
         maps["refangleset"]   = convert(Vector{T}, copy(flip_angles))
-        maps["decaybasisset"] = convert(Array{T,3}, reshape(reduce(hcat, decay_basis_set), size(decay_basis_set[1])..., length(decay_basis_set)))
+        maps["decaybasisset"] = convert(Array{T,4}, copy(decay_basis_set))
     else
         maps["refangleset"]   = T(opts.SetFlipAngle)
         maps["decaybasisset"] = convert(Matrix{T}, copy(decay_basis))
@@ -238,7 +238,8 @@ function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
     function chi2_alpha_fun(flip_angles, i)
         # First argument `flip_angles` has been used implicitly in creating `decay_basis_set` already
         @timeit_debug TIMER() "lsqnonneg!" begin
-            solve!(nnls_work, decay_basis_set[i], decay_data)
+            # TODO: generalize to `refcon_angles`
+            solve!(nnls_work, uview(decay_basis_set, :, :, i, 1), decay_data)
             return chi2(nnls_work)
         end
     end
@@ -255,13 +256,13 @@ end
 # EPG decay curve fitting
 # =========================================================
 function init_epg_decay_basis!(thread_buffer, o::T2mapOptions)
-    @unpack decay_curve_work, decay_basis_set, decay_basis, flip_angles, T2_times = thread_buffer
+    @unpack decay_curve_work, decay_curve_jac!, ∇decay_basis_set, decay_basis_set, decay_basis, flip_angles, refcon_angles, T2_times = thread_buffer
 
-    if o.SetFlipAngle === nothing
+    if o.SetFlipAngle === nothing || o.SetRefConAngle === nothing
         # Loop to compute basis for each angle
-        @inbounds for i in 1:o.nRefAngles
-            epg_opts = EPGOptions(decay_curve_work, flip_angles[i], o.TE, zero(eltype(T2_times)), o.T1, o.SetRefConAngle)
-            epg_decay_basis!(decay_basis_set[i], decay_curve_work, epg_opts, T2_times)
+        @inbounds for i in 1:length(flip_angles), j in 1:length(refcon_angles)
+            epg_opts = EPGOptions(decay_curve_work, flip_angles[i], o.TE, zero(eltype(T2_times)), o.T1, refcon_angles[j])
+            ∇epg_decay_basis!(uview(∇decay_basis_set, :, :, i, j, :), uview(decay_basis_set, :, :, i, j), decay_curve_jac!, epg_opts, T2_times)
         end
     else
         # Compute basis for fixed flip angle `SetFlipAngle`
@@ -296,6 +297,29 @@ function epg_decay_basis(θ::EPGOptions{T,ETL}, T2_times::AbstractVector) where 
     decay_basis = zeros(T, ETL, length(T2_times))
     decay_curve_work = EPGdecaycurve_work(θ)
     epg_decay_basis!(decay_basis, decay_curve_work, θ, T2_times)
+end
+
+function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T,3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T,ETL}, θ::EPGOptions{T,ETL}, T2_times::AbstractVector) where {T,ETL}
+
+    # Compute the NNLS basis over T2 space
+    @timeit_debug TIMER() "∇EPGdecaycurve!" begin
+        @inbounds for j in 1:length(T2_times)
+            decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is a bit faster than `Base.view`
+            ∇decay_curve = uview(∇decay_basis, :, j, :)
+            epg_opts = EPGOptions(θ, θ.α, θ.TE, T2_times[j], θ.T1, θ.β) # remake options with T2 of basis `j`
+            decay_curve_jac!(∇decay_curve, decay_curve, epg_opts)
+        end
+    end
+
+    return ∇decay_basis
+end
+
+function ∇epg_decay_basis(θ::EPGOptions{T,ETL}, T2_times::AbstractVector, Fs::NTuple{N,Symbol}) where {T,ETL,N}
+    decay_basis = zeros(T, ETL, length(T2_times))
+    ∇decay_basis = zeros(T, ETL, length(T2_times), N)
+    decay_curve_jac! = EPGJacobianFunctor(θ, Fs)
+    ∇epg_decay_basis!(∇decay_basis, decay_basis, decay_curve_jac!, θ, T2_times)
+    return decay_basis, ∇decay_basis
 end
 
 # =========================================================
@@ -408,24 +432,35 @@ end
 # Utility functions
 # =========================================================
 function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
-    decay_basis = zeros(T, o.nTE, o.nT2)
-    decay_data  = zeros(T, o.nTE)
+    opt_α         = o.SetFlipAngle === nothing
+    opt_β         = o.SetRefConAngle === nothing
+    opt_vars      = (:α, :β)[[opt_α, opt_β]]
+    n_opt_vars    = length(opt_vars)
+    flip_angles   = opt_α ? range(o.MinRefAngle, T(180); length = o.nRefAngles) : T[o.SetFlipAngle]
+    refcon_angles = opt_β ? range(o.MinRefAngle, T(180); length = o.nRefAngles) : T[o.SetRefConAngle]
+    decay_basis   = zeros(T, o.nTE, o.nT2)
+    ∇decay_basis  = zeros(T, o.nTE, o.nT2, n_opt_vars)
+    decay_data    = zeros(T, o.nTE)
     buffer = (
         curr_count       = Ref(0),
         total_count      = sum(>(o.Threshold), @views(image[:,:,:,1])),
         T2_times         = logrange(o.T2Range..., o.nT2),
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
-        flip_angles      = range(o.MinRefAngle, T(180); length = o.nRefAngles),
-        decay_basis_set  = [zeros(T, o.nTE, o.nT2) for _ in 1:o.nRefAngles],
+        flip_angles      = flip_angles,
+        refcon_angles    = refcon_angles,
+        decay_basis_set  = zeros(T, o.nTE, o.nT2, length(flip_angles), length(refcon_angles)),
+        ∇decay_basis_set = zeros(T, o.nTE, o.nT2, length(flip_angles), length(refcon_angles), n_opt_vars),
         decay_basis      = decay_basis,
+        ∇decay_basis     = ∇decay_basis,
         decay_data       = decay_data,
         decay_calc       = zeros(T, o.nTE),
         residuals        = zeros(T, o.nTE),
         decay_curve_work = EPGdecaycurve_work(T, o.nTE),
+        decay_curve_jac! = EPGJacobianFunctor(EPGOptions(o.nTE, fill(T(NaN), 5)...), opt_vars),
         flip_angle_work  = optimize_flip_angle_work(o),
         T2_dist_work     = T2_distribution_work(decay_basis, decay_data, o),
-        alpha_opt        = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle),
-        beta_opt         = Ref(o.SetRefConAngle === nothing ? T(NaN) : o.SetRefConAngle),
+        alpha_opt        = Ref(opt_α ? T(NaN) : o.SetFlipAngle),
+        beta_opt         = Ref(opt_β ? T(NaN) : o.SetRefConAngle),
         chi2_alpha_opt   = Ref(T(NaN)),
         T2_dist          = zeros(T, o.nT2),
         gva_buf          = zeros(T, o.nT2),
