@@ -167,62 +167,6 @@ _spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_sp
 #### Global optimization using surrogate splines
 ####
 
-"""
-    $(TYPEDSIGNATURES)
-
-Perform global optimization over a function `f` which may be evaluated only
-on elements of a discrete vector `X` using surrogate spline functions.
-  `f` is a function taking two inputs `X` and `i` where `i` is an index into `X`
-  `X` discrete vector in which to evaluate `f`
-  `min_n_eval` minimum number of elements of `X` which are evaluated
-"""
-function surrogate_spline_opt(f, X, min_n_eval::Int = length(X))
-    # @assert length(X) >= 2
-
-    # Check if X has less than min_n_eval points
-    min_n_eval = max(2, min_n_eval)
-    if 2 <= length(X) <= min_n_eval
-        Y = [f(X,i) for i in 1:length(X)]
-        return spline_opt(X, Y)
-    end
-
-    # Update observed evaluations, returning true if converged
-    function update_state!(Is, Xi, Yi, x, y)
-        converged = false
-        for i in 1:length(Is)-1
-            # Find interval containing x
-            if Xi[i] <= x <= Xi[i+1]
-                iL, iR = Is[i], Is[i+1]
-                iM = (iL + iR) ÷ 2
-                if iM == iL || iM == iR
-                    # interval cannot be reduced further
-                    converged = true
-                else
-                    # insert and evaluate midpoint
-                    insert!(Is, i+1, iM)
-                    insert!(Xi, i+1, X[iM])
-                    insert!(Yi, i+1, f(X,iM))
-                end
-                break
-            end
-        end
-        return converged
-    end
-
-    # Initialize state
-    Is = round.(Int, range(1, length(X), length = min_n_eval))
-    Xi = X[Is]
-    Yi = [f(X,i) for i in Is]
-
-    # Surrogate minimization
-    while true
-        x, y = spline_opt(Xi, Yi) # current global minimum estimate
-        if update_state!(Is, Xi, Yi, x, y) # update and check for convergence
-            return (; x, y)
-        end
-    end
-end
-
 struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tα <: AbstractArray{SVector{D,T}}, W}
     As::TA
     ∇As::TdA
@@ -236,23 +180,22 @@ end
 function NNLSDiscreteSurrogateSearch(
         As::AbstractArray{T},
         ∇As::AbstractArray{T},
-        αs::NTuple{D, <:AbstractRange{T}},
+        αs::NTuple{D},
         b = zeros(T, size(As, 1)),
     ) where {D,T}
-    # size(As)  = (M, N, P1..., PD)
-    # size(∇As) = (M, N, D, P1..., PD)
-    @assert D > 0 # require at least one param
     @assert ndims(As) == 2 + D
     @assert ndims(∇As) == 3 + D # ∇As has extra dimension for parameter gradients
     @assert all(size(As)[1:2] .== size(∇As)[1:2]) # matrix dimensions must match
     @assert size(∇As)[3] == D # length of gradient dimension equals number of parameters
     @assert all(size(As)[3:end] .== size(∇As)[4:end] .== length.(αs)) # dimension size must match parameters lengths
 
+    # size(As)  = (M, N, P1..., PD)
+    # size(∇As) = (M, N, D, P1..., PD)
+    # size(αs)  = (P1..., PD)
     M, N = size(As, 1), size(As, 2)
-    αs = svector_meshgrid(αs...)
-    b = convert(Vector{T}, b)
+    αs   = convert(Array{SVector{D,T}}, svector_meshgrid(αs...)) # convert needed for correct type when D = 0
     ∂αAx = zeros(T, M)
-    Axb = zeros(T, M)
+    Axb  = zeros(T, M)
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
     NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, ∂αAx, Axb, nnls_work)
 end
@@ -275,6 +218,60 @@ function ∇loss!(p::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) whe
         dA = p.∇As[:, pos, d, I]
         A = p.As[:, pos, I]
         2 * dot(dA * x⁺, A * x⁺ - b)
+    end
+end
+
+function surrogate_spline_opt(
+        p::NNLSDiscreteSurrogateSearch{1,T};
+        mineval::Int = 2,
+        maxeval::Int = length(p.αs),
+    ) where {T}
+
+    f(i)    = loss!(p, CartesianIndex(i))
+    X       = reinterpret(T, p.αs)
+    mineval = max(mineval, 2)
+    maxeval = min(maxeval, length(X))
+
+    # Check if X has less than mineval points
+    if 2 <= length(X) <= mineval
+        Y = T[f(i) for i in 1:length(X)]
+        return spline_opt(X, Y)
+    end
+
+    # Update observed evaluations, returning true if converged
+    function update_state!(Is, Xi, Yi, x, y)
+        converged = false
+        for i in 1:length(Is)-1
+            # Find interval containing x
+            if Xi[i] <= x <= Xi[i+1]
+                iL, iR = Is[i], Is[i+1]
+                iM = (iL + iR) ÷ 2
+                if iM == iL || iM == iR
+                    # interval cannot be reduced further
+                    converged = true
+                else
+                    # insert and evaluate midpoint
+                    insert!(Is, i+1, iM)
+                    insert!(Xi, i+1, X[iM])
+                    insert!(Yi, i+1, f(iM))
+                end
+                break
+            end
+        end
+        return converged
+    end
+
+    # Initialize state
+    Is = round.(Int, range(1, length(X), length = mineval))
+    Xi = X[Is]
+    Yi = T[f(i) for i in Is]
+
+    # Surrogate minimization
+    while true
+        x, y = spline_opt(Xi, Yi) # current global minimum estimate
+        if update_state!(Is, Xi, Yi, x, y) # update and check for convergence
+            return (; x, y)
+        end
     end
 end
 

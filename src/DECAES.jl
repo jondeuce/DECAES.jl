@@ -3,6 +3,7 @@ module DECAES
 using LinearAlgebra, SpecialFunctions, Statistics, Random
 import ArgParse, Dierckx, DocStringExtensions, ForwardDiff, Logging, MAT, NIfTI, NLopt, Parameters, PolynomialRoots, ProgressMeter, ProgressMeter, StaticArrays, SIMD, TimerOutputs, UnsafeArrays
 using ArgParse: @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
+using BangBang: setproperty!!, setproperties!!
 using Base.MathConstants: φ
 using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using ForwardDiff: DiffResults

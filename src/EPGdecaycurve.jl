@@ -34,6 +34,12 @@ end
 @inline EPGOptions(::EPGOptions{T,ETL}, α::Real, TE::Real, T2::Real, T1::Real, β::Real) where {T,ETL} = EPGOptions{T,ETL}(α, TE, T2, T1, β)
 @inline EPGOptions(::AbstractEPGWorkspace{T,ETL}, α::Real, TE::Real, T2::Real, T1::Real, β::Real) where {T,ETL} = EPGOptions{T,ETL}(α, TE, T2, T1, β)
 
+@inline function EPGOptions(θ::EPGOptions{T,ETL}, xs::NamedTuple) where {T,ETL}
+    θ = setproperties!!(NamedTuple(θ), xs)
+    EPGOptions{T,ETL}(Tuple(θ)...)
+end
+Base.NamedTuple(θ::EPGOptions{T}) where {T} = NamedTuple{(:α,:TE,:T2,:T1,:β), NTuple{5,T}}(Tuple(θ))
+
 @inline EPGdecaycurve_work(::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve_work(T, ETL)
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
@@ -119,6 +125,9 @@ function EPGJacobianFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {
     cfg = ForwardDiff.JacobianConfig(f!, zeros(T, ETL), zeros(T, N), ForwardDiff.Chunk(N))
     return EPGJacobianFunctor(f!, res, cfg)
 end
+
+destructure(j!::EPGJacobianFunctor{<:Any,ETL}, θ::EPGOptions{D,ETL}) where {D,ETL} = destructure(j!.f!, θ)
+restructure(j!::EPGJacobianFunctor{<:Any,ETL}, x::AbstractVector{D}) where {D,ETL} = restructure(j!.f!, x)
 
 function (j!::EPGJacobianFunctor{T,ETL})(J::Union{AbstractMatrix, DiffResults.DiffResult}, y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
     @unpack f!, cfg = j!
