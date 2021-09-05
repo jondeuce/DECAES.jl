@@ -193,7 +193,7 @@ function NNLSDiscreteSurrogateSearch(
     # size(∇As) = (M, N, D, P1..., PD)
     # size(αs)  = (P1..., PD)
     M, N = size(As, 1), size(As, 2)
-    αs   = convert(Array{SVector{D,T}}, svector_meshgrid(αs...)) # convert needed for correct type when D = 0
+    αs   = meshgrid(SVector{D,T}, αs...)
     ∂αAx = zeros(T, M)
     Axb  = zeros(T, M)
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))

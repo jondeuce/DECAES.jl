@@ -686,15 +686,15 @@ end
 
 function move_left(f, state::LCurveCornerState{T}, cache) where {T}
     @unpack x⃗, P⃗ = state
-    x⃗ = SVector(x⃗[1], (T(φ) * x⃗[1] + x⃗[3]) / (T(φ) + 1), x⃗[2], x⃗[3])
-    P⃗ = SVector(P⃗[1], maybecall!(f, x⃗[2], state, cache), P⃗[2], P⃗[3]) # only P⃗[2] is recalculated
+    x⃗ = SA[x⃗[1], (T(φ) * x⃗[1] + x⃗[3]) / (T(φ) + 1), x⃗[2], x⃗[3]]
+    P⃗ = SA[P⃗[1], maybecall!(f, x⃗[2], state, cache), P⃗[2], P⃗[3]] # only P⃗[2] is recalculated
     return LCurveCornerState(x⃗, P⃗)
 end
 
 function move_right(f, state::LCurveCornerState{T}, cache) where {T}
     @unpack x⃗, P⃗ = state
-    x⃗ = SVector(x⃗[2], x⃗[3], x⃗[2] + (x⃗[4] - x⃗[3]), x⃗[4])
-    P⃗ = SVector(P⃗[2], P⃗[3], maybecall!(f, x⃗[3], state, cache), P⃗[4]) # only P⃗[3] is recalculated
+    x⃗ = SA[x⃗[2], x⃗[3], x⃗[2] + (x⃗[4] - x⃗[3]), x⃗[4]]
+    P⃗ = SA[P⃗[2], P⃗[3], maybecall!(f, x⃗[3], state, cache), P⃗[4]] # only P⃗[3] is recalculated
     return LCurveCornerState(x⃗, P⃗)
 end
 

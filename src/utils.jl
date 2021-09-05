@@ -11,13 +11,11 @@ normccdf(x::T) where {T} = erfc(x/sqrt(T(2)))/2 # Compliment of normcdf, i.e. 1 
 
 @inline svector(f, n) = SVector(ntuple(f, n))
 
-function svector_meshgrid(iters...)
-    T = promote_type(eltype.(iters)...)
-    D = length(iters)
-    S = SVector{D,T}
-    A = S[S(xs) for xs in Iterators.product(iters...)]
+function meshgrid(::Type{T}, iters...) where {T}
+    A = [T(xs) for xs in Iterators.product(iters...)]
     reshape(A, length.(iters)...)
 end
+meshgrid(iters...) = meshgrid(Tuple, iters...)
 
 @inline function SplitCartesianIndices(sz::NTuple{N,Int}, ::Val{M}) where {N,M}
     @assert 0 <= M <= N
@@ -245,6 +243,62 @@ function redirect_to_devnull(f)
             f()
         end
     end
+end
+
+####
+#### Optimizers
+####
+
+struct ADAM{N,T}
+    η::T
+    β::SVector{2,T}
+    mt::SVector{N,T}
+    vt::SVector{N,T}
+    βp::SVector{2,T}
+end
+function ADAM{N,T}(η = 0.001, β = (0.9, 0.999)) where {N,T}
+    @assert N >= 1
+    S2 = SVector{2,T}
+    SN = SVector{N,T}
+    ADAM{N,T}(T(η), S2(β), zero(SN), zero(SN), ones(S2))
+end
+
+function update(∇::SVector{N,T}, o::ADAM{N,T}) where {N,T}
+    @unpack η, β, mt, vt, βp = o
+
+    ϵ  = T(1e-8)
+    βp = @. βp * β
+    ηt = η * √(1 - βp[2]) / (1 - βp[1])
+    mt = @. β[1] * mt + (1 - β[1]) * ∇
+    vt = @. β[2] * vt + (1 - β[2]) * ∇^2
+    Δ  = @. ηt * mt / (√vt + ϵ)
+
+    return Δ, ADAM{N,T}(η, β, mt, vt, βp)
+end
+
+@inline xform_periodic(t::S, lb::S, ub::S) where {N, T, S <: SVector{N,T}} = S(ntuple(i -> clamp(((lb[i] + ub[i])/2) + ((ub[i] - lb[i])/2) * sinpi(t[i]), lb[i], ub[i]), N))
+@inline ∇xform_periodic(t::S, lb::S, ub::S) where {N, T, S <: SVector{N,T}} = S(ntuple(i -> ((ub[i] - lb[i])/2) * T(π) * cospi(t[i]), N))
+@inline inv_xform_periodic(x::S, lb::S, ub::S) where {N, T, S <: SVector{N,T}} = S(ntuple(i -> asin(clamp((x[i] - ((lb[i] + ub[i])/2)) / ((ub[i] - lb[i])/2), -one(T), one(T))) / T(π), N))
+
+function optimize(∇f, x0::SVector{N,T}, lb::SVector{N,T}, ub::SVector{N,T}, o::ADAM{N,T}; maxiter::Int = 1, xtol_rel = T(1e-3)) where {N,T}
+    x = x0
+    t = inv_xform_periodic(x, lb, ub)
+    for i in 1:maxiter
+        # Change of variables x->t
+        x = xform_periodic(t, lb, ub)
+        dxdt = ∇xform_periodic(t, lb, ub)
+        dfdx = ∇f(x)
+        dfdt = dfdx .* dxdt
+
+        # Update in t-space
+        Δt, o = update(dfdt, o)
+        t -= Δt
+
+        # Check for convegence in x-space
+        xold, x = x, xform_periodic(t, lb, ub)
+        maximum(abs.(x - xold)) < max(maximum(abs.(x)), maximum(abs.(xold))) * xtol_rel && break
+    end
+    return x, o
 end
 
 ####
