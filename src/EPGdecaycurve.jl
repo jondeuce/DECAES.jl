@@ -34,9 +34,9 @@ end
 @inline EPGOptions(::EPGOptions{T,ETL}, α::Real, TE::Real, T2::Real, T1::Real, β::Real) where {T,ETL} = EPGOptions{T,ETL}(α, TE, T2, T1, β)
 @inline EPGOptions(::AbstractEPGWorkspace{T,ETL}, α::Real, TE::Real, T2::Real, T1::Real, β::Real) where {T,ETL} = EPGOptions{T,ETL}(α, TE, T2, T1, β)
 
-@inline function EPGOptions(θ::EPGOptions{T,ETL}, xs::NamedTuple) where {T,ETL}
+@inline function EPGOptions(θ::EPGOptions{<:Any,ETL}, xs::NamedTuple) where {ETL}
     θ = setproperties!!(NamedTuple(θ), xs)
-    EPGOptions{T,ETL}(Tuple(θ)...)
+    EPGOptions(ETL, Tuple(θ)...)
 end
 Base.NamedTuple(θ::EPGOptions{T}) where {T} = NamedTuple{(:α,:TE,:T2,:T1,:β), NTuple{5,T}}(Tuple(θ))
 

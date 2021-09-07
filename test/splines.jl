@@ -22,28 +22,23 @@ function DECAES.spline_opt(
         # alg = :GD_STOGO,         # global, with-gradient, systematically divides search space into smaller hyper-rectangles via a branch-and-bound technique, and searching them by a gradient-based local-search algorithm (a BFGS variant)
     ) where {D}
 
-    nhs.evaluate!(prob.v, spl, prob.αs)
-    ymin, imin = findmin(prob.v)
-    xmin = prob.αs[imin]
-    return (; x = xmin, y = ymin)
+    nhs.evaluate!(prob.ℓ, spl, prob.αs)
+    uopt, i = findmin(prob.ℓ)
+    xopt = prob.αs[i]
 
-    # opt = NLopt.Opt(alg, D)
-    # opt.lower_bounds = minimum(x)
-    # opt.upper_bounds = maximum(x)
-    # opt.xtol_rel = 0.01
-    # opt.min_objective = function (x, g)
-    #     if length(g) > 0
-    #         @inbounds g[1] = Float64(nhs.evaluate_derivative(spl, x[1]))
-    #     end
-    #     @inbounds Float64(nhs.evaluate_one(spl, x[1]))
-    # end
-    # minf, minx, ret = NLopt.optimize(opt, [mean(x)])
-    # return (; x = first(minx), y = minf, spl = spl, ret = ret)
+    opt = DECAES.NLopt.Opt(alg, D)
+    opt.lower_bounds = Float64[prob.αs[begin]...]
+    opt.upper_bounds = Float64[prob.αs[end]...]
+    opt.xtol_rel = 0.001
+    opt.min_objective = function (x, g)
+        if length(g) > 0
+            @inbounds g[1] = Float64(nhs.evaluate_derivative(spl, x[1]))
+        end
+        @inbounds Float64(nhs.evaluate_one(spl, x[1]))
+    end
+    minf, minx, ret = DECAES.NLopt.optimize(opt, Float64[xopt[1]])
+    return (; xopt = SA{Float64}[minx[1]], uopt = minf)
 end
-
-spline(x, u, du = nothing) = du === nothing ?
-    nhs.interpolate(x, u, nhs.RK_H1()) :
-    nhs.interpolate(x, u, x, du, nhs.RK_H1())
 
 wrap_f(f) = x::SVector{1} -> f(x[1])
 wrap_df(df) = x::SVector{1} -> SVector{1}(df(x[1]))
@@ -88,10 +83,14 @@ function plot_splines(; kwargs...)
         Is = CartesianIndex.(unique(round.(Int, range(1, length(prob.αs); length = nα))))
 
         DECAES.@unpack x, u, spl = build_spline(Is, Val(false))
+        DECAES.@unpack xopt, uopt = DECAES.spline_opt(spl, prob)
         lines!(opts.MinRefAngle..180.0, x_ -> nhs.evaluate_one(spl, x_), label = "no grad", color = :green, linewidth = 4)
+        scatter!([xopt[1]], [uopt], label = "min", color = :darkgreen, marker = :diamond, markersize = 20)
 
         DECAES.@unpack x, u, spl = build_spline(Is, Val(true))
-        lines!(opts.MinRefAngle..180.0, x_ -> nhs.evaluate_one(spl, x_), label = "with grad", color = :red, linewidth = 4)
+        DECAES.@unpack xopt, uopt = DECAES.spline_opt(spl, prob)
+        lines!(opts.MinRefAngle..180.0, x_ -> nhs.evaluate_one(spl, x_), label = "w/ grad", color = :red, linewidth = 4)
+        scatter!([xopt[1]], [uopt], label = "min", color = :darkred, marker = :diamond, markersize = 20)
 
         scatter!(first.(x), u, label = "samples", color = :black)
     end
@@ -106,8 +105,8 @@ function benchmark_spline()
     u = randn(MersenneTwister(0), 10)
     du = randn(MersenneTwister(0), 10)
     xi = Ref(mean(x))
-    spl = spline(x, u)
-    dspl = spline(x, u, du)
+    spl = nhs.interpolate(x, u, nhs.RK_H1())
+    dspl = nhs.interpolate(x, u, x, du, nhs.RK_H1())
     @btime $(nhs._gram!)($(spl._gram.data), $(spl._nodes), $(spl._kernel))
     @btime $(nhs._gram!)($(dspl._gram.data), $(dspl._nodes), $(dspl._d_nodes), $(dspl._d_dirs), $(dspl._kernel))
     @btime $(nhs.evaluate_one)($spl, $xi[])
@@ -159,4 +158,26 @@ function test_mock_surrogate_search_problem(
         @test l == l′
         @test ∇l ≈ ∇l′ rtol = 1e-3 atol = 1e-6
     end
+end
+
+function bounding_neighbours_test()
+    xgrid = DECAES.meshgrid(SVector{2,Float64}, 1:5, 1:10)
+    I = CartesianIndex.([(1,3), (1,10), (2,1), (3,7), (4,2), (5,1), (5,9)])
+    x = xgrid[I]
+    ℓ = rand(length(I))
+    state = DECAES.DiscreteBisectionSearch(xgrid, I, x, ℓ)
+    @test DECAES.bounding_neighbours(state, SA[1.5, 3.5]) == (CartesianIndex(1, 3), CartesianIndex(2, 7))
+    @test DECAES.bounding_neighbours(state, SA[0.0, 0.0]) == (CartesianIndex(1, 1), CartesianIndex(1, 1))
+    @test DECAES.bounding_neighbours(state, SA[6.0, 11.0]) == (CartesianIndex(5, 10), CartesianIndex(5, 10))
+
+    f = x -> sum(sin.(x).^2) * sum(x.^2)
+    xgrid = DECAES.meshgrid(SVector{1,Float64}, range(-10*rand(), 10*rand(), length = 21))
+    I = CartesianIndex.(round.(Int, range(1, length(xgrid), length = 5)))
+    x = xgrid[I]
+    ℓ = f.(x)
+
+    state = DECAES.DiscreteBisectionSearch(xgrid, I, x, ℓ)
+    out = DECAES.bisection_search(f, state)
+    out_legacy = DECAES.surrogate_spline_opt(i -> f(xgrid[i]), first.(xgrid); mineval = 5)
+    @test out.x[1] ≈ out_legacy.x && out.y ≈ out_legacy.y
 end

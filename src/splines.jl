@@ -172,35 +172,30 @@ struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: Abstract
     ∇As::TdA
     αs::Array{SVector{D,T}, D}
     b::Tb
-    v::Array{T, D}
+    ℓ::Array{T, D}
     ∂Ax⁺::Vector{T}
     Ax⁺b::Vector{T}
     nnls_work::W
 end
 
 function NNLSDiscreteSurrogateSearch(
-        As::AbstractArray{T},
-        ∇As::AbstractArray{T},
-        αs::NTuple{D},
-        b::AbstractVector{T},
+        As::AbstractArray{T},   # size(As)  = (M, N, P1..., PD)
+        ∇As::AbstractArray{T},  # size(∇As) = (M, N, D, P1..., PD)
+        αs::NTuple{D},          # size(αs)  = (P1..., PD)
+        b::AbstractVector{T},   # size(b)   = (M,)
     ) where {D,T}
     M, N = size(As, 1), size(As, 2)
-    @assert ndims(As) == 2 + D
-    @assert ndims(∇As) == 3 + D # ∇As has extra dimension for parameter gradients
-    @assert size(∇As)[1:2] == (M, N) # matrix dimensions must match
-    @assert size(∇As)[3] == D # length of gradient dimension equals number of parameters
+    @assert ndims(As) == 2 + D && ndims(∇As) == 3 + D # ∇As has extra dimension for parameter gradients
+    @assert size(∇As)[1:3] == (M, N, D) # matrix dimensions must match, and gradient dimension must equal number of parameters
     @assert size(As)[3:end] == size(∇As)[4:end] == length.(αs) # dimension size must match parameters lengths
-    @assert length(b) == M
+    @assert size(b) == (M,)
 
-    # size(As)  = (M, N, P1..., PD)
-    # size(∇As) = (M, N, D, P1..., PD)
-    # size(αs)  = (P1..., PD)
     αs   = meshgrid(SVector{D,T}, αs...)
-    v    = zeros(T, size(αs))
+    ℓ    = zeros(T, size(αs))
     ∂Ax⁺ = zeros(T, M)
     Ax⁺b = zeros(T, M)
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
-    NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, v, ∂Ax⁺, Ax⁺b, nnls_work)
+    NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, ℓ, ∂Ax⁺, Ax⁺b, nnls_work)
 end
 
 load!(p::NNLSDiscreteSurrogateSearch{D,T}, b::AbstractVector{T}) where {D,T} = copyto!(p.b, b)
@@ -227,14 +222,87 @@ function ∇loss!(p::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) whe
     end
 end
 
+abstract type AbstractOracle end
+struct CubicSplineOracle <: AbstractOracle end
+struct HermiteSplineOracle <: AbstractOracle end
+
+struct DiscreteBisectionSearch{D, T}
+    xgrid::Array{SVector{D,T}, D}
+    I::Vector{CartesianIndex{D}}
+    x::Vector{SVector{D,T}}
+    ℓ::Vector{T}
+end
+
+function bisection_search(
+        f,
+        state::DiscreteBisectionSearch{D, T},
+        oracle::AbstractOracle = CubicSplineOracle(),
+    ) where {D,T}
+
+    while true
+        # get new suggestion from oracle, and find nearest neighbours containing the suggestion
+        x, y = suggest_point(state, oracle)
+        IL, IR = bounding_neighbours(state, x)
+        if IR - IL <= one(IL)
+            # `x` is in bounding box of `xL = state.xgrid[IL]` and `xR = state.xgrid[IR]`
+            return (; x, y)
+        else
+            # evaluate `f` at midpoint of bounding box of `x`
+            IM = CartesianIndex(Tuple(IL + IR) .÷ 2)
+            xM = state.xgrid[IM]
+            ℓM = f(xM)
+            push!(state.I, IM)
+            push!(state.x, xM)
+            push!(state.ℓ, ℓM)
+        end
+    end
+end
+
+function suggest_point(state::DiscreteBisectionSearch{1,T}, ::CubicSplineOracle) where {T}
+    p = sortperm(state.x; by = first)
+    @unpack x, y = spline_opt(first.(state.x[p]), state.ℓ[p])
+    return (x = SA{T}[x], y = T(y))
+end
+
+# Update observed evaluations, returning true if converged
+function bounding_neighbours(
+        state::DiscreteBisectionSearch{D,T},
+        x::SVector{D,T},
+    ) where {D,T}
+
+    # # NOTE: if `state.xgrid[state.I]` does not contain any pairs of points
+    # # which bound `x` then `IL` and `IR` will default to garbage values
+    # IL = IR = one(CartesianIndex{D})
+    # d²max = T(Inf)
+    # for j in 1:length(state.I)
+    #     for i in 1:length(state.I)
+    #         i == j && continue
+    #         Ii, Ij = state.I[i], state.I[j]
+    #         xi, xj = state.xgrid[Ii], state.xgrid[Ij]
+    #         d² = sum(abs2.(xi - xj))
+    #         if all(xi .<= x .<= xj) && d² <= dmax
+    #             IL, IR, d²max = Ii, Ij, d²
+    #         end
+    #     end
+    # end
+    # return IL, IR
+
+    # NOTE: if `x` is outside of the bounding box of `state.xgrid[state.I]`,
+    # `IL` and `IR` will lie on the boundary of `R`
+    R = CartesianIndices(state.xgrid)
+    IL, IR = foldl(state.I; init = (first(R), last(R))) do (IL, IR), I
+        IL = ifelse.(Tuple(state.xgrid[I] .< x), Tuple(max(I, IL)), Tuple(IL))
+        IR = ifelse.(Tuple(state.xgrid[I] .> x), Tuple(min(I, IR)), Tuple(IR))
+        return CartesianIndex(IL), CartesianIndex(IR)
+    end
+end
+
 function surrogate_spline_opt(
-        p::NNLSDiscreteSurrogateSearch{1,T};
+        f, X::AbstractVector{T};
         mineval::Int = 2,
-        maxeval::Int = length(p.αs),
+        maxeval::Int = length(X),
     ) where {T}
 
-    f(i)    = loss!(p, CartesianIndex(i))
-    X       = reinterpret(T, p.αs)
     mineval = max(mineval, 2)
     maxeval = min(maxeval, length(X))
 
@@ -251,12 +319,12 @@ function surrogate_spline_opt(
             # Find interval containing x
             if Xi[i] <= x <= Xi[i+1]
                 iL, iR = Is[i], Is[i+1]
-                iM = (iL + iR) ÷ 2
-                if iM == iL || iM == iR
+                if iL + 1 == iR
                     # interval cannot be reduced further
                     converged = true
                 else
                     # insert and evaluate midpoint
+                    iM = (iL + iR) ÷ 2
                     insert!(Is, i+1, iM)
                     insert!(Xi, i+1, X[iM])
                     insert!(Yi, i+1, f(iM))
@@ -281,30 +349,41 @@ function surrogate_spline_opt(
     end
 end
 
+function surrogate_spline_opt(
+        p::NNLSDiscreteSurrogateSearch{1,T};
+        mineval::Int = 2,
+        maxeval::Int = length(p.αs),
+    ) where {T}
+    f(i) = loss!(p, CartesianIndex(i))
+    X = reinterpret(T, p.αs)
+    surrogate_spline_opt(f, X; mineval, maxeval)
+end
+
 function mock_surrogate_search_problem(
-        ::Val{D} = Val(2);
-        opts::T2mapOptions = mock_t2map_opts(; MatrixSize = (1,1,1)),
+        ::Val{D} = Val(2),
+        ::Val{ETL} = Val(32);
+        opts::T2mapOptions = mock_t2map_opts(; MatrixSize = (1,1,1), nTE = ETL),
         alphas = range(50, 180, length = opts.nRefAngles),
         betas = range(50, 180, length = opts.nRefAngles),
-    ) where {D}
+    ) where {D,ETL}
 
     # Mock CPMG image
+    @assert opts.nTE == ETL
     b = vec(mock_image(opts))
     opt_vars = D == 1 ? (:α,) : (:α, :β)
     opt_ranges = D == 1 ? (alphas,) : (alphas, betas)
-    As = zeros(opts.nTE, opts.nT2, length.(opt_ranges)...)
-    ∇As = zeros(opts.nTE, opts.nT2, D, length.(opt_ranges)...)
+    As = zeros(ETL, opts.nT2, length.(opt_ranges)...)
+    ∇As = zeros(ETL, opts.nT2, D, length.(opt_ranges)...)
     T2s = logrange(opts.T2Range..., opts.nT2)
-    θ = EPGOptions(opts.nTE, opts.SetFlipAngle, opts.TE, 0.0, opts.T1, opts.SetRefConAngle)
-    jfuncs = [EPGJacobianFunctor(θ, opt_vars) for _ in 1:Threads.nthreads()]
+    θ = EPGOptions(ETL, opts.SetFlipAngle, opts.TE, 0.0, opts.T1, opts.SetRefConAngle)
+    j! = EPGJacobianFunctor(θ, opt_vars)
 
     _, Rαs = SplitCartesianIndices(As, Val(2))
-    Threads.@threads for Iαs in Rαs
+    for Iαs in Rαs
         @inbounds for j in 1:opts.nT2
             θαs = D == 1 ?
                 EPGOptions(θ, (T2 = T2s[j], α = alphas[Iαs[1]],)) :
                 EPGOptions(θ, (T2 = T2s[j], α = alphas[Iαs[1]], β = alphas[Iαs[2]]))
-            j! = jfuncs[Threads.threadid()]
             j!(uview(∇As, :, j, :, Iαs), uview(As, :, j, Iαs), θαs)
         end
     end
