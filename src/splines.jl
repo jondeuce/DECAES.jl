@@ -55,7 +55,7 @@ function _spline_opt(spl::Dierckx.Spline1D)
     knots = Dierckx.get_knots(spl)
     polys = _build_polynomials(spl)
     x, y = knots[1], polys[1](0) # initial lefthand point
-    @inbounds for (i,p) in enumerate(polys)
+    @inbounds for (i, p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
         _x, _y = x₁, p(x₁ - x₀) # check right endpoint
         (_y < y) && (x = _x; y = _y)
@@ -111,7 +111,7 @@ function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
     knots = Dierckx.get_knots(spl)
     polys = _build_polynomials(spl)
     x = eltype(knots)(NaN)
-    @inbounds for (i,p) in enumerate(polys)
+    @inbounds for (i, p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
         # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
         for rᵢ in PolynomialRoots.roots(sub!(p, value))
@@ -164,25 +164,232 @@ end
 _spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = _spline_root_legacy_slow(_make_spline(X, Y; deg_spline), value)
 
 ####
-#### Global optimization using surrogate splines
+#### Surrogate functions over discrete grids
+####
+
+abstract type AbstractSurrogate{D,T} end
+
+struct CubicSplineSurrogate{T,F} <: AbstractSurrogate{1,T}
+    f::F
+    grid::Vector{SVector{1,T}}
+    x::Vector{SVector{1,T}}
+    u::Vector{T}
+end
+
+function CubicSplineSurrogate(f, grid::Vector{SVector{1,T}}) where {T}
+    CubicSplineSurrogate(f, grid, SVector{1,T}[], T[])
+end
+
+function update!(surr::CubicSplineSurrogate, I::CartesianIndex{1})
+    xI = surr.grid[I]
+    pos = length(surr.x) + 1
+    @inbounds for i in 1:length(surr.x)
+        (xI[1] <= surr.x[i][1]) && (pos = i; break)
+    end
+    insert!(surr.x, pos, xI)
+    insert!(surr.u, pos, surr.f(I))
+    return surr
+end
+
+function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
+    @unpack x, y = spline_opt(reinterpret(T, surr.x), surr.u)
+    return (; x = SVector{1,T}(x), y = T(y))
+end
+
+struct HermiteSplineSurrogate{D,T,F,G} <: AbstractSurrogate{D,T}
+    f::F
+    ∇f::G
+    grid::Array{SVector{D,T},D}
+    ugrid::Array{T,D}
+    x::Vector{SVector{D,T}}
+    u::Vector{T}
+    e::Vector{SVector{D,T}}
+    du::Vector{T}
+end
+
+function HermiteSplineSurrogate(f, ∇f, grid::Array{SVector{D,T},D}) where {D,T}
+    HermiteSplineSurrogate(f, ∇f, grid, zeros(T, size(grid)), SVector{D,T}[], T[], SVector{D,T}[], T[])
+end
+
+function update!(surr::HermiteSplineSurrogate{D,T}, I::CartesianIndex{D}) where {D,T}
+    xI = surr.grid[I]
+    u, ∇u = surr.f(I), surr.∇f(I)
+    push!(surr.x, xI)
+    push!(surr.u, u)
+    for i in 1:D
+        push!(surr.e, basisvector(SVector{D,T}, i))
+        push!(surr.du, ∇u[i])
+    end
+    return surr
+end
+
+function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
+    spl = interpolate(surr.x, surr.u, surr.x, surr.e, surr.du, RK_H1())
+    y, I = findmin(evaluate!(vec(surr.ugrid), spl, vec(surr.grid)))
+    x = surr.grid[I]
+    return (; x = x, y = y)
+end
+
+####
+#### Bounding box for multi-dimensional bisection search
+####
+
+struct BoundingBox{D,S,N}
+    bounds::NTuple{D,NTuple{2,Int}}
+    corners::SArray{S,CartesianIndex{D},D,N}
+end
+Base.show(io::IO, ::MIME"text/plain", box::BoundingBox{D}) where {D} = print(io, "$D-D BoundingBox with dimensions: " * join(box.bounds, " × "))
+
+BoundingBox(widths::NTuple{D,Int}) where {D} = BoundingBox(tuple.(1, widths))
+BoundingBox(bounds::NTuple{D,NTuple{2,Int}}) where {D} = BoundingBox(bounds, corners(bounds))
+
+@generated function corners(bounds::NTuple{D,NTuple{2,Int}}) where {D}
+    corners = Iterators.product([(true, false) for d in 1:D]...)
+    S = Tuple{ntuple(d -> 2, D)...}
+    vals = [:(CartesianIndex($(ntuple(d -> I[d] ? :(bounds[$d][1]) : :(bounds[$d][2]), D)...))) for I in corners]
+    :(Base.@_inline_meta; SArray{$S, CartesianIndex{$D}, $D, $(2^D)}(tuple($(vals...))))
+end
+
+function bisect(box::BoundingBox{D}) where {D}
+    _, i = findmax(ntuple(d -> box.bounds[d][2] - box.bounds[d][1], D))
+    left_bounds = ntuple(D) do d
+        i !== d ? box.bounds[d] : (box.bounds[i][1], (box.bounds[i][1] + box.bounds[i][2]) ÷ 2)
+    end
+    right_bounds = ntuple(D) do d
+        i !== d ? box.bounds[d] : ((box.bounds[i][1] + box.bounds[i][2]) ÷ 2, box.bounds[i][2])
+    end
+    return BoundingBox(left_bounds), BoundingBox(right_bounds)
+end
+
+splittable(box::BoundingBox{D}) where {D} = any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D) .> 1)
+
+####
+#### Global optimization using multi-dimensional bisection with surrogate functions
+####
+
+struct DiscreteSurrogateBisector{D, T}
+    grid::Array{SVector{D,T},D}
+    seen::Array{Bool,D}
+    numeval::Base.RefValue{Int}
+end
+function DiscreteSurrogateBisector(surr::AbstractSurrogate; mineval::Int, maxeval::Int)
+    @assert mineval <= maxeval
+    state = DiscreteSurrogateBisector(surr.grid, fill(false, size(surr.grid)), Ref(0))
+    initialize!(surr, state; mineval = mineval, maxeval = maxeval)
+end
+
+function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisector{D}; mineval::Int, maxeval::Int) where {D}
+    # Evaluate at least `mineval` points by repeatedly bisecting the grid
+    box = BoundingBox(size(state.grid))
+    for depth in 1:mineval # should never reach `mineval` depth, this is just to ensure the loop terminates
+        initialize!(surr, state, box, depth; mineval = mineval, maxeval = maxeval)
+        state.numeval[] >= mineval && break
+    end
+    return state
+end
+
+function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisector{D}, box::BoundingBox{D}, depth::Int; mineval::Int, maxeval::Int) where {D}
+    depth <= 0 && return state
+    evaluate_box!(surr, state, box; maxeval = maxeval)
+    state.numeval[] ≥ mineval && return state
+    left, right = bisect(box)
+    initialize!(surr, state, left, depth-1; mineval = mineval, maxeval = maxeval)
+    initialize!(surr, state, right, depth-1; mineval = mineval, maxeval = maxeval)
+end
+
+function bisection_search(
+        surr::AbstractSurrogate{D,T},
+        state::DiscreteSurrogateBisector{D,T};
+        maxeval::Int,
+    ) where {D,T}
+
+    # Repeat until convergence:
+    #   1. Get new suggestion from surrogate,
+    #   2. Find smallest bounding box containing the suggestion,
+    #       2a. Return if box is sufficiently small or if the maximum number of evaluations has been reched
+    #       2b. Otherwise, evaluate all corners of the box and go to 1.
+    while true
+        x, y = suggest_point(surr)
+        box = minimal_bounding_box(state, x)
+        if state.numeval[] ≥ maxeval || converged(state, box)
+            return (; x, y)
+        else
+            evaluate_box!(surr, state, box; maxeval = maxeval)
+        end
+    end
+end
+
+# Update observed evaluations, returning true if converged
+function minimal_bounding_box(
+        state::DiscreteSurrogateBisector{D,T},
+        x::SVector{D,T},
+    ) where {D,T}
+
+    box = BoundingBox(size(state.grid))
+    while true
+        left, right = bisect(box)
+        if contains(state, left, x) # left box contains `x`
+            if !contains(state, left) || !splittable(left)
+                return left # left box not fully evaluated, or we have reached bottom; return
+            else
+                box = left # whole left box already evaluated; continue search
+            end
+        else # contains(state, right, x), i.e. right box contains `x`
+            if !contains(state, right) || !splittable(right)
+                return right # right box not fully evaluated, or we have reached bottom; return
+            else
+                box = right # whole right box already evaluated; continue search
+            end
+        end
+    end
+end
+
+function evaluate_box!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisector{D}, box::BoundingBox{D}; maxeval::Int) where {D}
+    for I in box.corners
+        state.numeval[] >= maxeval && break # max evals reached
+        state.seen[I] && continue # point already evaluated
+        update!(surr, I) # update surrogate
+        state.seen[I] = true # mark as now seen
+        state.numeval[] += 1
+    end
+    return state
+end
+
+function converged(::DiscreteSurrogateBisector{D}, box::BoundingBox{D}) where {D}
+    # Convergence is defined as: bounding box containing `x` has at least one side of length <= 1
+    any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D) .<= 1)
+end
+
+function contains(state::DiscreteSurrogateBisector{D}, box::BoundingBox{D}) where {D}
+    all(I -> state.seen[I], box.corners)
+end
+
+function contains(state::DiscreteSurrogateBisector{D,T}, box::BoundingBox{D}, x::SVector{D,T}) where {D,T}
+    @inbounds bottomleft = state.grid[box.corners[1]]
+    @inbounds topright = state.grid[box.corners[end]]
+    all(bottomleft .<= x .<= topright)
+end
+
+####
+#### Global optimization for NNLS problem
 ####
 
 struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tb <: AbstractVector{T}, W}
     As::TA
     ∇As::TdA
-    αs::Array{SVector{D,T}, D}
+    αs::Array{SVector{D,T},D}
     b::Tb
-    ℓ::Array{T, D}
+    u::Array{T,D}
     ∂Ax⁺::Vector{T}
     Ax⁺b::Vector{T}
     nnls_work::W
 end
 
 function NNLSDiscreteSurrogateSearch(
-        As::AbstractArray{T},   # size(As)  = (M, N, P1..., PD)
-        ∇As::AbstractArray{T},  # size(∇As) = (M, N, D, P1..., PD)
-        αs::NTuple{D},          # size(αs)  = (P1..., PD)
-        b::AbstractVector{T},   # size(b)   = (M,)
+        As::AbstractArray{T},  # size(As)  = (M, N, P1..., PD)
+        ∇As::AbstractArray{T}, # size(∇As) = (M, N, D, P1..., PD)
+        αs::NTuple{D},         # size(αs)  = (P1..., PD)
+        b::AbstractVector{T},  # size(b)   = (M,)
     ) where {D,T}
     M, N = size(As, 1), size(As, 2)
     @assert ndims(As) == 2 + D && ndims(∇As) == 3 + D # ∇As has extra dimension for parameter gradients
@@ -191,172 +398,92 @@ function NNLSDiscreteSurrogateSearch(
     @assert size(b) == (M,)
 
     αs   = meshgrid(SVector{D,T}, αs...)
-    ℓ    = zeros(T, size(αs))
+    u    = zeros(T, size(αs))
     ∂Ax⁺ = zeros(T, M)
     Ax⁺b = zeros(T, M)
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
-    NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, ℓ, ∂Ax⁺, Ax⁺b, nnls_work)
+    NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, ∂Ax⁺, Ax⁺b, nnls_work)
 end
 
-load!(p::NNLSDiscreteSurrogateSearch{D,T}, b::AbstractVector{T}) where {D,T} = copyto!(p.b, b)
+load!(prob::NNLSDiscreteSurrogateSearch{D,T}, b::AbstractVector{T}) where {D,T} = copyto!(prob.b, b)
 
-function loss!(p::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
-    @unpack As, b, nnls_work = p
+function loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
+    @unpack As, b, nnls_work = prob
     solve!(nnls_work, uview(As, :, :, I), b)
-    return chi2(nnls_work)
+    ℓ = chi2(nnls_work)
+    u = log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
+    return u
 end
 
-function ∇loss!(p::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
-    @unpack As, ∇As, b, ∂Ax⁺, Ax⁺b, nnls_work = p
+function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
+    @unpack As, ∇As, b, ∂Ax⁺, Ax⁺b, nnls_work = prob
+    ℓ = chi2(nnls_work)
+    ℓ <= eps(T) && return zero(SVector{D,T}) # loss capped at eps(T) from below; return zero gradient
     x = solution(nnls_work)
     @inbounds @. Ax⁺b = -b
     @inbounds for j in 1:size(As, 2)
         (x[j] > 0) && axpy!(x[j], uview(As, :, j, I), Ax⁺b)
     end
-    return svector(D) do d
+    ∇u = ntuple(D) do d
         @inbounds ∂Ax⁺ .= zero(T)
         @inbounds for j in 1:size(∇As, 2)
             (x[j] > 0) && axpy!(x[j], uview(∇As, :, j, d, I), ∂Ax⁺)
         end
-        2 * dot(∂Ax⁺, Ax⁺b)
+        ∂ℓ = 2 * dot(∂Ax⁺, Ax⁺b)
+        ∂u = ∂ℓ / ℓ
+        return ∂u
     end
+    return SVector{D,T}(∇u)
 end
 
-abstract type AbstractOracle end
-struct CubicSplineOracle <: AbstractOracle end
-struct HermiteSplineOracle <: AbstractOracle end
-
-struct DiscreteBisectionSearch{D, T}
-    xgrid::Array{SVector{D,T}, D}
-    I::Vector{CartesianIndex{D}}
-    x::Vector{SVector{D,T}}
-    ℓ::Vector{T}
+function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1,T}) where {T}
+    f(I) = loss!(prob, I)
+    CubicSplineSurrogate(f, prob.αs, SVector{1,T}[], T[])
 end
 
-function bisection_search(
-        f,
-        state::DiscreteBisectionSearch{D, T},
-        oracle::AbstractOracle = CubicSplineOracle(),
-    ) where {D,T}
-
-    while true
-        # get new suggestion from oracle, and find nearest neighbours containing the suggestion
-        x, y = suggest_point(state, oracle)
-        IL, IR = bounding_neighbours(state, x)
-        if IR - IL <= one(IL)
-            # `x` is in bounding box of `xL = state.xgrid[IL]` and `xR = state.xgrid[IR]`
-            return (; x, y)
-        else
-            # evaluate `f` at midpoint of bounding box of `x`
-            IM = CartesianIndex(Tuple(IL + IR) .÷ 2)
-            xM = state.xgrid[IM]
-            ℓM = f(xM)
-            push!(state.I, IM)
-            push!(state.x, xM)
-            push!(state.ℓ, ℓM)
-        end
-    end
-end
-
-function suggest_point(state::DiscreteBisectionSearch{1,T}, ::CubicSplineOracle) where {T}
-    p = sortperm(state.x; by = first)
-    @unpack x, y = spline_opt(first.(state.x[p]), state.ℓ[p])
-    return (x = SA{T}[x], y = T(y))
-end
-
-# Update observed evaluations, returning true if converged
-function bounding_neighbours(
-        state::DiscreteBisectionSearch{D,T},
-        x::SVector{D,T},
-    ) where {D,T}
-
-    # # NOTE: if `state.xgrid[state.I]` does not contain any pairs of points
-    # # which bound `x` then `IL` and `IR` will default to garbage values
-    # IL = IR = one(CartesianIndex{D})
-    # d²max = T(Inf)
-    # for j in 1:length(state.I)
-    #     for i in 1:length(state.I)
-    #         i == j && continue
-    #         Ii, Ij = state.I[i], state.I[j]
-    #         xi, xj = state.xgrid[Ii], state.xgrid[Ij]
-    #         d² = sum(abs2.(xi - xj))
-    #         if all(xi .<= x .<= xj) && d² <= dmax
-    #             IL, IR, d²max = Ii, Ij, d²
-    #         end
-    #     end
-    # end
-    # return IL, IR
-
-    # NOTE: if `x` is outside of the bounding box of `state.xgrid[state.I]`,
-    # `IL` and `IR` will lie on the boundary of `R`
-    R = CartesianIndices(state.xgrid)
-    IL, IR = foldl(state.I; init = (first(R), last(R))) do (IL, IR), I
-        IL = ifelse.(Tuple(state.xgrid[I] .< x), Tuple(max(I, IL)), Tuple(IL))
-        IR = ifelse.(Tuple(state.xgrid[I] .> x), Tuple(min(I, IR)), Tuple(IR))
-        return CartesianIndex(IL), CartesianIndex(IR)
-    end
+function HermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D,T}) where {D,T}
+    f(I) = loss!(prob, I)
+    ∇f(I) = ∇loss!(prob, I)
+    HermiteSplineSurrogate(f, ∇f, prob.αs)
 end
 
 function surrogate_spline_opt(
-        f, X::AbstractVector{T};
-        mineval::Int = 2,
-        maxeval::Int = length(X),
-    ) where {T}
-
-    mineval = max(mineval, 2)
-    maxeval = min(maxeval, length(X))
-
-    # Check if X has less than mineval points
-    if 2 <= length(X) <= mineval
-        Y = T[f(i) for i in 1:length(X)]
-        return spline_opt(X, Y)
-    end
-
-    # Update observed evaluations, returning true if converged
-    function update_state!(Is, Xi, Yi, x, y)
-        converged = false
-        for i in 1:length(Is)-1
-            # Find interval containing x
-            if Xi[i] <= x <= Xi[i+1]
-                iL, iR = Is[i], Is[i+1]
-                if iL + 1 == iR
-                    # interval cannot be reduced further
-                    converged = true
-                else
-                    # insert and evaluate midpoint
-                    iM = (iL + iR) ÷ 2
-                    insert!(Is, i+1, iM)
-                    insert!(Xi, i+1, X[iM])
-                    insert!(Yi, i+1, f(iM))
-                end
-                break
-            end
-        end
-        return converged
-    end
-
-    # Initialize state
-    Is = round.(Int, range(1, length(X), length = mineval))
-    Xi = X[Is]
-    Yi = T[f(i) for i in Is]
-
-    # Surrogate minimization
-    while true
-        x, y = spline_opt(Xi, Yi) # current global minimum estimate
-        if update_state!(Is, Xi, Yi, x, y) # update and check for convergence
-            return (; x, y)
-        end
-    end
+        prob::NNLSDiscreteSurrogateSearch{D},
+        surr::AbstractSurrogate{D};
+        mineval::Int = min(2^D, length(prob.αs)),
+        maxeval::Int = length(prob.αs),
+    ) where {D}
+    state = DiscreteSurrogateBisector(surr; mineval = mineval, maxeval = maxeval)
+    bisection_search(surr, state; maxeval = maxeval)
 end
 
-function surrogate_spline_opt(
-        p::NNLSDiscreteSurrogateSearch{1,T};
-        mineval::Int = 2,
-        maxeval::Int = length(p.αs),
-    ) where {T}
-    f(i) = loss!(p, CartesianIndex(i))
-    X = reinterpret(T, p.αs)
-    surrogate_spline_opt(f, X; mineval, maxeval)
+function spline_opt(
+        spl::NormalSpline{D,T},
+        prob::NNLSDiscreteSurrogateSearch{D,T};
+        # alg = :LN_COBYLA,        # local, gradient-free, linear approximation of objective
+        # alg = :LN_BOBYQA,        # local, gradient-free, quadratic approximation of objective
+        # alg = :GN_ORIG_DIRECT_L, # global, gradient-free, systematically divides search space into smaller hyper-rectangles via a branch-and-bound technique, systematic division of the search domain into smaller and smaller hyperrectangles, "more biased towards local search"
+        # alg = :GN_AGS,           # global, gradient-free, employs the Hilbert curve to reduce the source problem to the univariate one.
+        # alg = :GD_STOGO,         # global, with-gradient, systematically divides search space into smaller hyper-rectangles via a branch-and-bound technique, and searching them by a gradient-based local-search algorithm (a BFGS variant)
+        alg = :LD_SLSQP,         # local, with-gradient, "Sequential Least-Squares Quadratic Programming"; uses dense-matrix methods (ordinary BFGS, not low-storage BFGS)
+    ) where {D,T}
+
+    evaluate!(prob.u, spl, prob.αs)
+    uopt, i = findmin(prob.u)
+    xopt = prob.αs[i]
+
+    opt = NLopt.Opt(alg, D)
+    opt.lower_bounds = Float64[prob.αs[begin]...]
+    opt.upper_bounds = Float64[prob.αs[end]...]
+    opt.xtol_rel = 0.001
+    opt.min_objective = function (x, g)
+        if length(g) > 0
+            @inbounds g[1] = Float64(evaluate_derivative(spl, x[1]))
+        end
+        @inbounds Float64(evaluate_one(spl, x[1]))
+    end
+    minf, minx, ret = NLopt.optimize(opt, Vector{Float64}(xopt))
+    return (; xopt = SVector{D,T}(minx), uopt = T(minf))
 end
 
 function mock_surrogate_search_problem(

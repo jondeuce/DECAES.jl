@@ -9,7 +9,7 @@ normccdf(x::T) where {T} = erfc(x/sqrt(T(2)))/2 # Compliment of normcdf, i.e. 1 
 
 @inline mul_im(z::Complex) = Complex(-imag(z), real(z)) # optimized i*(a+b*i) = -b+a*i
 
-@inline svector(f, n) = SVector(ntuple(f, n))
+@inline basisvector(::Type{SVector{D,T}}, i::Int) where {D,T} = SVector{D,T}(ntuple(d -> T(d == i), D))
 
 function meshgrid(::Type{T}, iters...) where {T}
     A = [T(xs) for xs in Iterators.product(iters...)]

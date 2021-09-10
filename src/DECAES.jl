@@ -1,18 +1,19 @@
 module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
-import ArgParse, BangBang, Dierckx, DocStringExtensions, ForwardDiff, Logging, MAT, NIfTI, NLopt, Parameters, PolynomialRoots, ProgressMeter, ProgressMeter, StaticArrays, SIMD, TimerOutputs, UnsafeArrays
+import ArgParse, BangBang, Dierckx, DocStringExtensions, ForwardDiff, Logging, MAT, NIfTI, NLopt, Parameters, PolynomialRoots, ProgressMeter, SIMD, StaticArrays, TimerOutputs, UnPack, UnsafeArrays
 using ArgParse: @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
 using BangBang: setproperty!!, setproperties!!
 using Base.MathConstants: φ
 using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using ForwardDiff: DiffResults
 using Logging: ConsoleLogger, with_logger
-using Parameters: @with_kw, @with_kw_noshow, @unpack, @pack!
+using Parameters: @with_kw, @with_kw_noshow
 using ProgressMeter: Progress, BarGlyphs, finish!, next!
-using StaticArrays: FieldVector, SA, SVector, SizedVector, MVector
+using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
 using SIMD: FloatingTypes, Vec, shufflevector
 using TimerOutputs: @timeit_debug, TimerOutput, reset_timer!
+using UnPack: @unpack, @pack!
 using UnsafeArrays: @uviews, uviews, uview
 
 include("NNLS.jl")
@@ -20,6 +21,9 @@ using .NNLS
 
 include("ParXRec.jl")
 using .ParXRec
+
+include("NormalHermiteSplines.jl")
+using .NormalHermiteSplines
 
 include("types.jl")
 include("utils.jl")

@@ -228,13 +228,17 @@ end
 function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
     @unpack flip_angle_work, decay_basis_set, flip_angles, refcon_angles, nnls_search_prob, decay_data, T2_times = thread_buffer
     @unpack nnls_work, chi2_alpha, decay_pred, residuals = flip_angle_work
-    @unpack alpha_opt, chi2_alpha_opt = thread_buffer
+    @unpack alpha_opt, beta_opt = thread_buffer
 
-    alpha_opt[], chi2_alpha_opt[] = surrogate_spline_opt(
-        nnls_search_prob;
+    nnls_search_surrogate = CubicSplineSurrogate(nnls_search_prob)
+    # nnls_search_surrogate = HermiteSplineSurrogate(nnls_search_prob)
+    αs, _ = surrogate_spline_opt(
+        nnls_search_prob,
+        nnls_search_surrogate;
         mineval = o.nRefAnglesMin,
         maxeval = o.nRefAngles,
     )
+    alpha_opt[] = αs[1]
 
     return nothing
 end
@@ -458,7 +462,6 @@ function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
         T2_dist_work     = T2_distribution_work(decay_basis, decay_data, o),
         alpha_opt        = Ref(decay_curve_opts.α),
         beta_opt         = Ref(decay_curve_opts.β),
-        chi2_alpha_opt   = Ref(T(NaN)),
         T2_dist          = zeros(T, o.nT2),
         gva_buf          = zeros(T, o.nT2),
         mu_opt           = Ref(T(NaN)),
