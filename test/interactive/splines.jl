@@ -28,7 +28,7 @@ function plot_neighbours(::Val{D} = Val(2)) where {D}
         newseen = state.seen .!= oldseen
 
         fig = Figure()
-        ax = fig[1, 1] = Axis(fig)
+        ax = fig[1,1] = Axis(fig)
         scatter!(xy(state.grid)...; markersize = 5, color = :black, axis = (; aspect = AxisAspect(1.0)), label = "grid")
         scatter!(xy(state.grid[oldseen])...; markersize = 20, color = :darkblue, label = "old pts")
         scatter!(xy(state.grid[newseen])...; markersize = 20, color = :orange, label = "new pts")
@@ -39,7 +39,15 @@ function plot_neighbours(::Val{D} = Val(2)) where {D}
     end
 end
 
-function plot_bisection_search_1D(; surrtype = :hermite, npts, mineval = 5, maxeval = npts)
+function plot_bisection_search(
+        ::Val{D} = Val(2);
+        surrtype = :hermite,
+        npts     = 25,
+        mineval  = 5,
+        maxeval  = npts,
+    ) where {D}
+    surrtype === :cubic && @assert D == 1 "cubic splines only support 1D"
+
     # grid  = DECAES.meshgrid(SVector{1,Float64}, range(0, 1; length = npts))
     # xopt   = rand()
     # ftrue  = x -> sum(@. 5 * sin(5 * (x - xopt))^2 + (x - xopt)^2)
@@ -50,12 +58,13 @@ function plot_bisection_search_1D(; surrtype = :hermite, npts, mineval = 5, maxe
 
     # build surrogate
     opts = DECAES.mock_t2map_opts(; MatrixSize = (1,1,1), nTE = 32, SetFlipAngle = 150.0, SetRefConAngle = 90.0)
-    prob = DECAES.mock_surrogate_search_problem(Val(1), Val(32); opts = opts)
+    prob = DECAES.mock_surrogate_search_problem(Val(D), Val(32); opts = opts)
     surr = surrtype === :cubic ?
         DECAES.CubicSplineSurrogate(prob) :
         DECAES.HermiteSplineSurrogate(prob)
-    ftrue = function(α)
-        θ = DECAES.EPGOptions{Float64,32}(α, opts.TE, 0.0, opts.T1, opts.SetRefConAngle)
+    ftrue = function(x)
+        α, β = D == 1 ? (x[1], opts.SetRefConAngle) : (x[1], x[2])
+        θ = DECAES.EPGOptions{Float64,32}(α, opts.TE, 0.0, opts.T1, β)
         A = DECAES.epg_decay_basis(θ, DECAES.logrange(opts.T2Range..., opts.nT2))
         nnls_prob = DECAES.NNLSProblem(A, prob.b)
         DECAES.solve!(nnls_prob, A, prob.b)
@@ -68,20 +77,33 @@ function plot_bisection_search_1D(; surrtype = :hermite, npts, mineval = 5, maxe
 
     # reconstruct surrogate from evaluated points and plot
     spl = if surrtype === :cubic
-        DECAES._make_spline(first.(surr.x), surr.u)
+        DECAES._make_spline(first.(surr.p), surr.u)
     else
-        herm = DECAES.interpolate(surr.x, surr.u, surr.x, surr.e, surr.du, DECAES.RK_H1())
-        x -> DECAES.evaluate_one(herm, x)
+        herm = DECAES.interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, DECAES.RK_H1())
+        (x...) -> DECAES.evaluate_one(herm, SVector(x...))
     end
 
-    fig = Figure()
-    ax = fig[1, 1] = Axis(fig)
-    lines!(ax, surr.grid[1][1]..surr.grid[end][1], ftrue; color = :darkblue, label = "f")
-    lines!(ax, surr.grid[1][1]..surr.grid[end][1], x -> spl(x); color = :darkred, label = "spline")
-    scatter!(ax, first.(surr.x), surr.u; markersize = 15, color = :blue, label = "samples")
-    scatter!(ax, first.(minx), [miny]; markersize = 15, color = :red, marker = :diamond, label = "min")
-    fig[1,2] = Legend(fig, ax)
-    return fig
+    if D == 1
+        fig = Figure()
+        ax = fig[1,1] = Axis(fig)
+        lines!(ax, surr.grid[1][1]..surr.grid[end][1], ftrue; color = :darkblue, label = "f")
+        lines!(ax, surr.grid[1][1]..surr.grid[end][1], x -> spl(x); color = :darkred, label = "spline")
+        scatter!(ax, first.(surr.p), surr.u; markersize = 15, color = :blue, label = "samples")
+        scatter!(ax, first.(minx), [miny]; markersize = 15, color = :red, marker = :diamond, label = "min")
+        fig[1,2] = Legend(fig, ax)
+        return fig
+    else
+        xs, ys = (p->p[1]).(surr.grid), (p->p[2]).(surr.grid)
+        zs = spl.(xs, ys)
+        fig = Figure()
+        ax = Axis(fig[1,1])
+        pcont = contourf!(ax, xs[:,1], ys[:,2], zs)
+        scatter!(ax, (p->p[1]).(surr.p), (p->p[2]).(surr.p), surr.u; markersize = 15, color = :blue, label = "samples")
+        scatter!(ax, [minx[1]], [minx[2]]; markersize = 15, color = :red, marker = :diamond, label = "min")
+        Colorbar(fig[1,2], pcont)
+        Legend(fig[1,3], ax)
+        return fig
+    end
 end
 
 function benchmark_spline()

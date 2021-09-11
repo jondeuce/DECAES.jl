@@ -172,7 +172,7 @@ abstract type AbstractSurrogate{D,T} end
 struct CubicSplineSurrogate{T,F} <: AbstractSurrogate{1,T}
     f::F
     grid::Vector{SVector{1,T}}
-    x::Vector{SVector{1,T}}
+    p::Vector{SVector{1,T}}
     u::Vector{T}
 end
 
@@ -181,19 +181,19 @@ function CubicSplineSurrogate(f, grid::Vector{SVector{1,T}}) where {T}
 end
 
 function update!(surr::CubicSplineSurrogate, I::CartesianIndex{1})
-    xI = surr.grid[I]
-    pos = length(surr.x) + 1
-    @inbounds for i in 1:length(surr.x)
-        (xI[1] <= surr.x[i][1]) && (pos = i; break)
+    p = surr.grid[I]
+    pos = length(surr.p) + 1
+    @inbounds for i in 1:length(surr.p)
+        (p[1] <= surr.p[i][1]) && (pos = i; break)
     end
-    insert!(surr.x, pos, xI)
+    insert!(surr.p, pos, p)
     insert!(surr.u, pos, surr.f(I))
     return surr
 end
 
 function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
-    @unpack x, y = spline_opt(reinterpret(T, surr.x), surr.u)
-    return (; x = SVector{1,T}(x), y = T(y))
+    p, u = spline_opt(reinterpret(T, surr.p), surr.u)
+    return SVector{1,T}(p), T(u)
 end
 
 struct HermiteSplineSurrogate{D,T,F,G} <: AbstractSurrogate{D,T}
@@ -201,22 +201,24 @@ struct HermiteSplineSurrogate{D,T,F,G} <: AbstractSurrogate{D,T}
     ∇f::G
     grid::Array{SVector{D,T},D}
     ugrid::Array{T,D}
-    x::Vector{SVector{D,T}}
+    p::Vector{SVector{D,T}}
     u::Vector{T}
+    s::Vector{SVector{D,T}}
     e::Vector{SVector{D,T}}
     du::Vector{T}
 end
 
 function HermiteSplineSurrogate(f, ∇f, grid::Array{SVector{D,T},D}) where {D,T}
-    HermiteSplineSurrogate(f, ∇f, grid, zeros(T, size(grid)), SVector{D,T}[], T[], SVector{D,T}[], T[])
+    HermiteSplineSurrogate(f, ∇f, grid, zeros(T, size(grid)), SVector{D,T}[], T[], SVector{D,T}[], SVector{D,T}[], T[])
 end
 
 function update!(surr::HermiteSplineSurrogate{D,T}, I::CartesianIndex{D}) where {D,T}
-    xI = surr.grid[I]
     u, ∇u = surr.f(I), surr.∇f(I)
-    push!(surr.x, xI)
+    @inbounds p = surr.grid[I]
+    push!(surr.p, p)
     push!(surr.u, u)
-    for i in 1:D
+    @inbounds for i in 1:D
+        push!(surr.s, p)
         push!(surr.e, basisvector(SVector{D,T}, i))
         push!(surr.du, ∇u[i])
     end
@@ -224,10 +226,10 @@ function update!(surr::HermiteSplineSurrogate{D,T}, I::CartesianIndex{D}) where 
 end
 
 function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
-    spl = interpolate(surr.x, surr.u, surr.x, surr.e, surr.du, RK_H1())
-    y, I = findmin(evaluate!(vec(surr.ugrid), spl, vec(surr.grid)))
-    x = surr.grid[I]
-    return (; x = x, y = y)
+    spl = interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, RK_H1())
+    u, I = findmin(evaluate!(vec(surr.ugrid), spl, vec(surr.grid)))
+    p = surr.grid[I]
+    return (p, u)
 end
 
 ####
@@ -309,10 +311,10 @@ function bisection_search(
     #       2a. Return if box is sufficiently small or if the maximum number of evaluations has been reched
     #       2b. Otherwise, evaluate all corners of the box and go to 1.
     while true
-        x, y = suggest_point(surr)
-        box = minimal_bounding_box(state, x)
+        popt, uopt = suggest_point(surr)
+        box = minimal_bounding_box(state, popt)
         if state.numeval[] ≥ maxeval || converged(state, box)
-            return (; x, y)
+            return (popt, uopt)
         else
             evaluate_box!(surr, state, box; maxeval = maxeval)
         end
@@ -356,7 +358,7 @@ function evaluate_box!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisec
 end
 
 function converged(::DiscreteSurrogateBisector{D}, box::BoundingBox{D}) where {D}
-    # Convergence is defined as: bounding box containing `x` has at least one side of length <= 1
+    # Convergence is defined as: bounding box has at least one side of length <= 1
     any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D) .<= 1)
 end
 
@@ -469,8 +471,8 @@ function spline_opt(
     ) where {D,T}
 
     evaluate!(prob.u, spl, prob.αs)
-    uopt, i = findmin(prob.u)
-    xopt = prob.αs[i]
+    _, i = findmin(prob.u)
+    α₀ = prob.αs[i]
 
     opt = NLopt.Opt(alg, D)
     opt.lower_bounds = Float64[prob.αs[begin]...]
@@ -482,8 +484,8 @@ function spline_opt(
         end
         @inbounds Float64(evaluate_one(spl, x[1]))
     end
-    minf, minx, ret = NLopt.optimize(opt, Vector{Float64}(xopt))
-    return (; xopt = SVector{D,T}(minx), uopt = T(minf))
+    minf, minx, ret = NLopt.optimize(opt, Vector{Float64}(α₀))
+    return (SVector{D,T}(minx), T(minf))
 end
 
 function mock_surrogate_search_problem(
