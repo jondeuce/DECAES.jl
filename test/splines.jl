@@ -81,10 +81,11 @@ function test_minimal_bounding_box()
     @test DECAES.minimal_bounding_box(state, SA[4.5, 8.5]) == DECAES.BoundingBox(((1,5), (7,10)))
 end
 
-@testset "mock surrogate search problem" begin
-    test_mock_surrogate_search_problem()
-end
-
-@testset "minimal bounding box" begin
-    test_minimal_bounding_box()
+@testset "Splines" begin
+    @testset "mock surrogate search problem" begin
+        test_mock_surrogate_search_problem()
+    end
+    @testset "minimal bounding box" begin
+        test_minimal_bounding_box()
+    end
 end

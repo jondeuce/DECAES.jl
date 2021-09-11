@@ -147,6 +147,7 @@ function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {
     maps["fnr"]   = fill(T(NaN), opts.MatrixSize...)
     maps["snr"]   = fill(T(NaN), opts.MatrixSize...)
     maps["alpha"] = fill(T(NaN), opts.MatrixSize...)
+    maps["beta"]  = fill(T(NaN), opts.MatrixSize...)
 
     # Optional output maps
     if opts.SaveResidualNorm
@@ -188,14 +189,14 @@ function voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, o
     end
 
     # Find optimum flip angle
-    if opts.SetFlipAngle === nothing
+    if opts.SetFlipAngle === nothing || opts.SetRefConAngle === nothing
         @timeit_debug TIMER() "Optimize Flip Angle" begin
             optimize_flip_angle!(thread_buffer, opts)
         end
     end
 
-    # Fit decay basis using optimized alpha
-    if opts.SetFlipAngle === nothing
+    # Fit decay basis using optimized alpha, beta
+    if opts.SetFlipAngle === nothing || opts.SetRefConAngle === nothing
         @timeit_debug TIMER() "Compute Final NNLS Basis" begin
             epg_decay_basis!(thread_buffer, opts)
         end
@@ -218,7 +219,6 @@ end
 function optimize_flip_angle_work(o::T2mapOptions{T}) where {T}
     work = (
         nnls_work  = lsqnonneg_work(zeros(T, o.nTE, o.nT2), zeros(T, o.nTE)),
-        chi2_alpha = zeros(T, o.nRefAngles),
         decay_pred = zeros(T, o.nTE),
         residuals  = zeros(T, o.nTE),
     )
@@ -226,19 +226,19 @@ function optimize_flip_angle_work(o::T2mapOptions{T}) where {T}
 end
 
 function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
-    @unpack flip_angle_work, decay_basis_set, flip_angles, refcon_angles, nnls_search_prob, decay_data, T2_times = thread_buffer
-    @unpack nnls_work, chi2_alpha, decay_pred, residuals = flip_angle_work
-    @unpack alpha_opt, beta_opt = thread_buffer
+    @unpack nnls_search_prob, alpha_opt, beta_opt = thread_buffer
 
     nnls_search_surrogate = CubicSplineSurrogate(nnls_search_prob)
     # nnls_search_surrogate = HermiteSplineSurrogate(nnls_search_prob)
+
     αs, _ = surrogate_spline_opt(
         nnls_search_prob,
         nnls_search_surrogate;
         mineval = o.nRefAnglesMin,
         maxeval = o.nRefAngles,
     )
-    alpha_opt[] = αs[1]
+    (o.SetFlipAngle === nothing) && @inbounds(alpha_opt[] = αs[1])
+    (o.SetRefConAngle === nothing) && @inbounds(beta_opt[] = o.SetFlipAngle === nothing ? αs[2] : αs[1])
 
     return nothing
 end
@@ -247,7 +247,7 @@ end
 # EPG decay curve fitting
 # =========================================================
 function init_epg_decay_basis!(thread_buffer, o::T2mapOptions)
-    @unpack decay_curve_work, decay_curve_jac!, ∇decay_basis_set, decay_basis_set, decay_basis, nnls_search_prob, decay_curve_opts, opt_vars, T2_times = thread_buffer
+    @unpack decay_curve_work, decay_curve_jac!, ∇decay_basis_set, decay_basis_set, decay_basis, nnls_search_prob, decay_curve_opts, T2_times = thread_buffer
 
     if o.SetFlipAngle === nothing || o.SetRefConAngle === nothing
         # Loop to compute basis for each angle
@@ -335,8 +335,7 @@ function T2_distribution_work(decay_basis, decay_data, o::T2mapOptions{T}) where
 end
 
 function fit_T2_distribution!(thread_buffer, o::T2mapOptions{T}) where {T}
-    @unpack T2_dist_work, decay_basis, decay_data = thread_buffer
-    @unpack T2_dist, mu_opt, chi2fact_opt = thread_buffer
+    @unpack T2_dist_work, T2_dist, mu_opt, chi2fact_opt = thread_buffer
 
     @unpack x, mu, chi2factor = if o.Reg == "none"
         # Fit T2 distribution using unregularized NNLS
@@ -363,21 +362,22 @@ end
 # Save thread local results to output maps
 # =========================================================
 function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::CartesianIndex)
-    @unpack T2_dist, T2_times, logT2_times, alpha_opt, mu_opt, chi2fact_opt, decay_data, decay_basis = thread_buffer
+    @unpack T2_dist, T2_times, logT2_times, alpha_opt, beta_opt, mu_opt, chi2fact_opt, decay_data, decay_basis = thread_buffer
     @unpack decay_calc, residuals, gva_buf, curr_count = thread_buffer
 
     # Compute and save parameters of distribution
     @inbounds begin
-        @unpack gdn, ggm, gva, fnr, snr, alpha = maps
+        @unpack gdn, ggm, gva, fnr, snr, alpha, beta = maps
         mul!(decay_calc, decay_basis, T2_dist)
         residuals .= decay_calc .- decay_data
-        gdn[I] = sum(T2_dist)
-        ggm[I] = exp(dot(T2_dist, logT2_times) / sum(T2_dist))
+        gdn[I]   = sum(T2_dist)
+        ggm[I]   = exp(dot(T2_dist, logT2_times) / sum(T2_dist))
         gva_buf .= (logT2_times .- log(ggm[I])).^2 .* T2_dist
-        gva[I] = exp(sum(gva_buf) / sum(T2_dist)) - 1
-        fnr[I] = sum(T2_dist) / sqrt(sum(abs2, residuals)/(o.nTE-1))
-        snr[I] = maximum(decay_data) / std(residuals)
+        gva[I]   = exp(sum(gva_buf) / sum(T2_dist)) - 1
+        fnr[I]   = sum(T2_dist) / sqrt(sum(abs2, residuals)/(o.nTE-1))
+        snr[I]   = maximum(decay_data) / std(residuals)
         alpha[I] = alpha_opt[]
+        beta[I]  = beta_opt[]
     end
 
     # Save distribution

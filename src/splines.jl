@@ -413,7 +413,7 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) whe
     @unpack As, b, nnls_work = prob
     solve!(nnls_work, uview(As, :, :, I), b)
     ℓ = chi2(nnls_work)
-    u = log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
+    u = LEGACY[] ? ℓ : log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
     return u
 end
 
@@ -432,7 +432,7 @@ function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) 
             (x[j] > 0) && axpy!(x[j], uview(∇As, :, j, d, I), ∂Ax⁺)
         end
         ∂ℓ = 2 * dot(∂Ax⁺, Ax⁺b)
-        ∂u = ∂ℓ / ℓ
+        ∂u = LEGACY[] ? ∂ℓ : ∂ℓ / ℓ
         return ∂u
     end
     return SVector{D,T}(∇u)

@@ -163,7 +163,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T,ETL}
     @unpack MPSV = work
     @unpack α, TE, T2, T1, β = θ
     V = SA{Complex{T}} # alias
-    
+
     # Precompute compute element flip matrices and other intermediate variables
     αₑₓ    = α/2
     α₁, αᵢ = α, α * (β / 180)
