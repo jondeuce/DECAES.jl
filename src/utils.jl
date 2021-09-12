@@ -25,6 +25,13 @@ meshgrid(iters...) = meshgrid(Tuple, iters...)
 end
 @inline SplitCartesianIndices(x::AbstractArray{<:Any,N}, ::Val{M}) where {N,M} = SplitCartesianIndices(size(x), Val(M))
 
+@generated function fieldsof(::Type{T}, ::Type{C} = Tuple) where {T,C}
+    fields = fieldnames(T) # fieldnames(T) allocates; hoist to generated function
+    return C <: Tuple ?
+        :($fields) : # default to returning tuple of field symbols
+        :($(C(Symbol[fields...]))) # call container constructor on vector of symbols
+end
+
 function set_diag!(A::AbstractMatrix, val)
     @inbounds @simd ivdep for i in 1:min(size(A)...)
         A[i,i] = val

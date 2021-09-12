@@ -44,6 +44,30 @@ Base.NamedTuple(θ::EPGOptions{T}) where {T} = NamedTuple{(:α,:TE,:T2,:T1,:β),
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
 
+@generated function destructure(θ::EPGOptions{T,ETL}, ::Val{Fs}) where {T,ETL,Fs}
+    N = length(Fs)
+    vals = [:(getproperty(θ, $(QuoteNode(F)))) for F in Fs]
+    :(Base.@_inline_meta; SVector{$N,$T}(tuple($(vals...))))
+end
+destructure(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = SVector{N,T}(map(F -> getproperty(θ, F), Fs))
+
+@generated function restructure(θ::EPGOptions{<:Any,ETL}, x::AbstractVector{T}, ::Val{Fs}) where {T,ETL,Fs}
+    idxmap = NamedTuple{Fs}(ntuple(i -> i, length(Fs)))
+    vals   = [F ∈ Fs ? :(@inbounds(x[$(getproperty(idxmap, F))])) : :(getproperty(θ, $(QuoteNode(F)))) for F in fieldsof(θ)]
+    :(Base.@_inline_meta; EPGOptions{$T,$ETL}(tuple($(vals...))))
+end
+function restructure(θ::EPGOptions{<:Any,ETL}, x::AbstractVector{T}, Fs::NTuple{N,Symbol}) where {T,ETL,N}
+    fields = fieldsof(typeof(θ))
+    vals   = ntuple(length(θ)) do i
+        @inbounds for j in 1:N
+            (Fs[j] == fields[i]) && return x[j]
+        end
+        @inbounds getproperty(θ, fields[i])
+    end
+    return EPGOptions{T,ETL}(vals)
+end
+restructure(θ::EPGOptions{T,ETL}, x::NamedTuple{Fs}) where {T,ETL,Fs} = restructure(θ, SVector(Tuple(x)), Val(Fs))
+
 """
     EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real)
 
@@ -89,33 +113,25 @@ end
 end
 @inline cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T,ETL} = EPGWork_ReIm_DualMVector_Split{T, ETL, MVector{ETL, SVector{3, T}}, MVector{ETL, T}}
 
-struct EPGFunctor{T,ETL,N,Fs}
+struct EPGFunctor{T,ETL,Fs}
     caches::EPGWorkCacheDict{ETL}
     θ::EPGOptions{T,ETL}
 end
-EPGFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = EPGFunctor{T,ETL,N,Fs}(EPGWorkCacheDict{ETL}(), θ)
-EPGFunctor(f!::EPGFunctor{T,ETL,N,Fs}, θ::EPGOptions{T,ETL}) where {T,ETL,N,Fs} = EPGFunctor{T,ETL,N,Fs}(f!.caches, θ)
+EPGFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = EPGFunctor{T,ETL,Fs}(EPGWorkCacheDict{ETL}(), θ)
+EPGFunctor(f!::EPGFunctor{T,ETL,Fs}, θ::EPGOptions{T,ETL}) where {T,ETL,Fs} = EPGFunctor{T,ETL,Fs}(f!.caches, θ)
 
-@generated function destructure(::EPGFunctor{<:Any,ETL,N,Fs}, θ::EPGOptions{D,ETL}) where {D,ETL,N,Fs}
-    vals = [:(getproperty(θ, $(QuoteNode(F)))) for F in Fs]
-    :(Base.@_inline_meta; SVector{$N,$D}(tuple($(vals...))))
-end
-
-@generated function restructure(f!::EPGFunctor{<:Any,ETL,N,Fs}, x::AbstractVector{D}) where {D,ETL,N,Fs}
-    idxmap = NamedTuple{Fs}(1:N)
-    vals   = [F ∈ Fs ? :(x[$(getproperty(idxmap, F))]) : :(getproperty(f!.θ, $(QuoteNode(F)))) for F in fieldnames(EPGOptions)]
-    :(Base.@_inline_meta; EPGOptions{$D,$ETL}(tuple($(vals...))))
-end
+@inline EPGOptions(f!::EPGFunctor) = f!.θ
+@inline optfields(::EPGFunctor{T,ETL,Fs}) where {T,ETL,Fs} = Val(Fs)
 
 function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D,ETL}, x::AbstractVector{D}) where {D,ETL}
-    θ = restructure(f!, x)
+    θ = restructure(EPGOptions(f!), x, optfields(f!))
     DECAES.EPGdecaycurve!(y, epg_work, θ)
 end
 (f!::EPGFunctor)(x::AbstractVector{D}) where {D} = f!(get_decaycurve(f!.caches[D]), f!.caches[D], x)
 (f!::EPGFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D} = f!(y, f!.caches[D], x)
 
-struct EPGJacobianFunctor{T, ETL, N, Fs, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
-    f!::EPGFunctor{T,ETL,N,Fs}
+struct EPGJacobianFunctor{T, ETL, Fs, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
+    f!::EPGFunctor{T,ETL,Fs}
     res::R
     cfg::C
 end
@@ -126,13 +142,13 @@ function EPGJacobianFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {
     return EPGJacobianFunctor(f!, res, cfg)
 end
 
-destructure(j!::EPGJacobianFunctor{<:Any,ETL}, θ::EPGOptions{D,ETL}) where {D,ETL} = destructure(j!.f!, θ)
-restructure(j!::EPGJacobianFunctor{<:Any,ETL}, x::AbstractVector{D}) where {D,ETL} = restructure(j!.f!, x)
+@inline EPGOptions(j!::EPGJacobianFunctor) = EPGOptions(j!.f!)
+@inline optfields(j!::EPGJacobianFunctor) = optfields(j!.f!)
 
 function (j!::EPGJacobianFunctor{T,ETL})(J::Union{AbstractMatrix, DiffResults.DiffResult}, y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
     @unpack f!, cfg = j!
     f! = EPGFunctor(f!, θ)
-    x  = destructure(f!, θ)
+    x  = destructure(EPGOptions(f!), optfields(f!))
     ForwardDiff.jacobian!(J, f!, y, x, cfg)
     return J isa AbstractMatrix ? J : DiffResults.jacobian(J)
 end

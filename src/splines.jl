@@ -263,7 +263,7 @@ function bisect(box::BoundingBox{D}) where {D}
     return BoundingBox(left_bounds), BoundingBox(right_bounds)
 end
 
-splittable(box::BoundingBox{D}) where {D} = any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D) .> 1)
+splittable(box::BoundingBox{D}) where {D} = any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]) > 1, D))
 
 ####
 #### Global optimization using multi-dimensional bisection with surrogate functions
@@ -281,9 +281,9 @@ function DiscreteSurrogateBisector(surr::AbstractSurrogate; mineval::Int, maxeva
 end
 
 function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisector{D}; mineval::Int, maxeval::Int) where {D}
-    # Evaluate at least `mineval` points by repeatedly bisecting the grid
+    # Evaluate at least `mineval` points by repeatedly bisecting the grid in a breadth-first manner
     box = BoundingBox(size(state.grid))
-    for depth in 1:mineval # should never reach `mineval` depth, this is just to ensure the loop terminates
+    for depth in 1:mineval # should never reach `mineval` depth, this is just to ensure the loop terminates in case `mineval` is greater than the number of gridpoints
         initialize!(surr, state, box, depth; mineval = mineval, maxeval = maxeval)
         state.numeval[] >= mineval && break
     end
@@ -347,7 +347,7 @@ function minimal_bounding_box(
 end
 
 function evaluate_box!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisector{D}, box::BoundingBox{D}; maxeval::Int) where {D}
-    for I in box.corners
+    @inbounds for I in box.corners
         state.numeval[] >= maxeval && break # max evals reached
         state.seen[I] && continue # point already evaluated
         update!(surr, I) # update surrogate
@@ -359,11 +359,11 @@ end
 
 function converged(::DiscreteSurrogateBisector{D}, box::BoundingBox{D}) where {D}
     # Convergence is defined as: bounding box has at least one side of length <= 1
-    any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D) .<= 1)
+    any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]) <= 1, D))
 end
 
 function contains(state::DiscreteSurrogateBisector{D}, box::BoundingBox{D}) where {D}
-    all(I -> state.seen[I], box.corners)
+    all(I -> @inbounds(state.seen[I]), box.corners)
 end
 
 function contains(state::DiscreteSurrogateBisector{D,T}, box::BoundingBox{D}, x::SVector{D,T}) where {D,T}

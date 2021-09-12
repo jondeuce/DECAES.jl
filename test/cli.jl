@@ -134,9 +134,11 @@ function construct_args(paramdict;
         t2map_args  = T2map  ? Dict{Symbol,Any}(:legacy => legacy) : nothing
         t2part_args = T2part ? Dict{Symbol,Any}(:legacy => legacy) : nothing
 
+        t2map_fields = DECAES.fieldsof(T2mapOptions, Set)
+        t2part_fields = DECAES.fieldsof(T2partOptions, Set)
         for (param, paramval) in paramdict
-            T2map  && (param ∈ fieldnames(T2mapOptions))  && setindex!(t2map_args, paramval, param)
-            T2part && (param ∈ fieldnames(T2partOptions)) && setindex!(t2part_args, paramval, param)
+            T2map  && (param ∈ t2map_fields)  && setindex!(t2map_args, paramval, param)
+            T2part && (param ∈ t2part_fields) && setindex!(t2part_args, paramval, param)
         end
 
         return t2map_args, t2part_args

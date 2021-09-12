@@ -344,7 +344,7 @@ function handle_renamed_cli_flag!(opts, oldnew::Pair{Symbol, Symbol})
 end
 
 function t2map_options(image::Array, opts::Dict{Symbol,Any})
-    fields = fieldnames(T2mapOptions)
+    fields = fieldsof(T2mapOptions, Set)
     kwargs = Dict{Symbol,Any}()
     for (k,v) in opts
         (v === nothing) && continue # filter unset cli args
@@ -356,7 +356,7 @@ function t2map_options(image::Array, opts::Dict{Symbol,Any})
 end
 
 function t2part_options(dist::Array, opts::Dict{Symbol,Any})
-    fields = fieldnames(T2partOptions)
+    fields = fieldsof(T2partOptions, Set)
     kwargs = Dict{Symbol,Any}()
     for (k,v) in opts
         (v === nothing) && continue # filter unset cli args

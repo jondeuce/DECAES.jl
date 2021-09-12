@@ -253,7 +253,7 @@ function init_epg_decay_basis!(thread_buffer, o::T2mapOptions)
         # Loop to compute basis for each angle
         @inbounds for I in CartesianIndices(nnls_search_prob.αs)
             αs = nnls_search_prob.αs[I]
-            θ  = restructure(decay_curve_jac!, αs)
+            θ  = restructure(EPGOptions(decay_curve_jac!), αs, optfields(decay_curve_jac!))
             ∇epg_decay_basis!(uview(∇decay_basis_set, :, :, :, I), uview(decay_basis_set, :, :, I), decay_curve_jac!, θ, T2_times)
         end
     else
