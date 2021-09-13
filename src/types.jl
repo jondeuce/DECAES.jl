@@ -78,7 +78,7 @@ See also:
 
     "Refocusing pulse control angle for stimulated echo correction (Units: degrees)."
     SetRefConAngle::Union{T,Nothing} = 180.0 # degrees
-    @assert 0.0 <= SetRefConAngle <= 180.0
+    @assert SetRefConAngle === nothing || 0.0 <= SetRefConAngle <= 180.0
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
     SetFlipAngle::Union{T,Nothing} = nothing

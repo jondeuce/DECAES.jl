@@ -228,8 +228,9 @@ end
 function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
     @unpack nnls_search_prob, alpha_opt, beta_opt = thread_buffer
 
-    nnls_search_surrogate = CubicSplineSurrogate(nnls_search_prob)
-    # nnls_search_surrogate = HermiteSplineSurrogate(nnls_search_prob)
+    nnls_search_surrogate = LEGACY[] ?
+        CubicSplineSurrogate(nnls_search_prob) :
+        HermiteSplineSurrogate(nnls_search_prob)
 
     αs, _ = surrogate_spline_opt(
         nnls_search_prob,
