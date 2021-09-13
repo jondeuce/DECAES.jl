@@ -1,5 +1,5 @@
 if normpath(@__DIR__) ∉ LOAD_PATH
-    pushfirst!(LOAD_PATH, normpath(@__DIR__, "../../.."))
+    pushfirst!(LOAD_PATH, normpath(@__DIR__, "../.."))
     pushfirst!(LOAD_PATH, normpath(@__DIR__))
 end
 

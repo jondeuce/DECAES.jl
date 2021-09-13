@@ -113,6 +113,36 @@ end
 end
 @inline cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T,ETL} = EPGWork_ReIm_DualMVector_Split{T, ETL, MVector{ETL, SVector{3, T}}, MVector{ETL, T}}
 
+#=
+struct EPGWorkDualCache{T, D}
+    work::T
+    dual_work::D
+end
+
+function EPGWorkDualCache(::Type{T}, ::Val{ETL}, ::Val{chunk_size}) where {T, ETL, chunk_size}
+    D = ForwardDiff.Dual{nothing, T, chunk_size}
+    work = EPGWork_ReIm_DualCache_Split(T, ETL)
+    dual_work = EPGWork_ReIm_DualCache_Split(D, ETL)
+    EPGWorkDualCache(work, dual_work)
+end
+
+getindex(c::EPGWorkDualCache, ::Type{T}) where {T} = c.work
+getindex(c::EPGWorkDualCache, ::Type{D}) where {D <: ForwardDiff.Dual} = remake(c.dual_work, D)
+
+remake(x::Array, ::Type{T}) where {T} = x
+remake(x::Array, ::Type{D}) where {D <: ForwardDiff.Dual} = reinterpret(D, x)
+
+@inline function remake(work::EPGWork_ReIm_DualCache_Split{<:Any, ETL}, ::Type{D}) where {D <: ForwardDiff.Dual, ETL}
+    mpsv₁ = reinterpret(SVector{3,D}, work.MPSV₁.data)
+    mpsv₁ = SizedVector{ETL,SVector{3,D},typeof(mpsv₁)}(mpsv₁)
+    mpsv₂ = reinterpret(SVector{3,D}, work.MPSV₂.data)
+    mpsv₂ = SizedVector{ETL,SVector{3,D},typeof(mpsv₂)}(mpsv₂)
+    dc    = reinterpret(D, work.dc.data)
+    dc    = SizedVector{ETL,D,typeof(dc)}(dc)
+    EPGWork_ReIm_DualCache_Split{D,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+end
+=#
+
 struct EPGFunctor{T,ETL,Fs}
     caches::EPGWorkCacheDict{ETL}
     θ::EPGOptions{T,ETL}
@@ -555,107 +585,6 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualCache_Sp
 end
 
 ####
-#### EPGWork_ReIm_DualCache_Unrolled
-####
-
-struct EPGWork_ReIm_DualCache_Unrolled{T, ETL, MPSVType <: AbstractVector{SVector{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
-    MPSV₁::MPSVType
-    MPSV₂::MPSVType
-    dc::DCType
-end
-function EPGWork_ReIm_DualCache_Unrolled(T, ETL::Int)
-    mpsv₁ = SizedVector{ETL,SVector{3,T}}(undef)
-    mpsv₂ = SizedVector{ETL,SVector{3,T}}(undef)
-    dc    = SizedVector{ETL,T}(undef)
-    EPGWork_ReIm_DualCache_Unrolled{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
-end
-
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualCache_Unrolled{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
-    # Unpack workspace
-    @unpack MPSV₁, MPSV₂ = work
-    @unpack α, TE, T2, T1, β = θ
-    V = SA{T} # alias
-
-    # Precompute intermediate variables
-    α                = deg2rad(α)
-    α₁, αᵢ           = α, α*β/180
-    E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
-    sin½α₁, cos½α₁   = sincos(α₁/2)
-    sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
-    sinα₁            = 2*sin½α₁*cos½α₁
-    sinαᵢ, cosαᵢ     = sincos(αᵢ)
-    cos²½αᵢ          = (1+cosαᵢ)/2
-    sin²½αᵢ          = 1-cos²½αᵢ
-    a₁, b₁, c₁       = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
-    F, F̄, Z          = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
-
-    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
-    @inbounds begin
-        m₀  = sin½α₁
-        M₁  = V[b₁*m₀, 0, -c₁*m₀/2]
-        M₂  = V[a₁*m₀, 0, 0]
-        M₁⁺ = V[F̄⋅M₁, F̄⋅M₂, Z⋅M₁] # V[F̄⋅Mᵢ,   F̄⋅Mᵢ₊₁, Z⋅Mᵢ], j=1
-        M₂⁺ = V[F⋅M₁, 0, Z⋅M₂]    # V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ], j=2, M₃ = 0
-        M₃⁺ = V[F⋅M₂, 0, 0]       # V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ], j=3, M₃ = M₄ = 0
-
-        dc[1]        = abs(M₁[1])
-        dc[2]        = abs(M₁⁺[1])
-        MPSV₁[1]     = M₁⁺
-        MPSV₁[2]     = M₂⁺
-        MPSV₁[3]     = M₃⁺
-        MPSV₁[4]     = V[0, 0, 0]
-        MPSV₁[5]     = V[0, 0, 0]
-        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
-    end
-
-    @inbounds for i in 3:ETL-1
-        # j = 1, j = 2, and update `dc`
-        Mᵢ, Mᵢ₊₁, Mᵢ₊₂ = MPSV₂[1], MPSV₂[2], MPSV₂[3]
-        Mᵢ⁺            = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        Mᵢ₊₁⁺          = V[F⋅Mᵢ, F̄⋅Mᵢ₊₂, Z⋅Mᵢ₊₁]
-        dc[i]          = abs(Mᵢ⁺[1])
-        MPSV₁[1]       = Mᵢ⁺
-        MPSV₁[2]       = Mᵢ₊₁⁺
-
-        # inner loop
-        jup = min(i, ETL-i)
-        @simd for j in 3:2:jup#-isodd(jup)
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁, Mᵢ₊₂ = Mᵢ₊₁, Mᵢ₊₂, MPSV₂[j+1], MPSV₂[j+2]
-            MPSV₁[j]             = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-            MPSV₁[j+1]           = V[F⋅Mᵢ,   F̄⋅Mᵢ₊₂, Z⋅Mᵢ₊₁]
-        end
-
-        # cleanup for next iteration
-        if i == jup
-            if iseven(jup)
-                Mᵢ₋₁ = Mᵢ₊₁
-                MPSV₁[jup+1] = V[F⋅Mᵢ₋₁, 0, 0]
-                MPSV₁[jup+2] = V[0, 0, 0]
-                MPSV₁[jup+3] = V[0, 0, 0]
-            else
-                # inner loop: for j in 3:2:jup
-                # MPSV₁[jup+1] = V[F⋅Mᵢ, 0, 0] # (with or without)
-                MPSV₁[jup+2] = V[0, 0, 0]
-
-                # # (not working) inner loop: for j in 3:2:jup-isodd
-                # Mᵢ₋₁, Mᵢ = Mᵢ₊₁, Mᵢ₊₂
-                # MPSV₁[jup]   = V[F⋅Mᵢ₋₁, 0, Z⋅Mᵢ]
-                # MPSV₁[jup+1] = V[F⋅Mᵢ, 0, 0]
-                # MPSV₁[jup+2] = V[0, 0, 0]
-                # MPSV₁[jup+3] = V[0, 0, 0]
-            end
-        end
-
-        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
-    end
-
-    @inbounds dc[ETL] = abs(F̄⋅MPSV₂[1])
-
-    return dc
-end
-
-####
 #### EPGWork_ReIm_DualMVector_Split
 ####
 
@@ -830,233 +759,15 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, θ::E
 end
 
 ####
-#### EPGWork_Cplx
-####
-
-struct EPGWork_Cplx{T, ETL, MPSVType <: AbstractVector{Complex{T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
-    MPSV::MPSVType
-    dc::DCType
-end
-function EPGWork_Cplx(T, ETL::Int)
-    MSPV = SizedVector{3*ETL,Complex{T}}(undef)
-    dc   = SizedVector{ETL,T}(undef)
-    EPGWork_Cplx{T,ETL,typeof(MSPV),typeof(dc)}(MSPV, dc)
-end
-
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Cplx{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
-    # Unpack workspace
-    @unpack MPSV = work
-    @unpack α, TE, T2, T1, β = θ
-
-    # Precompute compute element flip matrices and other intermediate variables
-    @inbounds begin
-        E2, E1  = exp(-TE/T2), exp(-TE/T1)
-        E2_half = exp(-(TE/2)/T2)
-        T1mat   = element_flipmat(α)
-        T2mat   = element_flipmat(α * (β/180))
-
-        # Independent elements of T2mat
-        s_α     = -imag(T2mat[1,3]) # sind(α)
-        c_α     =  real(T2mat[3,3]) # cosd(α)
-        s_½α_sq =  real(T2mat[2,1]) # sind(α/2)^2
-        c_½α_sq =  real(T2mat[1,1]) # cosd(α/2)^2
-        s_α_½   = -imag(T2mat[3,1]) # sind(α)/2
-
-        # Initialize magnetization phase state vector (MPSV)
-        m0      = E2_half * sind(α/2) # initial population
-        M0      = SA{T}[m0, 0, 0] # initial magnetization in F1 state
-        M1      = T1mat * M0 # apply first refocusing pulse
-        dc[1]   = E2_half * sqrt(abs2(M1[2])) # first echo amplitude
-
-        # Apply first relaxation matrix iteration on non-zero states
-        MPSV[1] = E2 * M1[2]
-        MPSV[2] = 0
-        MPSV[3] = E1 * M1[3]
-        MPSV[4] = E2 * M1[1]
-        MPSV[5] = 0
-        MPSV[6] = 0
-    end
-
-    @inbounds for i = 2:ETL
-        # Perform the flip for all states
-        @simd for j in 1:3:3i-2
-            Vmx, Vmy, Vmz = MPSV[j], MPSV[j+1], MPSV[j+2]
-            ms_α_Vtmp     = s_α * mul_im(Vmz)
-            s_α_½_Vtmp    = s_α_½ * mul_im(Vmy - Vmx)
-            MPSV[j]       = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy, -ms_α_Vtmp))
-            MPSV[j+1]     = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy,  ms_α_Vtmp))
-            MPSV[j+2]     = muladd(c_α, Vmz, s_α_½_Vtmp)
-        end
-
-        # Zero out next elements
-        if i+1 < ETL
-            j         = 3i+1
-            MPSV[j]   = 0
-            MPSV[j+1] = 0
-            MPSV[j+2] = 0
-        end
-
-        # Record the magnitude of the population of F1* as the echo amplitude, allowing for relaxation
-        dc[i] = E2_half * sqrt(abs2(MPSV[2]))
-
-        # Allow time evolution of magnetization between pulses
-        if (i < ETL)
-            # Basic relaxation matrix loop:
-            mprev   = MPSV[1]
-            MPSV[1] = E2 * MPSV[2] # F1* --> F1
-            @simd for j in 2:3:3i-1
-                m1, m2, m3 = MPSV[j+1], MPSV[j+2], MPSV[j+3]
-                mtmp  = m2
-                m0    = E2 * m3     # F(n)* --> F(n-1)*
-                m1   *= E1          # Z(n)  --> Z(n)
-                m2    = E2 * mprev  # F(n)  --> F(n+1)
-                mprev = mtmp
-                MPSV[j], MPSV[j+1], MPSV[j+2] = m0, m1, m2
-            end
-        end
-    end
-
-    return dc
-end
-
-####
-#### EPGWork_Cplx_Vec_Unrolled
-####
-
-struct EPGWork_Cplx_Vec_Unrolled{T, ETL, MPSVType <: AbstractVector{Complex{T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
-    MPSV::MPSVType
-    dc::DCType
-end
-function EPGWork_Cplx_Vec_Unrolled(T, ETL::Int)
-    MSPV = SizedVector{3*ETL,Complex{T}}(undef)
-    dc   = SizedVector{ETL,T}(undef)
-    EPGWork_Cplx_Vec_Unrolled{T,ETL,typeof(MSPV),typeof(dc)}(MSPV, dc)
-end
-
-@inline function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Cplx_Vec_Unrolled{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
-    # Unpack workspace
-    @unpack MPSV = work
-    @unpack α, TE, T2, T1, β = θ
-
-    # Precompute compute element flip matrices and other intermediate variables
-    @inbounds begin
-        E2, E1  = exp(-TE/T2), exp(-TE/T1)
-        E2_half = exp(-(TE/2)/T2)
-        T1mat   = element_flipmat(α)
-        T2mat   = element_flipmat(α * (β/180))
-
-        # Independent elements of T2mat
-        s_α     = -imag(T2mat[1,3]) # sind(α)
-        c_α     =  real(T2mat[3,3]) # cosd(α)
-        s_½α_sq =  real(T2mat[2,1]) # sind(α/2)^2
-        c_½α_sq =  real(T2mat[1,1]) # cosd(α/2)^2
-        s_α_½   = -imag(T2mat[3,1]) # sind(α)/2
-
-        # Initialize magnetization phase state vector (MPSV)
-        m0      = E2_half * sind(α/2) # initial population
-        M0      = SA{T}[m0, 0, 0] # initial magnetization in F1 state
-        M1      = T1mat * M0 # apply first refocusing pulse
-        dc[1]   = E2_half * sqrt(abs2(M1[2])) # first echo amplitude
-
-        # Apply first relaxation matrix iteration on non-zero states
-        MPSV[1] = E2 * M1[2]
-        MPSV[2] = 0
-        MPSV[3] = E1 * M1[3]
-        MPSV[4] = E2 * M1[1]
-        MPSV[5] = 0
-        MPSV[6] = 0
-    end
-
-    @inbounds for i = 2:ETL
-        # Twice loop-unrolled flip-matrix loop
-        Vs_α   = Vec((-s_α, s_α, -s_α, s_α))
-        Vs_α_½ = Vec((-s_α_½, s_α_½, -s_α_½, s_α_½))
-        @simd for j in 1:6:3i-5 # 1+(0:3*(n-2))
-            Vmx        = Vec((reim(MPSV[j  ])..., reim(MPSV[j+3])...))
-            Vmy        = Vec((reim(MPSV[j+1])..., reim(MPSV[j+4])...))
-            Vmz        = Vec((reim(MPSV[j+2])..., reim(MPSV[j+5])...))
-            s_α_Vtmp   = shufflevector(Vs_α * Vmz, Val((1,0,3,2)))
-            s_α_½_Vtmp = shufflevector(Vs_α_½ * (Vmx - Vmy), Val((1,0,3,2)))
-            VMx        = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy,  s_α_Vtmp))
-            VMy        = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy, -s_α_Vtmp))
-            VMz        = muladd(c_α, Vmz, s_α_½_Vtmp)
-            MPSV[j  ]  = Complex(VMx[1], VMx[2])
-            MPSV[j+1]  = Complex(VMy[1], VMy[2])
-            MPSV[j+2]  = Complex(VMz[1], VMz[2])
-            MPSV[j+3]  = Complex(VMx[3], VMx[4])
-            MPSV[j+4]  = Complex(VMy[3], VMy[4])
-            MPSV[j+5]  = Complex(VMz[3], VMz[4])
-        end
-        if isodd(i)
-            j = 3i-2
-            Vmx, Vmy, Vmz = MPSV[j], MPSV[j+1], MPSV[j+2]
-            ms_α_Vtmp     = s_α * mul_im(Vmz)
-            s_α_½_Vtmp    = s_α_½ * mul_im(Vmy - Vmx)
-            MPSV[j]       = muladd(c_½α_sq, Vmx, muladd(s_½α_sq, Vmy, -ms_α_Vtmp))
-            MPSV[j+1]     = muladd(s_½α_sq, Vmx, muladd(c_½α_sq, Vmy,  ms_α_Vtmp))
-            MPSV[j+2]     = muladd(c_α, Vmz, s_α_½_Vtmp)
-        end
-
-        # Zero out next elements
-        if i+1 < ETL
-            j         = 3i+1
-            MPSV[j]   = 0
-            MPSV[j+1] = 0
-            MPSV[j+2] = 0
-        end
-
-        # Record the magnitude of the population of F1* as the echo amplitude, allowing for relaxation
-        dc[i] = E2_half * sqrt(abs2(MPSV[2]))
-
-        if (i < ETL)
-            # Twice loop-unrolled relaxmat loop
-            mprev   = MPSV[1]
-            MPSV[1] = E2 * MPSV[2] # F1* --> F1
-            @simd for j in 2:6:3i-4
-                m1, m2, m3, m4, m5, m6 = MPSV[j+1], MPSV[j+2], MPSV[j+3], MPSV[j+4], MPSV[j+5], MPSV[j+6]
-                m0    = E2 * m3    # F(n)* --> F(n-1)*
-                m1   *= E1         # Z(n)  --> Z(n)
-                mtmp2 = m2
-                m2    = E2 * mprev # F(n)  --> F(n+1)
-                m3    = E2 * m6    # F(n)* --> F(n-1)*
-                m4   *= E1         # Z(n)  --> Z(n)
-                mtmp5 = m5
-                m5    = E2 * mtmp2 # F(n)  --> F(n+1)
-                mprev = mtmp5
-                MPSV[j], MPSV[j+1], MPSV[j+2], MPSV[j+3], MPSV[j+4], MPSV[j+5] = m0, m1, m2, m3, m4, m5
-            end
-            if isodd(i)
-                j   = 3i-1
-                m1, m2, m3 = MPSV[j+1], MPSV[j+2], MPSV[j+3]
-                m0  = E2 * m3      # F(n)* --> F(n-1)*
-                m1 *= E1           # Z(n)  --> Z(n)
-                m2  = E2 * mprev   # F(n)  --> F(n+1)
-                MPSV[j], MPSV[j+1], MPSV[j+2] = m0, m1, m2
-            end
-        end
-    end
-
-    return dc
-end
-
-####
 #### Algorithm list
 ####
 
-const EPGWork_List = [
+const EPGWork_List = Any[
     EPGWork_Basic_Cplx,
-    EPGWork_Cplx,
-    if VERSION >= v"1.6-"
-        # TODO: SIMD.jl broken on v1.6.0-beta1
-        []
-    else
-        [EPGWork_Vec, EPGWork_Cplx_Vec_Unrolled]
-    end...,
+    EPGWork_Vec,
     EPGWork_ReIm,
-    # TODO: generated function approach is extremely slow to test and provides a small speedup only for ETL <= 16
-    # EPGWork_ReIm_Generated,
     EPGWork_ReIm_DualCache,
     EPGWork_ReIm_DualCache_Split,
-    EPGWork_ReIm_DualCache_Unrolled,
     EPGWork_ReIm_DualMVector_Split,
+    EPGWork_ReIm_Generated,
 ]

@@ -1,5 +1,5 @@
-using DECAES
 using Test
+using DECAES
 using Logging
 
 # Arbitrary default required parameters used during testing

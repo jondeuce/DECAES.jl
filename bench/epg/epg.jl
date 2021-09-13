@@ -1,33 +1,37 @@
-import Pkg
-Pkg.activate(@__DIR__)
+if normpath(@__DIR__) ∉ LOAD_PATH
+    pushfirst!(LOAD_PATH, normpath(@__DIR__, "../.."))
+    pushfirst!(LOAD_PATH, normpath(@__DIR__))
+end
+
 using DECAES
 using BenchmarkTools
 using PrettyTables
+using LibGit2
 
-suite = BenchmarkGroup()
-
-for ETL in [32,48,64]
-    s_ETL = suite["ETL=$ETL"] = BenchmarkGroup()
-    for T in [Float32, Float64]
-        s_T = s_ETL["T=$T"] = BenchmarkGroup()
-        for alg in DECAES.EPGWork_List
-            α    = T(90.0) + T(90.0) * rand(T)
-            TE   = T(5e-3) + T(5e-3) * rand(T)
-            T2   = T(10e-3) + T(190e-3) * rand(T)
-            T1   = T(0.8) + T(0.4) * rand(T)
-            β    = T(90.0) + T(90.0) * rand(T)
-            work = alg(T, ETL)
-            opts = DECAES.EPGOptions{T,ETL}(α, TE, T2, T1, β)
-            s_T["alg=$(nameof(alg))"] = @benchmarkable DECAES.EPGdecaycurve!($work, $opts)
-        end
-    end
+function commit_hash()
+    repo = LibGit2.GitRepo(normpath(@__DIR__, "../.."))
+    hash = LibGit2.GitShortHash(LibGit2.peel(LibGit2.GitCommit, LibGit2.head(repo)))
+    return string(hash)
 end
 
-# Tune and run benchmarks
-tune!(suite)
-results = run(suite; verbose = true, seconds = 1)
-map(((name,res),) -> (@info(name); display(res)), leaves(results))
-display(results)
+function build_suite()
+    # Build suite of EPG algorithm benchmark groups
+    suite = BenchmarkGroup()
+    for ETL in [32,48,64]
+        suite_ETL = suite["ETL=$ETL"] = BenchmarkGroup()
+        for T in [Float32, Float64]
+            suite_T = suite_ETL["T=$T"] = BenchmarkGroup()
+            for alg in DECAES.EPGWork_List
+                alg == DECAES.EPGWork_ReIm_Generated && continue
+                α, TE, T2, T1, β = T(163.0), T(11e-3), T(39e-3), T(1.1), T(151.0)
+                θ    = DECAES.EPGOptions{T,ETL}(α, TE, T2, T1, β)
+                work = alg(T, ETL)
+                suite_T["alg=$(nameof(alg))"] = @benchmarkable DECAES.EPGdecaycurve!($work, $θ)
+            end
+        end
+    end
+    return suite
+end
 
 # Display results
 function default_pretty_table(io, data, header, row_names; backend = :text, kwargs...)
@@ -36,19 +40,33 @@ function default_pretty_table(io, data, header, row_names; backend = :text, kwar
     PrettyTables.pretty_table(io, data, header; backend = :text, row_names, highlighters = (hl,), formatters = (v,i,j) -> round(v, sigdigits = 3), kwargs...)
 end
 
-function main()
-    names, times = map(leaves(results)) do (name, res)
-        name, time(minimum(res)) / 1000
+function print_results(io, results)
+    names, times = map(leaves(results)) do (name, results)
+        name, time(minimum(results)) / 1000
     end |> xs -> ((x->x[1]).(xs), (x->x[2]).(xs))
     alg_names = (x->x[end]).(names) |> unique |> permutedims
     row_names = reshape(names, length(alg_names), :)[1,:] .|> x -> join(x[1:end-1], ", ")
     tbl_data  = reshape(times, length(alg_names), :) |> permutedims
     tbl_hdr   = vcat(alg_names, fill("Time [us]", size(alg_names)...))
-    default_pretty_table(stdout, tbl_data, tbl_hdr, row_names; backend = :text)
-    return nothing
+    default_pretty_table(io, tbl_data, tbl_hdr, row_names; backend = :text)
 end
 
-main()
+function main()
+    @info "building suite"
+    suite = build_suite()
+
+    @info "tuning suite"
+    tune!(suite)
+
+    @info "running benchmarks"
+    results = run(suite; verbose = true, seconds = 1)
+
+    @info "saving results"
+    print_results(stdout, results)
+    open(joinpath(@__DIR__, "epg_bench_$(commit_hash()).txt"); write = true) do io
+        print_results(io, results)
+    end
+end
 
 # v1.5.3
 # ┌───────────────────┬──────────────────┬───────────────────────────────┬────────────────────────────┬──────────────────────────────────┬────────────────────────┬─────────────────┬──────────────────┬─────────────────────────────────────┐

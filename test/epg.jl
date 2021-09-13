@@ -1,27 +1,29 @@
-using DECAES
 using Test
+using DECAES
 using Logging
 
+function compare_epg(
+        work₁::DECAES.AbstractEPGWorkspace{T,ETL},
+        work₂::DECAES.AbstractEPGWorkspace{T,ETL},
+    ) where {T,ETL}
+    α, TE, T2, T1, β = T(163.0), T(11e-3), T(39e-3), T(1.1), T(151.0)
+    θ   = DECAES.EPGOptions{T,ETL}(α, TE, T2, T1, β)
+    dc₁ = DECAES.EPGdecaycurve!(work₁, θ)
+    dc₂ = DECAES.EPGdecaycurve!(work₂, θ)
+    if !(dc₁ ≈ dc₂)
+        @info "Comparing: $((nameof(typeof(work₁)), nameof(typeof(work₂))))"
+        @info "    max error:   $(maximum(abs, dc₁ .- dc₂))"
+        @info "    diff vector: $(round.(abs.(dc₁ .- dc₂)'; sigdigits = 4))"
+    end
+    @test dc₁ ≈ dc₂
+end
+
 @testset "EPG algorithms" begin
-    for ((i, algᵢ), (j, algⱼ)) in Iterators.product(enumerate(DECAES.EPGWork_List), enumerate(DECAES.EPGWork_List))
-        for T in (Float32, Float64)
-            j < i || continue
-            # @info i, j, T, algᵢ, algⱼ
-            for ETL in [5,6,7,8,31,32,49,50]
-                α  = T(1.0) + T(179.0) * rand(T)
-                TE = T(5e-3) + T(5e-3) * rand(T)
-                T2 = T(10e-3) + T(190e-3) * rand(T)
-                T1 = T(0.8) + T(0.4) * rand(T)
-                β  = T(1.0) + T(179.0) * rand(T)
-                y1 = DECAES.EPGdecaycurve!(algᵢ(T, ETL), α, TE, T2, T1, β)
-                y2 = DECAES.EPGdecaycurve!(algⱼ(T, ETL), α, TE, T2, T1, β)
-                # if !(y1 ≈ y2)
-                #     @info "max error = $(maximum(abs, y1 .- y2))"
-                #     @info "diff = $(round.(abs.(y1 .- y2)'; sigdigits = 4))"
-                # end
-                @test y1 ≈ y2
-            end
-        end
+    # NOTE: Generated function approach is extremely slow to compile for large ETL (around 16)
+    epg_algs = DECAES.EPGWork_List
+    for i in 1:length(epg_algs), j in 1:i-1, T in [Float32, Float64], ETL in [4,5,6,7] # test four ETL >= 4 which are unique mod 4
+        algᵢ, algⱼ = epg_algs[i], epg_algs[j]
+        compare_epg(algᵢ(T, ETL), algⱼ(T, ETL))
     end
 end
 
