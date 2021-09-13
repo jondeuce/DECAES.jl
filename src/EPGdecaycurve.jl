@@ -636,26 +636,26 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
 end
 
 ####
-#### EPGWork_ReIm_DualMVector_Vec_Split
+#### EPGWork_ReIm_DualPaddedMVector_Vec_Split
 ####
 
-struct EPGWork_ReIm_DualMVector_Vec_Split{T, ETL, MPSVType <: AbstractVector{Vec{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+struct EPGWork_ReIm_DualPaddedMVector_Vec_Split{T, ETL, MPSVType <: AbstractVector{Vec{4,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_DualMVector_Vec_Split(T, ETL::Int)
-    mpsv₁ = MVector{ETL,Vec{3,T}}(undef)
-    mpsv₂ = MVector{ETL,Vec{3,T}}(undef)
+function EPGWork_ReIm_DualPaddedMVector_Vec_Split(T, ETL::Int)
+    mpsv₁ = MVector{ETL,Vec{4,T}}(undef)
+    mpsv₂ = MVector{ETL,Vec{4,T}}(undef)
     dc    = MVector{ETL,T}(undef)
-    EPGWork_ReIm_DualMVector_Vec_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+    EPGWork_ReIm_DualPaddedMVector_Vec_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Vec_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMVector_Vec_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV₁, MPSV₂ = work
     @unpack α, TE, T2, T1, β = θ
-    V = Vec{3,T} # alias
+    V = Vec{4,T} # alias
 
     # Precompute intermediate variables
     α                = deg2rad(α)
@@ -669,40 +669,40 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
     sin²½αᵢ          = 1-cos²½αᵢ
     a₁, b₁, c₁       = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
     aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
-    F, F̄, Z          = V((aᵢ, bᵢ, cᵢ)), V((bᵢ, aᵢ, -cᵢ)), V((-cᵢ/2, cᵢ/2, dᵢ))
+    F, F̄, Z          = V((aᵢ, bᵢ, cᵢ, 0)), V((bᵢ, aᵢ, -cᵢ, 0)), V((-cᵢ/2, cᵢ/2, dᵢ, 0))
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
         m₀           = sin½α₁
-        Mᵢ⁺          = V((b₁*m₀, 0, -c₁*m₀/2))
+        Mᵢ⁺          = V((b₁*m₀, 0, -c₁*m₀/2, 0))
         dc[1]        = abs(Mᵢ⁺[1])
         MPSV₁[1]     = Mᵢ⁺
-        MPSV₁[2]     = V((a₁*m₀, 0, 0))
+        MPSV₁[2]     = V((a₁*m₀, 0, 0, 0))
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in 2:ETL÷2
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V((sum(F̄*Mᵢ), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ)))
+        Mᵢ⁺      = V((sum(F̄*Mᵢ), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ), 0))
         dc[i]    = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:i-1
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V((sum(F*Mᵢ₋₁), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ)))
+            MPSV₁[j]       = V((sum(F*Mᵢ₋₁), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ), 0))
         end
-        MPSV₁[i]     = V((sum(F*Mᵢ), 0, sum(Z*Mᵢ₊₁))) # j = i
-        MPSV₁[i+1]   = V((sum(F*Mᵢ₊₁), 0, 0)) # j = i + 1
+        MPSV₁[i]     = V((sum(F*Mᵢ), 0, sum(Z*Mᵢ₊₁), 0)) # j = i
+        MPSV₁[i+1]   = V((sum(F*Mᵢ₊₁), 0, 0, 0)) # j = i + 1
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in ETL÷2+1:ETL-1
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V((sum(F̄*Mᵢ), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ)))
+        Mᵢ⁺      = V((sum(F̄*Mᵢ), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ), 0))
         dc[i]    = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:ETL-i
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V((sum(F*Mᵢ₋₁), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ)))
+            MPSV₁[j]       = V((sum(F*Mᵢ₋₁), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ), 0))
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
@@ -897,7 +897,7 @@ const EPG_Algorithms = Any[
     EPGWork_ReIm_DualCache,
     EPGWork_ReIm_DualCache_Split,
     EPGWork_ReIm_DualMVector_Split,
-    EPGWork_ReIm_DualMVector_Vec_Split,
+    EPGWork_ReIm_DualPaddedMVector_Vec_Split,
     EPGWork_ReIm_DualPaddedVector_Split,
     EPGWork_ReIm_Generated,
 ]
