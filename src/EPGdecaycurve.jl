@@ -553,32 +553,6 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualCache_Sp
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    #= Cleaner, but slightly slower
-    @inbounds for i in 2:ETL-1
-        # j = 1, initialize and update `dc`
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2]
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i]    = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        if i <= ETL÷2
-            # inner loop
-            @simd for j in 2:i-1
-                Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-                MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-            end
-            MPSV₁[i]   = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁] # j = i
-            MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0] # j = i + 1
-        else
-            # inner loop
-            @simd for j in 2:ETL-i
-                Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-                MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-            end
-        end
-        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
-    end
-    =#
-
     @inbounds dc[ETL] = abs(F̄⋅MPSV₂[1])
 
     return dc
@@ -652,6 +626,160 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
         @simd for j in 2:ETL-i
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
             MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        end
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds dc[ETL] = abs(F̄⋅MPSV₂[1])
+
+    return dc
+end
+
+####
+#### EPGWork_ReIm_DualMVector_Vec_Split
+####
+
+struct EPGWork_ReIm_DualMVector_Vec_Split{T, ETL, MPSVType <: AbstractVector{Vec{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+    MPSV₁::MPSVType
+    MPSV₂::MPSVType
+    dc::DCType
+end
+function EPGWork_ReIm_DualMVector_Vec_Split(T, ETL::Int)
+    mpsv₁ = MVector{ETL,Vec{3,T}}(undef)
+    mpsv₂ = MVector{ETL,Vec{3,T}}(undef)
+    dc    = MVector{ETL,T}(undef)
+    EPGWork_ReIm_DualMVector_Vec_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+end
+
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Vec_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
+    # Unpack workspace
+    @unpack MPSV₁, MPSV₂ = work
+    @unpack α, TE, T2, T1, β = θ
+    V = Vec{3,T} # alias
+
+    # Precompute intermediate variables
+    α                = deg2rad(α)
+    α₁, αᵢ           = α, α*β/180
+    E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
+    sin½α₁, cos½α₁   = sincos(α₁/2)
+    sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
+    sinα₁            = 2*sin½α₁*cos½α₁
+    sinαᵢ, cosαᵢ     = sincos(αᵢ)
+    cos²½αᵢ          = (1+cosαᵢ)/2
+    sin²½αᵢ          = 1-cos²½αᵢ
+    a₁, b₁, c₁       = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
+    F, F̄, Z          = V((aᵢ, bᵢ, cᵢ)), V((bᵢ, aᵢ, -cᵢ)), V((-cᵢ/2, cᵢ/2, dᵢ))
+
+    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    @inbounds begin
+        m₀           = sin½α₁
+        Mᵢ⁺          = V((b₁*m₀, 0, -c₁*m₀/2))
+        dc[1]        = abs(Mᵢ⁺[1])
+        MPSV₁[1]     = Mᵢ⁺
+        MPSV₁[2]     = V((a₁*m₀, 0, 0))
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds for i in 2:ETL÷2
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Mᵢ⁺      = V((sum(F̄*Mᵢ), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ)))
+        dc[i]    = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        @simd for j in 2:i-1
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j]       = V((sum(F*Mᵢ₋₁), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ)))
+        end
+        MPSV₁[i]     = V((sum(F*Mᵢ), 0, sum(Z*Mᵢ₊₁))) # j = i
+        MPSV₁[i+1]   = V((sum(F*Mᵢ₊₁), 0, 0)) # j = i + 1
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds for i in ETL÷2+1:ETL-1
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Mᵢ⁺      = V((sum(F̄*Mᵢ), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ)))
+        dc[i]    = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        @simd for j in 2:ETL-i
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j]       = V((sum(F*Mᵢ₋₁), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ)))
+        end
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds dc[ETL] = abs(sum(F̄*MPSV₂[1]))
+
+    return dc
+end
+
+####
+#### EPGWork_ReIm_DualPaddedVector_Split
+####
+
+struct EPGWork_ReIm_DualPaddedVector_Split{T, ETL, MPSVType <: AbstractVector{SVector{4,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+    MPSV₁::MPSVType
+    MPSV₂::MPSVType
+    dc::DCType
+end
+function EPGWork_ReIm_DualPaddedVector_Split(T, ETL::Int)
+    mpsv₁ = Vector{SVector{4,T}}(undef, ETL)
+    mpsv₂ = Vector{SVector{4,T}}(undef, ETL)
+    dc    = Vector{T}(undef, ETL)
+    EPGWork_ReIm_DualPaddedVector_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+end
+
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
+    # Unpack workspace
+    @unpack MPSV₁, MPSV₂ = work
+    @unpack α, TE, T2, T1, β = θ
+    V = SA{T} # alias
+
+    # Precompute intermediate variables
+    α                = deg2rad(α)
+    α₁, αᵢ           = α, α*β/180
+    E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
+    sin½α₁, cos½α₁   = sincos(α₁/2)
+    sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
+    sinα₁            = 2*sin½α₁*cos½α₁
+    sinαᵢ, cosαᵢ     = sincos(αᵢ)
+    cos²½αᵢ          = (1+cosαᵢ)/2
+    sin²½αᵢ          = 1-cos²½αᵢ
+    a₁, b₁, c₁       = E₂^2*cos²½α₁, E₂^2*sin²½α₁, E₁*E₂*sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2*cos²½αᵢ, E₂^2*sin²½αᵢ, E₁*E₂*sinαᵢ, E₁^2*cosαᵢ
+    F, F̄, Z          = V[aᵢ, bᵢ, cᵢ, 0], V[bᵢ, aᵢ, -cᵢ, 0], V[-cᵢ/2, cᵢ/2, dᵢ, 0]
+
+    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    @inbounds begin
+        m₀           = sin½α₁
+        Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2, 0]
+        dc[1]        = abs(Mᵢ⁺[1])
+        MPSV₁[1]     = Mᵢ⁺
+        MPSV₁[2]     = V[a₁*m₀, 0, 0, 0]
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds for i in 2:ETL÷2
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+        dc[i]    = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        @simd for j in 2:i-1
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+        end
+        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁, 0] # j = i
+        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0, 0] # j = i + 1
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+    end
+
+    @inbounds for i in ETL÷2+1:ETL-1
+        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+        dc[i]    = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        @simd for j in 2:ETL-i
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
+            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
@@ -762,12 +890,14 @@ end
 #### Algorithm list
 ####
 
-const EPGWork_List = Any[
+const EPG_Algorithms = Any[
     EPGWork_Basic_Cplx,
     EPGWork_Vec,
     EPGWork_ReIm,
     EPGWork_ReIm_DualCache,
     EPGWork_ReIm_DualCache_Split,
     EPGWork_ReIm_DualMVector_Split,
+    EPGWork_ReIm_DualMVector_Vec_Split,
+    EPGWork_ReIm_DualPaddedVector_Split,
     EPGWork_ReIm_Generated,
 ]

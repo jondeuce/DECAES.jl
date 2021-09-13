@@ -20,7 +20,7 @@ end
 
 @testset "EPG algorithms" begin
     # NOTE: Generated function approach is extremely slow to compile for large ETL (around 16)
-    epg_algs = DECAES.EPGWork_List
+    epg_algs = DECAES.EPG_Algorithms
     for i in 1:length(epg_algs), j in 1:i-1, T in [Float32, Float64], ETL in [4,5,6,7] # test four ETL >= 4 which are unique mod 4
         algᵢ, algⱼ = epg_algs[i], epg_algs[j]
         compare_epg(algᵢ(T, ETL), algⱼ(T, ETL))
