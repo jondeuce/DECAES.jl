@@ -17,8 +17,8 @@ set_theme!(theme_ggplot2(); resolution = (600,450), font = "CMU Serif")
 
 function plot_neighbours(::Val{D} = Val(2)) where {D}
     grid  = DECAES.meshgrid(SVector{D,Float64}, [range(0, 1; length = 25) for _ in 1:D]...)
-    surr  = DECAES.HermiteSplineSurrogate(I -> 1.0, I -> zero(SVector{D,Float64}), grid)
-    state = DECAES.DiscreteSurrogateBisector(surr; mineval = 5, maxeval = typemax(Int))
+    surr  = DECAES.HermiteSplineSurrogate(I -> (1.0, zero(SVector{D,Float64})), grid)
+    state = DECAES.DiscreteSurrogateSearcher(surr; mineval = 5, maxeval = typemax(Int))
 
     second(x) = x[2]
     xy(xs) = D == 1 ? (first.(xs), ones(length(xs))) : vec.((first.(xs), second.(xs)))
@@ -59,7 +59,7 @@ function plot_bisection_search(
     # ∇f_true = x -> @. 50 * sin(5 * (x - xopt)) * cos(5 * (x - xopt)) + 2 * (x - xopt)
     # surr    = surrtype === :cubic ?
     #     DECAES.CubicSplineSurrogate(I -> f_true(grid[I]), grid, SVector{1,Float64}[], Float64[]) :
-    #     DECAES.HermiteSplineSurrogate(I -> f_true(grid[I]), I -> ∇f_true(grid[I]), grid, zeros(Float64, size(grid)), SVector{1,Float64}[], Float64[], SVector{1,Float64}[], Float64[])
+    #     DECAES.HermiteSplineSurrogate(I -> (f_true(grid[I]), ∇f_true(grid[I])), grid, zeros(Float64, size(grid)), SVector{1,Float64}[], Float64[], SVector{1,Float64}[], Float64[])
 
     # build surrogate
     opts = DECAES.mock_t2map_opts(; MatrixSize = (1,1,1), nTE = 32, SetFlipAngle = flip, SetRefConAngle = refcon, nRefAngles = npts)
@@ -77,8 +77,9 @@ function plot_bisection_search(
     end
 
     # solve discrete search problem
-    state = DECAES.DiscreteSurrogateBisector(surr; mineval = mineval, maxeval = maxeval)
+    state = DECAES.DiscreteSurrogateSearcher(surr; mineval = mineval, maxeval = maxeval)
     minx, miny = DECAES.bisection_search(surr, state; maxeval = maxeval)
+    minx, miny = DECAES.local_search(surr, state, minx; maxeval = maxeval)
 
     # reconstruct surrogate from evaluated points and plot
     if surrtype === :cubic

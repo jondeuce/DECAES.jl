@@ -196,9 +196,8 @@ function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
     return SVector{1,T}(p), T(u)
 end
 
-struct HermiteSplineSurrogate{D,T,F,G} <: AbstractSurrogate{D,T}
-    f::F
-    ∇f::G
+struct HermiteSplineSurrogate{D,T,F} <: AbstractSurrogate{D,T}
+    fg::F
     grid::Array{SVector{D,T},D}
     ugrid::Array{T,D}
     p::Vector{SVector{D,T}}
@@ -208,12 +207,12 @@ struct HermiteSplineSurrogate{D,T,F,G} <: AbstractSurrogate{D,T}
     du::Vector{T}
 end
 
-function HermiteSplineSurrogate(f, ∇f, grid::Array{SVector{D,T},D}) where {D,T}
-    HermiteSplineSurrogate(f, ∇f, grid, zeros(T, size(grid)), SVector{D,T}[], T[], SVector{D,T}[], SVector{D,T}[], T[])
+function HermiteSplineSurrogate(fg, grid::Array{SVector{D,T},D}) where {D,T}
+    HermiteSplineSurrogate(fg, grid, zeros(T, size(grid)), SVector{D,T}[], T[], SVector{D,T}[], SVector{D,T}[], T[])
 end
 
 function update!(surr::HermiteSplineSurrogate{D,T}, I::CartesianIndex{D}) where {D,T}
-    u, ∇u = surr.f(I), surr.∇f(I)
+    u, ∇u = surr.fg(I)
     @inbounds p = surr.grid[I]
     push!(surr.p, p)
     push!(surr.u, u)
@@ -252,8 +251,13 @@ BoundingBox(bounds::NTuple{D,NTuple{2,Int}}) where {D} = BoundingBox(bounds, cor
     :(Base.@_inline_meta; SArray{$S, CartesianIndex{$D}, $D, $(2^D)}(tuple($(vals...))))
 end
 
+function opposite_corner(box::BoundingBox{D}, I::CartesianIndex{D}) where {D}
+    @inbounds lo, hi = box.corners[begin], box.corners[end]
+    return lo + hi - I
+end
+
 function bisect(box::BoundingBox{D}) where {D}
-    _, i = findmax(ntuple(d -> box.bounds[d][2] - box.bounds[d][1], D))
+    _, i = findmax(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D))
     left_bounds = ntuple(D) do d
         i !== d ? box.bounds[d] : (box.bounds[i][1], (box.bounds[i][1] + box.bounds[i][2]) ÷ 2)
     end
@@ -266,21 +270,21 @@ end
 splittable(box::BoundingBox{D}) where {D} = any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]) > 1, D))
 
 ####
-#### Global optimization using multi-dimensional bisection with surrogate functions
+#### Searching on a discrete grid using a surrogate function
 ####
 
-struct DiscreteSurrogateBisector{D, T}
+struct DiscreteSurrogateSearcher{D, T}
     grid::Array{SVector{D,T},D}
     seen::Array{Bool,D}
     numeval::Base.RefValue{Int}
 end
-function DiscreteSurrogateBisector(surr::AbstractSurrogate; mineval::Int, maxeval::Int)
+function DiscreteSurrogateSearcher(surr::AbstractSurrogate; mineval::Int, maxeval::Int)
     @assert mineval <= maxeval
-    state = DiscreteSurrogateBisector(surr.grid, fill(false, size(surr.grid)), Ref(0))
+    state = DiscreteSurrogateSearcher(surr.grid, fill(false, size(surr.grid)), Ref(0))
     initialize!(surr, state; mineval = mineval, maxeval = maxeval)
 end
 
-function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisector{D}; mineval::Int, maxeval::Int) where {D}
+function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}; mineval::Int, maxeval::Int) where {D}
     # Evaluate at least `mineval` points by repeatedly bisecting the grid in a breadth-first manner
     box = BoundingBox(size(state.grid))
     for depth in 1:mineval # should never reach `mineval` depth, this is just to ensure the loop terminates in case `mineval` is greater than the number of gridpoints
@@ -290,7 +294,7 @@ function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisecto
     return state
 end
 
-function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisector{D}, box::BoundingBox{D}, depth::Int; mineval::Int, maxeval::Int) where {D}
+function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}, depth::Int; mineval::Int, maxeval::Int) where {D}
     depth <= 0 && return state
     evaluate_box!(surr, state, box; maxeval = maxeval)
     state.numeval[] ≥ mineval && return state
@@ -299,9 +303,23 @@ function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisecto
     initialize!(surr, state, right, depth-1; mineval = mineval, maxeval = maxeval)
 end
 
+function update!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}, I::CartesianIndex{D}; maxeval::Int) where {D}
+    # Update the surrogate function with a new point, returning whether the maximum number of function evaluations has been reached or not
+    state.numeval[] >= maxeval && return true # check if already exceeded number of evals
+    @inbounds state.seen[I] && return false # point already evaluated
+    update!(surr, I) # update surrogate
+    @inbounds state.seen[I] = true # mark as now seen
+    @inbounds state.numeval[] += 1 # increment function call counter
+    return state.numeval[] >= maxeval
+end
+
+####
+#### Global optimization using multi-dimensional bisection with surrogate functions
+####
+
 function bisection_search(
         surr::AbstractSurrogate{D,T},
-        state::DiscreteSurrogateBisector{D,T};
+        state::DiscreteSurrogateSearcher{D,T};
         maxeval::Int,
     ) where {D,T}
 
@@ -309,12 +327,12 @@ function bisection_search(
     #   1. Get new suggestion from surrogate,
     #   2. Find smallest bounding box containing the suggestion,
     #       2a. Return if box is sufficiently small or if the maximum number of evaluations has been reched
-    #       2b. Otherwise, evaluate all corners of the box and go to 1.
+    #       2b. Otherwise, evaluate the box corners (see `is_evaluated`) and go to 1.
     while true
-        popt, uopt = suggest_point(surr)
-        box = minimal_bounding_box(state, popt)
+        x, u = suggest_point(surr)
+        box = minimal_bounding_box(state, x)
         if state.numeval[] ≥ maxeval || converged(state, box)
-            return (popt, uopt)
+            return (x, u)
         else
             evaluate_box!(surr, state, box; maxeval = maxeval)
         end
@@ -323,7 +341,7 @@ end
 
 # Update observed evaluations, returning true if converged
 function minimal_bounding_box(
-        state::DiscreteSurrogateBisector{D,T},
+        state::DiscreteSurrogateSearcher{D,T},
         x::SVector{D,T},
     ) where {D,T}
 
@@ -331,13 +349,13 @@ function minimal_bounding_box(
     while true
         left, right = bisect(box)
         if contains(state, left, x) # left box contains `x`
-            if !contains(state, left) || !splittable(left)
+            if !is_evaluated(state, left) || !splittable(left)
                 return left # left box not fully evaluated, or we have reached bottom; return
             else
                 box = left # whole left box already evaluated; continue search
             end
         else # contains(state, right, x), i.e. right box contains `x`
-            if !contains(state, right) || !splittable(right)
+            if !is_evaluated(state, right) || !splittable(right)
                 return right # right box not fully evaluated, or we have reached bottom; return
             else
                 box = right # whole right box already evaluated; continue search
@@ -346,30 +364,87 @@ function minimal_bounding_box(
     end
 end
 
-function evaluate_box!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateBisector{D}, box::BoundingBox{D}; maxeval::Int) where {D}
+function evaluate_box!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}; maxeval::Int) where {D}
     @inbounds for I in box.corners
-        state.numeval[] >= maxeval && break # max evals reached
-        state.seen[I] && continue # point already evaluated
-        update!(surr, I) # update surrogate
-        state.seen[I] = true # mark as now seen
-        state.numeval[] += 1
+        is_evaluated(state, box) && break # box sufficiently evaluated
+        update!(surr, state, I; maxeval = maxeval) && break # update surrogate, breaking if max evals reached
     end
     return state
 end
 
-function converged(::DiscreteSurrogateBisector{D}, box::BoundingBox{D}) where {D}
+function is_evaluated(state::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D}
+    # Box is considered sufficiently evaluated when all of the corners have been evaluted
+    count(I -> @inbounds(state.seen[I]), box.corners) >= 2^D
+end
+
+function converged(::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D}
     # Convergence is defined as: bounding box has at least one side of length <= 1
     any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]) <= 1, D))
 end
 
-function contains(state::DiscreteSurrogateBisector{D}, box::BoundingBox{D}) where {D}
-    all(I -> @inbounds(state.seen[I]), box.corners)
-end
-
-function contains(state::DiscreteSurrogateBisector{D,T}, box::BoundingBox{D}, x::SVector{D,T}) where {D,T}
-    @inbounds bottomleft = state.grid[box.corners[1]]
+function contains(state::DiscreteSurrogateSearcher{D,T}, box::BoundingBox{D}, x::SVector{D,T}) where {D,T}
+    @inbounds bottomleft = state.grid[box.corners[begin]]
     @inbounds topright = state.grid[box.corners[end]]
     all(bottomleft .<= x .<= topright)
+end
+
+####
+#### Local optimization using surrogate functions
+####
+
+function local_search(
+        surr::HermiteSplineSurrogate{D,T},
+        state::DiscreteSurrogateSearcher{D,T},
+        x₀::SVector{D,T};
+        maxeval::Int,
+        maxiter::Int = 100,
+        xtol_rel = 1e-6,
+        xtol_abs = 1e-4,
+        initial_step = 0.1,
+    ) where {D,T}
+
+    box = BoundingBox(size(surr.grid))
+    for I in box.corners
+        update!(surr, state, I; maxeval = maxeval) # initialize surrogate with domain corners
+    end
+
+    @inbounds x, xlo, xhi = x₀, state.grid[begin], state.grid[end]
+    Δx = SVector{D,T}(ntuple(d -> T(Inf), D))
+    opt = ADAM{D,T}(initial_step)
+
+    for _ in 1:maxiter
+        # Find nearest gridpoint to `x` and update surrogate
+        I = nearest_gridpoint(state, x)
+        update!(surr, state, I; maxeval = maxeval)
+
+        # Perform gradient descent step using surrogate function
+        spl = interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, RK_H1())
+        ∇u = NormalHermiteSplines.evaluate_gradient(spl, x)
+        Δx, opt = update(∇u, opt)
+        x = @. clamp(x - Δx, xlo, xhi)
+
+        # Check for convergence
+        maximum(abs.(Δx)) <= max(T(xtol_abs), T(xtol_rel) * maximum(abs.(x))) && break
+    end
+
+    spl = interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, RK_H1())
+    u = NormalHermiteSplines.evaluate_one(spl, x)
+
+    return (x, u)
+end
+
+function nearest_gridpoint(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T}) where {D,T}
+    @inbounds xlo, xhi = state.grid[begin], state.grid[end]
+    @inbounds Ilo, Ihi = CartesianIndices(state.grid)[begin], CartesianIndices(state.grid)[end]
+    lo, hi = SVector(Tuple(Ilo)), SVector(Tuple(Ihi))
+    i = @. clamp(round(Int, (x - xlo) * (hi - lo) / (xhi - xlo) + lo), lo, hi)
+    return CartesianIndex(Tuple(i))
+end
+
+function test_nearest_gridpoint()
+    grid = meshgrid(SVector, range(-3, 4, length=4), range(1, 5, length=7))
+    I = nearest_gridpoint(grid, SVector(10.0, -10.0))
+    I, grid[I]
 end
 
 ####
@@ -444,9 +519,12 @@ function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1,T}) where {T}
 end
 
 function HermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D,T}) where {D,T}
-    f(I) = loss!(prob, I)
-    ∇f(I) = ∇loss!(prob, I)
-    HermiteSplineSurrogate(f, ∇f, prob.αs)
+    function fg(I)
+        u = loss!(prob, I)
+        ∇u = ∇loss!(prob, I)
+        return u, ∇u
+    end
+    return HermiteSplineSurrogate(fg, prob.αs)
 end
 
 function surrogate_spline_opt(
@@ -455,7 +533,7 @@ function surrogate_spline_opt(
         mineval::Int = min(2^D, length(prob.αs)),
         maxeval::Int = length(prob.αs),
     ) where {D}
-    state = DiscreteSurrogateBisector(surr; mineval = mineval, maxeval = maxeval)
+    state = DiscreteSurrogateSearcher(surr; mineval = mineval, maxeval = maxeval)
     bisection_search(surr, state; maxeval = maxeval)
 end
 

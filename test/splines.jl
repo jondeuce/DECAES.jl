@@ -52,10 +52,24 @@ function test_mock_surrogate_search_problem(
     end
 end
 
+function test_opposite_corner()
+    for bounds in [
+            ((2,3),),
+            ((2,3), (5,7)),
+            ((2,3), (5,7), (-3,-1)),
+        ]
+        box = DECAES.BoundingBox(bounds)
+        for I in box.corners
+            Iopp = CartesianIndex(ntuple(d -> ifelse(I[d] == bounds[d][1], bounds[d][2], bounds[d][1]), length(bounds)))
+            @test DECAES.opposite_corner(box, I) == Iopp
+        end
+    end
+end
+
 function test_minimal_bounding_box()
     grid  = DECAES.meshgrid(SVector{2,Float64}, 1:5, 1:10)
-    surr  = DECAES.HermiteSplineSurrogate(I -> 1.0, I -> zero(SVector{2,Float64}), grid)
-    state = DECAES.DiscreteSurrogateBisector(surr; mineval = 0, maxeval = 0)
+    surr  = DECAES.HermiteSplineSurrogate(I -> (1.0, zero(SVector{2,Float64})), grid)
+    state = DECAES.DiscreteSurrogateSearcher(surr; mineval = 0, maxeval = 0)
     state.seen[[1,5], [1,10]] .= true
 
     #  1  -------  1  ----------  1
@@ -84,7 +98,8 @@ end
     @testset "mock surrogate search problem" begin
         test_mock_surrogate_search_problem()
     end
-    @testset "minimal bounding box" begin
+    @testset "bounding box" begin
+        test_opposite_corner()
         test_minimal_bounding_box()
     end
 end
