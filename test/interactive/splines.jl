@@ -13,7 +13,7 @@ using LinearAlgebra
 using BenchmarkTools
 using LaTeXStrings
 using CairoMakie
-set_theme!(theme_ggplot2(); resolution = (600,450), font = "CMU Serif")
+set_theme!(theme_ggplot2(); resolution = (800,600), font = "CMU Serif")
 
 function plot_neighbours(::Val{D} = Val(2)) where {D}
     grid  = DECAES.meshgrid(SVector{D,Float64}, [range(0, 1; length = 25) for _ in 1:D]...)
@@ -86,9 +86,9 @@ function plot_bisection_search(
         spl = DECAES._make_spline(first.(surr.p), surr.u)
     else
         σ    = DECAES.interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, DECAES.RK_H1())
-        spl  = (x...) -> DECAES.evaluate_one(σ, SVector(x...))
+        spl  = (x...) -> DECAES.evaluate(σ, SVector(x...))
         σ₀   = DECAES.interpolate(surr.p, surr.u, DECAES.RK_H1())
-        spl₀ = (x...) -> DECAES.evaluate_one(σ₀, SVector(x...))
+        spl₀ = (x...) -> DECAES.evaluate(σ₀, SVector(x...))
     end
 
     if D == 1
@@ -138,8 +138,8 @@ function benchmark_spline()
     dspl = nhs.interpolate(x, u, x, du, nhs.RK_H1())
     @btime $(nhs._gram!)($(spl._gram.data), $(spl._nodes), $(spl._kernel))
     @btime $(nhs._gram!)($(dspl._gram.data), $(dspl._nodes), $(dspl._d_nodes), $(dspl._d_dirs), $(dspl._kernel))
-    @btime $(nhs.evaluate_one)($spl, $xi[])
-    @btime $(nhs.evaluate_one)($dspl, $xi[])
+    @btime $(nhs.evaluate)($spl, $xi[])
+    @btime $(nhs.evaluate)($dspl, $xi[])
     @btime $(nhs.evaluate_derivative)($spl, $xi[])
     @btime $(nhs.evaluate_derivative)($dspl, $xi[])
 end

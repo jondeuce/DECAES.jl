@@ -3,7 +3,7 @@ AUTO-GENERATED FILE - DO NOT EDIT
 
 This file is derived from the following fork of the NormalHermiteSplines.jl package:
 
-    https://github.com/jondeuce/NormalHermiteSplines.jl#1a99bce8a47d2aee154ac1b77ad80bb5d0335215
+    https://github.com/jondeuce/NormalHermiteSplines.jl#03e4b80fd1d44a8f2352f47bb3a6f379b52d8f49
 
 As it is not possible to depend on a package fork, the above module is included here verbatim.
 
@@ -25,66 +25,30 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 module NormalHermiteSplines
 
 export prepare, construct, interpolate
-export evaluate, evaluate!, evaluate_one, evaluate_gradient
+export evaluate, evaluate!, evaluate_one, evaluate_gradient, evaluate_derivative
 export NormalSpline, RK_H0, RK_H1, RK_H2
-export get_epsilon, estimate_epsilon, get_cond, estimate_cond
-export estimate_accuracy
-export evaluate_derivative
+export get_epsilon, estimate_epsilon, get_cond, estimate_cond, estimate_accuracy
 
 using LinearAlgebra
 using StaticArrays
 using UnPack
 using UnsafeArrays
 
-abstract type ReproducingKernel end
-abstract type ReproducingKernel_0 <: ReproducingKernel end
-abstract type ReproducingKernel_1 <: ReproducingKernel_0 end
-abstract type ReproducingKernel_2 <: ReproducingKernel_1 end
-
-abstract type AbstractSpline end
-
 const AbstractArrOfSVecs{n,T,N} = AbstractArray{SVector{n,T},N}
 const AbstractVecOfSVecs{n,T} = AbstractVector{SVector{n,T}}
 const VecOfSVecs{n,T} = Vector{SVector{n,T}}
 
-@doc raw"
-`struct NormalSpline{n, T, RK} <: AbstractSpline where {n, T <: Real, RK <: ReproducingKernel_0}`
-
-Define a structure containing full information of a normal spline
-# Fields
-- `_kernel`: a reproducing kernel spline was built with
-- `_scale`: factor of transforming the original node locations into unit hypercube
-- `_nodes`: transformed function value nodes
-- `_values`: function values at interpolation nodes
-- `_d_nodes`: transformed function directional derivative nodes
-- `_d_dirs`: normalized derivative directions
-- `_d_values`: function directional derivative values
-- `_min_bound`: minimal bounds of the original node locations area
-- `_gram`: Gram matrix of the problem
-- `_chol`: Cholesky factorization of the Gram matrix
-- `_mu`: spline coefficients
-- `_cond`: estimation of the Gram matrix condition number
-"
-struct NormalSpline{n, T, RK} <: AbstractSpline where {n, T <: Real, RK <: ReproducingKernel_0}
-    _kernel::RK
-    _nodes::VecOfSVecs{n,T}
-    _values::Vector{T}
-    _d_nodes::VecOfSVecs{n,T}
-    _d_dirs::VecOfSVecs{n,T}
-    _d_values::Vector{T}
-    _mu::Vector{T}
-    _gram::Hermitian{T, Matrix{T}}
-    _chol::Cholesky{T, Matrix{T}}
-    _cond::T
-    _min_bound::SVector{n,T}
-    _max_bound::SVector{n,T}
-    _scale::T
-end
-Base.eltype(::NormalSpline{n,T,RK}) where {n,T,RK} = T
+@inline svectors(x::AbstractMatrix{T}) where {T} = reinterpret(reshape, SVector{size(x,1),T}, x)
+@inline svectors(x::AbstractVector{T}) where {T} = reinterpret(SVector{1,T}, x)
 
 ####
 #### ReproducingKernels.jl
 ####
+
+abstract type ReproducingKernel end
+abstract type ReproducingKernel_0 <: ReproducingKernel end
+abstract type ReproducingKernel_1 <: ReproducingKernel_0 end
+abstract type ReproducingKernel_2 <: ReproducingKernel_1 end
 
 @doc raw"
 `struct RK_H0{T} <: ReproducingKernel_0`
@@ -355,6 +319,63 @@ function _insert_factor_column(
 end
 
 ####
+#### Splines.jl
+####
+
+abstract type AbstractNormalSpline{n,T,RK} end
+
+Base.ndims(::AbstractNormalSpline{n,T,RK}) where {n,T,RK} = n
+Base.eltype(::AbstractNormalSpline{n,T,RK}) where {n,T,RK} = T
+
+@inline _get_kernel(spl::AbstractNormalSpline)    = spl._kernel
+@inline _get_nodes(spl::AbstractNormalSpline)     = spl._nodes
+@inline _get_values(spl::AbstractNormalSpline)    = spl._values
+@inline _get_d_nodes(spl::AbstractNormalSpline)   = spl._d_nodes
+@inline _get_d_dirs(spl::AbstractNormalSpline)    = spl._d_dirs
+@inline _get_d_values(spl::AbstractNormalSpline)  = spl._d_values
+@inline _get_mu(spl::AbstractNormalSpline)        = spl._mu
+@inline _get_gram(spl::AbstractNormalSpline)      = spl._gram
+@inline _get_chol(spl::AbstractNormalSpline)      = spl._chol
+@inline _get_cond(spl::AbstractNormalSpline)      = spl._cond
+@inline _get_min_bound(spl::AbstractNormalSpline) = spl._min_bound
+@inline _get_max_bound(spl::AbstractNormalSpline) = spl._max_bound
+@inline _get_scale(spl::AbstractNormalSpline)     = spl._scale
+
+@doc raw"
+`struct NormalSpline{n, T <: Real, RK <: ReproducingKernel_0} <: AbstractNormalSpline{n,T,RK}`
+
+Define a structure containing full information of a normal spline
+# Fields
+- `_kernel`: a reproducing kernel spline was built with
+- `_scale`: factor of transforming the original node locations into unit hypercube
+- `_nodes`: transformed function value nodes
+- `_values`: function values at interpolation nodes
+- `_d_nodes`: transformed function directional derivative nodes
+- `_d_dirs`: normalized derivative directions
+- `_d_values`: function directional derivative values
+- `_min_bound`: minimal bounds of the original node locations area
+- `_gram`: Gram matrix of the problem
+- `_chol`: Cholesky factorization of the Gram matrix
+- `_mu`: spline coefficients
+- `_cond`: estimation of the Gram matrix condition number
+"
+struct NormalSpline{n, T <: Real, RK <: ReproducingKernel_0} <: AbstractNormalSpline{n,T,RK}
+    _kernel::RK
+    _nodes::VecOfSVecs{n,T}
+    _values::Vector{T}
+    _d_nodes::VecOfSVecs{n,T}
+    _d_dirs::VecOfSVecs{n,T}
+    _d_values::Vector{T}
+    _mu::Vector{T}
+    _gram::Hermitian{T, Matrix{T}}
+    _chol::Cholesky{T, Matrix{T}}
+    _cond::T
+    _min_bound::SVector{n,T}
+    _max_bound::SVector{n,T}
+    _scale::T
+end
+
+####
 #### Utils.jl
 ####
 
@@ -362,39 +383,39 @@ end
     return (point .- min_bound) ./ scale
     # return clamp.((point .- min_bound) ./ scale, 0, 1) #TODO: clamp nodes? roughly equivalent to nearest neighbour extrapolation
 end
-@inbounds function _normalize(spline::NormalSpline{n}, point::SVector{n}) where {n}
-    return _normalize(point, spline._min_bound, spline._max_bound, spline._scale)
+@inbounds function _normalize(spl::AbstractNormalSpline{n}, point::SVector{n}) where {n}
+    return _normalize(point, _get_min_bound(spl), _get_max_bound(spl), _get_scale(spl))
 end
 
 @inbounds function _unnormalize(point::SVector{n}, min_bound::SVector{n}, max_bound::SVector{n}, scale::Real) where {n}
     return min_bound .+ scale .* point
     # return clamp.(min_bound .+ scale .* point, min_bound, max_bound) #TODO: clamp nodes? roughly equivalent to nearest neighbour extrapolation
 end
-@inbounds function _unnormalize(spline::NormalSpline{n}, point::SVector{n}) where {n}
-    return _unnormalize(point, spline._min_bound, spline._max_bound, spline._scale)
+@inbounds function _unnormalize(spl::AbstractNormalSpline{n}, point::SVector{n}) where {n}
+    return _unnormalize(point, _get_min_bound(spl), _get_max_bound(spl), _get_scale(spl))
 end
 
 function _normalization_scaling(nodes::AbstractVecOfSVecs)
-    min_bound = reduce((x, y) -> min.(x, y), nodes)
-    max_bound = reduce((x, y) -> max.(x, y), nodes)
+    min_bound = reduce((x, y) -> min.(x, y), nodes; init = fill(+Inf, eltype(nodes)))
+    max_bound = reduce((x, y) -> max.(x, y), nodes; init = fill(-Inf, eltype(nodes)))
     scale = maximum(max_bound .- min_bound)
     return min_bound, max_bound, scale
 end
 
 function _normalization_scaling(nodes::AbstractVecOfSVecs, d_nodes::AbstractVecOfSVecs)
-    min_bound = min.(reduce((x, y) -> min.(x, y), nodes), reduce((x, y) -> min.(x, y), d_nodes))
-    max_bound = max.(reduce((x, y) -> max.(x, y), nodes), reduce((x, y) -> max.(x, y), d_nodes))
+    min_bound = min.(reduce((x, y) -> min.(x, y), nodes; init = fill(+Inf, eltype(nodes))), reduce((x, y) -> min.(x, y), d_nodes; init = fill(+Inf, eltype(d_nodes))))
+    max_bound = max.(reduce((x, y) -> max.(x, y), nodes; init = fill(-Inf, eltype(nodes))), reduce((x, y) -> max.(x, y), d_nodes; init = fill(-Inf, eltype(d_nodes))))
     scale = maximum(max_bound .- min_bound)
     return min_bound, max_bound, scale
 end
 
-function _estimate_accuracy(spline::NormalSpline{n,T,RK}) where {n,T,RK <: ReproducingKernel_0}
-    vmax = maximum(abs, spline._values)
+function _estimate_accuracy(spl::AbstractNormalSpline{n,T,RK}) where {n,T,RK <: ReproducingKernel_0}
+    vmax = maximum(abs, _get_values(spl))
     rmae = zero(T)
-    @inbounds for i in 1:length(spline._nodes)
-        point = _unnormalize(spline, spline._nodes[i])
-        σ     = _evaluate(spline, point)
-        rmae  = max(rmae, abs(spline._values[i] - σ))
+    @inbounds for i in 1:length(_get_nodes(spl))
+        point = _unnormalize(spl, _get_nodes(spl)[i])
+        σ     = _evaluate(spl, point)
+        rmae  = max(rmae, abs(_get_values(spl)[i] - σ))
     end
     if vmax > 0
         rmae /= vmax
@@ -581,27 +602,27 @@ function _prepare(nodes::AbstractVecOfSVecs{n,T}, kernel::ReproducingKernel_0) w
 end
 
 function _construct!(
-        spline::NormalSpline{n,T,RK},
+        spl::NormalSpline{n,T,RK},
         values::AbstractVector{T},
     ) where {n, T, RK <: ReproducingKernel_0}
     n₁ = length(values)
-    length(spline._nodes) != n₁ && error("Number of data values ($n₁) does not correspond to the number of nodes $(length(spline._nodes)).")
-    size(spline._chol) != (n₁, n₁) && error("Number of data values ($n₁) does not correspond to the size of the Gram matrix ($(size(spline._chol))).")
+    length(_get_nodes(spl)) != n₁ && error("Number of data values ($n₁) does not correspond to the number of nodes $(length(_get_nodes(spl))).")
+    size(_get_chol(spl)) != (n₁, n₁) && error("Number of data values ($n₁) does not correspond to the size of the Gram matrix ($(size(_get_chol(spl)))).")
 
     # Resize buffers
-    resize!(spline._values, n₁)
-    empty!(spline._d_nodes)
-    empty!(spline._d_dirs)
-    empty!(spline._d_values)
-    resize!(spline._mu, n₁)
+    resize!(_get_values(spl), n₁)
+    empty!(_get_d_nodes(spl))
+    empty!(_get_d_dirs(spl))
+    empty!(_get_d_values(spl))
+    resize!(_get_mu(spl), n₁)
 
     # Copy values to avoid aliasing
-    spline._values .= values
+    _get_values(spl) .= values
 
     # Compute spline coefficients
-    ldiv!(spline._mu, spline._chol, spline._values)
+    ldiv!(_get_mu(spl), _get_chol(spl), _get_values(spl))
 
-    return spline
+    return spl
 end
 
 function _prepare(nodes::AbstractVecOfSVecs{n,T}, d_nodes::AbstractVecOfSVecs{n,T}, d_dirs::AbstractVecOfSVecs{n,T}, kernel::ReproducingKernel_1) where {n,T}
@@ -626,93 +647,94 @@ function _prepare(nodes::AbstractVecOfSVecs{n,T}, d_nodes::AbstractVecOfSVecs{n,
 end
 
 function _construct!(
-        spline::NormalSpline{n,T,RK},
+        spl::NormalSpline{n,T,RK},
         values::AbstractVector{T},
         d_values::AbstractVector{T},
     ) where {n, T, RK <: ReproducingKernel_0}
     n₁ = length(values)
     n₂ = length(d_values)
-    length(spline._nodes) != n₁ && error("Number of data values ($n₁) does not correspond to the number of nodes $(length(spline._nodes)).")
-    length(spline._d_nodes) != n₂ && error("Number of derivative values ($n₂) does not correspond to the number of derivative nodes.")
-    size(spline._chol) != (n₁+n₂, n₁+n₂) && error("Number of data and derivative values ($(n₁+n₂)) do not correspond to the size of the Gram matrix ($(size(spline._chol))).")
+    length(_get_nodes(spl)) != n₁ && error("Number of data values ($n₁) does not correspond to the number of nodes $(length(_get_nodes(spl))).")
+    length(_get_d_nodes(spl)) != n₂ && error("Number of derivative values ($n₂) does not correspond to the number of derivative nodes.")
+    size(_get_chol(spl)) != (n₁+n₂, n₁+n₂) && error("Number of data and derivative values ($(n₁+n₂)) do not correspond to the size of the Gram matrix ($(size(_get_chol(spl)))).")
 
     # Resize buffers
-    resize!(spline._values, n₁)
-    resize!(spline._d_nodes, n₂)
-    resize!(spline._d_dirs, n₂)
-    resize!(spline._d_values, n₂)
-    resize!(spline._mu, n₁+n₂)
+    resize!(_get_values(spl), n₁)
+    resize!(_get_d_nodes(spl), n₂)
+    resize!(_get_d_dirs(spl), n₂)
+    resize!(_get_d_values(spl), n₂)
+    resize!(_get_mu(spl), n₁+n₂)
 
     # Copy values to avoid aliasing
-    spline._values .= values
+    _get_values(spl) .= values
 
-    # Nodes scaled down by `_scale` -> directional derivative scaled up by `_scale`; allocate new array to avoid aliasing
-    spline._d_values .= spline._scale .* d_values
+    # Nodes scaled down by `scale` -> directional derivative scaled up by `scale`; allocate new array to avoid aliasing
+    _get_d_values(spl) .= _get_scale(spl) .* d_values
 
     # Compute spline coefficients and construct spline
-    ldiv!(spline._mu, spline._chol, [spline._values; spline._d_values])
+    ldiv!(_get_mu(spl), _get_chol(spl), [_get_values(spl); _get_d_values(spl)])
 
-    return spline
+    return spl
 end
 
+#### Evaluation
+
 @inline function _evaluate!(
-        spline_values::AbstractArray{<:Any,N},
-        spline::NormalSpline{n,<:Any,<:ReproducingKernel_0},
+        vals::AbstractArray{<:Any,N},
+        spl::AbstractNormalSpline{n,<:Any,<:ReproducingKernel_0},
         points::AbstractArrOfSVecs{n,<:Any,N},
     ) where {n, N}
     @inbounds for i in 1:length(points)
-        spline_values[i] = _evaluate(spline, points[i])
+        vals[i] = _evaluate(spl, points[i])
     end
-    return spline_values
+    return vals
 end
 
 @inline function _evaluate(
-        spline::NormalSpline{n,<:Any,RK},
+        spl::AbstractNormalSpline{n,<:Any,RK},
         x::SVector{n},
     ) where {n, RK <: ReproducingKernel_0}
-    @unpack _kernel, _nodes, _d_nodes, _d_dirs, _mu = spline
-    n₁ = length(_nodes)
-    n₂ = length(_d_nodes)
-    x  = _normalize(spline, x)
-    v  = zero(promote_type(eltype(spline), eltype(_kernel), eltype(x)))
+    kernel, nodes, d_nodes, d_dirs, mu =
+        _get_kernel(spl), _get_nodes(spl), _get_d_nodes(spl), _get_d_dirs(spl), _get_mu(spl)
+    n₁ = length(nodes)
+    n₂ = length(d_nodes)
+    x  = _normalize(spl, x)
+    v  = zero(promote_type(eltype(spl), eltype(kernel), eltype(x)))
     @inbounds for i in 1:n₁
-        v += _mu[i] * _rk(_kernel, x, _nodes[i])
+        v += mu[i] * _rk(kernel, x, nodes[i])
     end
     if RK <: ReproducingKernel_1
         @inbounds for i in 1:n₂
-            v += _mu[i+n₁] * _∂rk_∂e(_kernel, x, _d_nodes[i], _d_dirs[i])
+            v += mu[i+n₁] * _∂rk_∂e(kernel, x, d_nodes[i], d_dirs[i])
         end
     end
     return v
 end
 
 @inline function _evaluate_gradient(
-        spline::NormalSpline{n,<:Any,RK},
+        spl::AbstractNormalSpline{n,<:Any,RK},
         x::SVector{n},
     ) where {n, RK <: ReproducingKernel_0}
-    @unpack _kernel, _nodes, _d_nodes, _d_dirs, _mu, _scale = spline
-    n₁ = length(_nodes)
-    n₂ = length(_d_nodes)
-    x  = _normalize(spline, x)
-    ∇  = zero(SVector{n,promote_type(eltype(spline), eltype(_kernel), eltype(x))})
+    kernel, nodes, d_nodes, d_dirs, mu, scale =
+        _get_kernel(spl), _get_nodes(spl), _get_d_nodes(spl), _get_d_dirs(spl), _get_mu(spl), _get_scale(spl)
+    n₁ = length(nodes)
+    n₂ = length(d_nodes)
+    x  = _normalize(spl, x)
+    ∇  = zero(SVector{n,promote_type(eltype(spl), eltype(kernel), eltype(x))})
     @inbounds for i in 1:n₁
-        ∇ += _mu[i] * _∂rk_∂η(_kernel, x, _nodes[i])
+        ∇ += mu[i] * _∂rk_∂η(kernel, x, nodes[i])
     end
     if RK <: ReproducingKernel_1
         @inbounds for i in 1:n₂
-            ∇² = _∂²rk_∂η∂ξ(_kernel, x, _d_nodes[i])
-            ∇ += _mu[i+n₁] * (∇² * _d_dirs[i])
+            ∇² = _∂²rk_∂η∂ξ(kernel, x, d_nodes[i])
+            ∇ += mu[i+n₁] * (∇² * d_dirs[i])
         end
     end
-    return ∇ ./ _scale
+    return ∇ ./ scale
 end
 
 ####
 #### Public API
 ####
-
-@inline svectors(x::AbstractMatrix{T}) where {T} = reinterpret(reshape, SVector{size(x,1),T}, x)
-@inline svectors(x::AbstractVector{T}) where {T} = reinterpret(SVector{1,T}, x)
 
 #### ReproducingKernel_0
 
@@ -742,7 +764,7 @@ end
 end
 
 """
-`construct(spline::NormalSpline{n,T,RK}, values::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
+`construct(spline::AbstractNormalSpline{n,T,RK}, values::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
 
 Construct the spline by calculating its coefficients and completely initializing the `NormalSpline` object.
 # Arguments
@@ -752,7 +774,7 @@ Construct the spline by calculating its coefficients and completely initializing
 Return: the completely initialized `NormalSpline` object that can be passed to `evaluate` function
         to interpolate the data to required points.
 """
-@inline function construct(spline::NormalSpline{n,T,RK}, values::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function construct(spline::AbstractNormalSpline{n,T,RK}, values::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
     return _construct!(deepcopy(spline), values)
 end
 
@@ -783,7 +805,7 @@ end
 end
 
 """
-`evaluate(spline::NormalSpline{n,T,RK}, points::AbstractMatrix{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
+`evaluate(spline::AbstractNormalSpline{n,T,RK}, points::AbstractMatrix{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
 
 Evaluate the spline values at the locations defined in `points`.
 
@@ -796,18 +818,21 @@ Evaluate the spline values at the locations defined in `points`.
 
 Return: `Vector{T}` of the spline values at the locations defined in `points`.
 """
-@inline function evaluate(spline::NormalSpline{n,T,RK}, points::AbstractMatrix{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate(spline::AbstractNormalSpline{n,T,RK}, points::AbstractMatrix{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
     return evaluate(spline, svectors(points))
 end
-@inline function evaluate(spline::NormalSpline{n,T,RK}, points::AbstractArrOfSVecs{n,T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate(spline::AbstractNormalSpline{n,T,RK}, points::AbstractArrOfSVecs{n,T}) where {n, T <: Real, RK <: ReproducingKernel_0}
     return evaluate!(zeros(T, size(points)), spline, points)
 end
-@inline function evaluate!(spline_values::AbstractArray{T,N}, spline::NormalSpline{n,T,RK}, points::AbstractArrOfSVecs{n,T,N}) where {n, T <: Real, N, RK <: ReproducingKernel_0}
+@inline function evaluate!(spline_values::AbstractArray{T,N}, spline::AbstractNormalSpline{n,T,RK}, points::AbstractArrOfSVecs{n,T,N}) where {n, T <: Real, N, RK <: ReproducingKernel_0}
     return _evaluate!(spline_values, spline, points)
+end
+@inline function evaluate(spline::AbstractNormalSpline{n,T,RK}, point::SVector{n,T}) where {n, T <: Real, N, RK <: ReproducingKernel_0}
+    return _evaluate(spline, point)
 end
 
 """
-`evaluate_one(spline::NormalSpline{n,T,RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
+`evaluate_one(spline::AbstractNormalSpline{n,T,RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
 
 Evaluate the spline value at the `point` location.
 
@@ -818,15 +843,15 @@ Evaluate the spline value at the `point` location.
 
 Return: the spline value at the location defined in `point`.
 """
-@inline function evaluate_one(spline::NormalSpline{n,T,RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate_one(spline::AbstractNormalSpline{n,T,RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
     return evaluate_one(spline, SVector{n,T}(ntuple(i -> point[i], n)))
 end
-@inline function evaluate_one(spline::NormalSpline{n,T,RK}, point::SVector{n,T}) where {n, T <: Real, RK <: ReproducingKernel_0}
-    return _evaluate(spline, point)
+@inline function evaluate_one(spline::AbstractNormalSpline{n,T,RK}, point::SVector{n,T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+    return evaluate(spline, point)
 end
 
 """
-`evaluate_gradient(spline::NormalSpline{n,T,RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
+`evaluate_gradient(spline::AbstractNormalSpline{n,T,RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
 
 Evaluate gradient of the spline at the location defined in `point`.
 
@@ -839,10 +864,10 @@ Note: Gradient of spline built with reproducing kernel RK_H0 does not exist at t
 
 Return: `Vector{T}` - gradient of the spline at the location defined in `point`.
 """
-@inline function evaluate_gradient(spline::NormalSpline{n,T,RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate_gradient(spline::AbstractNormalSpline{n,T,RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
     return evaluate_gradient(spline, SVector{n,T}(ntuple(i -> point[i], n)))
 end
-@inline function evaluate_gradient(spline::NormalSpline{n,T,RK}, point::SVector{n,T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate_gradient(spline::AbstractNormalSpline{n,T,RK}, point::SVector{n,T}) where {n, T <: Real, RK <: ReproducingKernel_0}
     return _evaluate_gradient(spline, point)
 end
 
@@ -881,7 +906,7 @@ end
 end
 
 """
-`construct(spline::NormalSpline{n,T,RK}, values::AbstractVector{T}, d_values::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_1}`
+`construct(spline::AbstractNormalSpline{n,T,RK}, values::AbstractVector{T}, d_values::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_1}`
 
 Construct the spline by calculating its coefficients and completely initializing the `NormalSpline` object.
 # Arguments
@@ -892,7 +917,7 @@ Construct the spline by calculating its coefficients and completely initializing
 Return: the completely initialized `NormalSpline` object that can be passed to `evaluate` function
         to interpolate the data to required points.
 """
-@inline function construct(spline::NormalSpline{n,T,RK}, values::AbstractVector{T}, d_values::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_1}
+@inline function construct(spline::AbstractNormalSpline{n,T,RK}, values::AbstractVector{T}, d_values::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_1}
     return _construct!(deepcopy(spline), values, d_values)
 end
 
@@ -929,10 +954,149 @@ end
     return _construct!(spline, values, d_values)
 end
 
-### Utils for general case
+#### ReproducingKernel_0 (1-dimensional case)
 
 """
-`get_epsilon(spline::NormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}`
+`prepare(nodes::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}`
+
+Prepare the 1D spline by constructing and factoring a Gram matrix of the interpolation problem.
+Initialize the `NormalSpline` object.
+# Arguments
+- `nodes`: function value interpolation nodes.
+           This should be an `n₁` vector where `n₁` is the number of function value nodes.
+- `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
+            It must be a struct object of the following type:
+              `RK_H0` if the spline is constructing as a continuous function,
+              `RK_H1` if the spline is constructing as a differentiable function,
+              `RK_H2` if the spline is constructing as a twice differentiable function.
+
+Return: the partly initialized `NormalSpline` object that must be passed to `construct` function
+        in order to complete the spline initialization.
+"""
+@inline function prepare(nodes::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}
+    return prepare(svectors(nodes), kernel)
+end
+
+"""
+`interpolate(nodes::AbstractVector{T}, values::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}`
+
+Prepare and construct the 1D spline.
+# Arguments
+- `nodes`: function value interpolation nodes.
+           This should be an `n₁` vector where `n₁` is the number of function value nodes.
+- `values`: function values at `n₁` interpolation nodes.
+- `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
+            It must be a struct object of the following type:
+              `RK_H0` if the spline is constructing as a continuous function,
+              `RK_H1` if the spline is constructing as a differentiable function,
+              `RK_H2` if the spline is constructing as a twice differentiable function.
+
+Return: the completely initialized `NormalSpline` object that can be passed to `evaluate` function.
+"""
+@inline function interpolate(nodes::AbstractVector{T}, values::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}
+    interpolate(svectors(nodes), values, kernel)
+end
+
+"""
+`evaluate(spline::AbstractNormalSpline{n,T,RK}, points::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
+
+Evaluate the 1D spline values/value at the `points` locations.
+
+# Arguments
+- `spline`: the `NormalSpline` object returned by `interpolate` or `construct` function.
+- `points`: locations at which spline values are evaluating.
+            This should be a vector of size `m` where `m` is the number of evaluating points.
+
+Return: spline value at the `point` location.
+"""
+@inline function evaluate(spline::AbstractNormalSpline{n,T,RK}, points::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+    return evaluate(spline, svectors(points))
+end
+
+"""
+`evaluate_one(spline::AbstractNormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}`
+
+Evaluate the 1D spline value at the `point` location.
+
+# Arguments
+- `spline`: the `NormalSpline` object returned by `interpolate` or `construct` function.
+- `point`: location at which spline value is evaluating.
+
+Return: spline value at the `point` location.
+"""
+@inline function evaluate_one(spline::AbstractNormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}
+    return evaluate(spline, SVector{1,T}((point,)))
+end
+
+"""
+`evaluate_derivative(spline::AbstractNormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}`
+
+Evaluate the 1D spline derivative at the `point` location.
+
+# Arguments
+- `spline`: the `NormalSpline` object returned by `interpolate` or `construct` function.
+- `point`: location at which spline derivative is evaluating.
+
+Note: Derivative of spline built with reproducing kernel RK_H0 does not exist at the spline nodes.
+
+Return: the spline derivative value at the `point` location.
+"""
+@inline function evaluate_derivative(spline::AbstractNormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}
+    return evaluate_gradient(spline, SVector{1,T}((point,)))[1]
+end
+
+#### ReproducingKernel_1 (1-dimensional case)
+
+"""
+`prepare(nodes::AbstractVector{T}, d_nodes::AbstractVector{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}`
+
+Prepare the 1D interpolating normal spline by constructing and factoring a Gram matrix of the problem.
+Initialize the `NormalSpline` object.
+# Arguments
+- `nodes`: function value interpolation nodes.
+           This should be an `n₁` vector where `n₁` is the number of function value nodes.
+- `d_nodes`: The function derivatives nodes.
+             This should be an `n₂` vector where `n₂` is the number of function derivatives nodes.
+- `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
+            It must be a struct object of the following type:
+              `RK_H1` if the spline is constructing as a differentiable function,
+              `RK_H2` if the spline is constructing as a twice differentiable function.
+
+Return: the partly initialized `NormalSpline` object that must be passed to `construct` function
+        in order to complete the spline initialization.
+"""
+@inline function prepare(nodes::AbstractVector{T}, d_nodes::AbstractVector{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}
+    d_dirs = fill(ones(SVector{1,T}), length(d_nodes))
+    return prepare(svectors(nodes), svectors(d_nodes), d_dirs, kernel)
+end
+
+"""
+`interpolate(nodes::AbstractVector{T}, values::AbstractVector{T}, d_nodes::AbstractVector{T}, d_values::AbstractVector{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}`
+
+Prepare and construct the 1D interpolating normal spline.
+# Arguments
+- `nodes`: function value interpolation nodes.
+           This should be an `n₁` vector where `n₁` is the number of function value nodes.
+- `values`: function values at `nodes` nodes.
+- `d_nodes`: The function derivatives nodes.
+             This should be an `n₂` vector where `n₂` is the number of function derivatives nodes.
+- `d_values`: function derivative values at `d_nodes` nodes.
+- `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
+            It must be a struct object of the following type:
+              `RK_H1` if the spline is constructing as a differentiable function,
+              `RK_H2` if the spline is constructing as a twice differentiable function.
+
+Return: the completely initialized `NormalSpline` object that can be passed to `evaluate` function.
+"""
+@inline function interpolate(nodes::AbstractVector{T}, values::AbstractVector{T}, d_nodes::AbstractVector{T}, d_values::AbstractVector{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}
+    d_dirs = fill(ones(SVector{1,T}), length(d_nodes))
+    return interpolate(svectors(nodes), values, svectors(d_nodes), d_dirs, d_values, kernel)
+end
+
+#### Utils for general case
+
+"""
+`get_epsilon(spline::AbstractNormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}`
 
 Get the 'scaling parameter' of Bessel Potential space the spline was built in.
 # Arguments
@@ -940,8 +1104,8 @@ Get the 'scaling parameter' of Bessel Potential space the spline was built in.
 
 Return: `ε` - the 'scaling parameter'.
 """
-@inline function get_epsilon(spline::NormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}
-    return spline._kernel.ε
+@inline function get_epsilon(spline::AbstractNormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}
+    return _get_kernel(spline).ε
 end
 
 """
@@ -996,7 +1160,7 @@ end
 end
 
 """
-`estimate_cond(spline::NormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}`
+`estimate_cond(spline::AbstractNormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}`
 
 Get an estimation of the Gram matrix condition number. It needs the `spline` object is prepared and requires O(N^2) operations.
 (C. Brás, W. Hager, J. Júdice, An investigation of feasible descent algorithms for estimating the condition number of a matrix. TOP Vol.20, No.3, 2012.)
@@ -1005,12 +1169,12 @@ Get an estimation of the Gram matrix condition number. It needs the `spline` obj
 
 Return: an estimation of the Gram matrix condition number.
 """
-@inline function estimate_cond(spline::NormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel}
-    return spline._cond
+@inline function estimate_cond(spline::AbstractNormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel}
+    return _get_cond(spline)
 end
 
 """
-`estimate_accuracy(spline::NormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}`
+`estimate_accuracy(spline::AbstractNormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}`
 
 Assess accuracy of interpolation results by analyzing residuals.
 # Arguments
@@ -1018,156 +1182,64 @@ Assess accuracy of interpolation results by analyzing residuals.
 
 Return: an estimation of the number of significant digits in the interpolation result.
 """
-@inline function estimate_accuracy(spline::NormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function estimate_accuracy(spline::AbstractNormalSpline{n,T,RK}) where {n, T <: Real, RK <: ReproducingKernel_0}
     return _estimate_accuracy(spline)
 end
 
-#### ReproducingKernel_0 (1-dimensional case)
-
 """
-`prepare(nodes::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}`
+`get_cond(nodes::AbstractMatrix{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}`
 
-Prepare the 1D spline by constructing and factoring a Gram matrix of the interpolation problem.
-Initialize the `NormalSpline` object.
+Get a value of the Gram matrix spectral condition number. It is obtained by means of the matrix SVD decomposition and requires ``O(N^3)`` operations.
 # Arguments
-- `nodes`: function value interpolation nodes.
-           This should be an `n₁` vector where `n₁` is the number of function value nodes.
+- `nodes`: The function value nodes.
+           This should be an `n×n_1` matrix, where `n` is dimension of the sampled space and
+           `n₁` is the number of function value nodes. It means that each column in the matrix defines one node.
 - `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
             It must be a struct object of the following type:
               `RK_H0` if the spline is constructing as a continuous function,
               `RK_H1` if the spline is constructing as a differentiable function,
               `RK_H2` if the spline is constructing as a twice differentiable function.
 
-Return: the partly initialized `NormalSpline` object that must be passed to `construct` function
-        in order to complete the spline initialization.
+Return: a value of the Gram matrix spectral condition number.
 """
-@inline function prepare(nodes::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}
-    return prepare(svectors(nodes), kernel)
+@inline function get_cond(nodes::AbstractMatrix{T}, kernel::RK) where {T <: Real, RK <: ReproducingKernel_0}
+    return get_cond(svectors(nodes), kernel)
+end
+@inline function get_cond(nodes::AbstractVecOfSVecs{n,T}, kernel::RK) where {n, T <: Real, RK <: ReproducingKernel_0}
+    return get_cond(nodes, kernel)
 end
 
 """
-`interpolate(nodes::AbstractVector{T}, values::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}`
+`get_cond(nodes::AbstractMatrix{T}, d_nodes::AbstractMatrix{T}, d_dirs::AbstractMatrix{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}`
 
-Prepare and construct the 1D spline.
+Get a value of the Gram matrix spectral condition number. It is obtained by means of the matrix SVD decomposition and requires ``O(N^3)`` operations.
 # Arguments
-- `nodes`: function value interpolation nodes.
-           This should be an `n₁` vector where `n₁` is the number of function value nodes.
-- `values`: function values at `n₁` interpolation nodes.
-- `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
-            It must be a struct object of the following type:
-              `RK_H0` if the spline is constructing as a continuous function,
-              `RK_H1` if the spline is constructing as a differentiable function,
-              `RK_H2` if the spline is constructing as a twice differentiable function.
-
-Return: the completely initialized `NormalSpline` object that can be passed to `evaluate` function.
-"""
-@inline function interpolate(nodes::AbstractVector{T}, values::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}
-    interpolate(svectors(nodes), values, kernel)
-end
-
-"""
-`evaluate(spline::NormalSpline{n,T,RK}, points::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}`
-
-Evaluate the 1D spline values/value at the `points` locations.
-
-# Arguments
-- `spline`: the `NormalSpline` object returned by `interpolate` or `construct` function.
-- `points`: locations at which spline values are evaluating.
-            This should be a vector of size `m` where `m` is the number of evaluating points.
-
-Return: spline value at the `point` location.
-"""
-@inline function evaluate(spline::NormalSpline{n,T,RK}, points::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
-    return evaluate(spline, svectors(points))
-end
-
-"""
-`evaluate_one(spline::NormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}`
-
-Evaluate the 1D spline value at the `point` location.
-
-# Arguments
-- `spline`: the `NormalSpline` object returned by `interpolate` or `construct` function.
-- `point`: location at which spline value is evaluating.
-
-Return: spline value at the `point` location.
-"""
-@inline function evaluate_one(spline::NormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}
-    return _evaluate(spline, SVector{1,T}((point,)))
-end
-
-"""
-`evaluate_derivative(spline::NormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}`
-
-Evaluate the 1D spline derivative at the `point` location.
-
-# Arguments
-- `spline`: the `NormalSpline` object returned by `interpolate` or `construct` function.
-- `point`: location at which spline derivative is evaluating.
-
-Note: Derivative of spline built with reproducing kernel RK_H0 does not exist at the spline nodes.
-
-Return: the spline derivative value at the `point` location.
-"""
-@inline function evaluate_derivative(spline::NormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}
-    return _evaluate_gradient(spline, SVector{1,T}((point,)))[1]
-end
-
-#### ReproducingKernel_1 (1-dimensional case)
-
-"""
-`prepare(nodes::AbstractVector{T}, d_nodes::AbstractVector{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}`
-
-Prepare the 1D interpolating normal spline by constructing and factoring a Gram matrix of the problem.
-Initialize the `NormalSpline` object.
-# Arguments
-- `nodes`: function value interpolation nodes.
-           This should be an `n₁` vector where `n₁` is the number of function value nodes.
-- `d_nodes`: The function derivatives nodes.
-             This should be an `n₂` vector where `n₂` is the number of function derivatives nodes.
+- `nodes`: The function value nodes.
+           This should be an `n×n_1` matrix, where `n` is dimension of the sampled space and
+           `n₁` is the number of function value nodes.
+            It means that each column in the matrix defines one node.
+- `d_nodes`: The function directional derivatives nodes.
+             This should be an `n×n_2` matrix, where `n` is dimension of the sampled space and
+             `n₂` is the number of function directional derivative nodes.
+- `d_dirs`: Directions of the function directional derivatives.
+        This should be an `n×n_2` matrix, where `n` is dimension of the sampled space and
+        `n₂` is the number of function directional derivative nodes.
+        It means that each column in the matrix defines one direction of the function directional derivative.
 - `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
             It must be a struct object of the following type:
               `RK_H1` if the spline is constructing as a differentiable function,
               `RK_H2` if the spline is constructing as a twice differentiable function.
 
-Return: the partly initialized `NormalSpline` object that must be passed to `construct` function
-        in order to complete the spline initialization.
+Return: a value of the Gram matrix spectral condition number.
 """
-@inline function prepare(nodes::AbstractVector{T}, d_nodes::AbstractVector{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}
-    d_dirs = fill(ones(SVector{1,T}), length(d_nodes))
-    return prepare(svectors(nodes), svectors(d_nodes), d_dirs, kernel)
+@inline function get_cond(nodes::AbstractMatrix{T}, d_nodes::AbstractMatrix{T}, d_dirs::AbstractMatrix{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}
+    return get_cond(svectors(nodes), svectors(d_nodes), svectors(d_dirs), kernel)
+end
+@inline function get_cond(nodes::AbstractVecOfSVecs{n,T}, d_nodes::AbstractVecOfSVecs{n,T}, d_dirs::AbstractVecOfSVecs{n,T}, kernel::RK = RK_H1()) where {n, T <: Real, RK <: ReproducingKernel_1}
+    return get_cond(nodes, d_nodes, d_dirs, kernel)
 end
 
-"""
-`interpolate(nodes::AbstractVector{T}, values::AbstractVector{T}, d_nodes::AbstractVector{T}, d_values::AbstractVector{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}`
-
-Prepare and construct the 1D interpolating normal spline.
-# Arguments
-- `nodes`: function value interpolation nodes.
-           This should be an `n₁` vector where `n₁` is the number of function value nodes.
-- `values`: function values at `nodes` nodes.
-- `d_nodes`: The function derivatives nodes.
-             This should be an `n₂` vector where `n₂` is the number of function derivatives nodes.
-- `d_values`: function derivative values at `d_nodes` nodes.
-- `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
-            It must be a struct object of the following type:
-              `RK_H1` if the spline is constructing as a differentiable function,
-              `RK_H2` if the spline is constructing as a twice differentiable function.
-
-Return: the completely initialized `NormalSpline` object that can be passed to `evaluate` function.
-"""
-@inline function interpolate(
-        nodes::AbstractVector{T},
-        values::AbstractVector{T},
-        d_nodes::AbstractVector{T},
-        d_values::AbstractVector{T},
-        kernel::RK = RK_H1()
-    ) where {T <: Real, RK <: ReproducingKernel_1}
-    d_dirs = fill(ones(SVector{1,T}), length(d_nodes))
-    return interpolate(svectors(nodes), values, svectors(d_nodes), d_dirs, d_values, kernel)
-end
-
-### Utils for 1-dimensional case
+#### Utils for 1-dimensional case
 
 """
 `estimate_epsilon(nodes::AbstractVector{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}`
@@ -1205,59 +1277,6 @@ Return: estimation of `ε`.
 """
 @inline function estimate_epsilon(nodes::AbstractVector{T}, d_nodes::AbstractVector{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}
     return estimate_epsilon(svectors(nodes), svectors(d_nodes), kernel)
-end
-
-"""
-`get_cond(nodes::AbstractMatrix{T}, kernel::RK = RK_H0()) where {T <: Real, RK <: ReproducingKernel_0}`
-
-Get a value of the Gram matrix spectral condition number. It is obtained by means of the matrix SVD decomposition and requires ``O(N^3)`` operations.
-# Arguments
-- `nodes`: The function value nodes.
-           This should be an `n×n_1` matrix, where `n` is dimension of the sampled space and
-           `n₁` is the number of function value nodes. It means that each column in the matrix defines one node.
-- `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
-            It must be a struct object of the following type:
-              `RK_H0` if the spline is constructing as a continuous function,
-              `RK_H1` if the spline is constructing as a differentiable function,
-              `RK_H2` if the spline is constructing as a twice differentiable function.
-
-Return: a value of the Gram matrix spectral condition number.
-"""
-@inline function get_cond(nodes::AbstractMatrix{T}, kernel::RK) where {T <: Real, RK <: ReproducingKernel_0}
-    return get_cond(svectors(nodes), kernel)
-end
-@inline function get_cond(nodes::AbstractVecOfSVecs{n,T}, kernel::RK) where {n, T <: Real, RK <: ReproducingKernel_0}
-    return _get_cond(nodes, kernel)
-end
-
-"""
-`get_cond(nodes::AbstractMatrix{T}, d_nodes::AbstractMatrix{T}, d_dirs::AbstractMatrix{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}`
-
-Get a value of the Gram matrix spectral condition number. It is obtained by means of the matrix SVD decomposition and requires ``O(N^3)`` operations.
-# Arguments
-- `nodes`: The function value nodes.
-           This should be an `n×n_1` matrix, where `n` is dimension of the sampled space and
-           `n₁` is the number of function value nodes.
-            It means that each column in the matrix defines one node.
-- `d_nodes`: The function directional derivatives nodes.
-             This should be an `n×n_2` matrix, where `n` is dimension of the sampled space and
-             `n₂` is the number of function directional derivative nodes.
-- `d_dirs`: Directions of the function directional derivatives.
-        This should be an `n×n_2` matrix, where `n` is dimension of the sampled space and
-        `n₂` is the number of function directional derivative nodes.
-        It means that each column in the matrix defines one direction of the function directional derivative.
-- `kernel`: reproducing kernel of Bessel potential space the normal spline is constructed in.
-            It must be a struct object of the following type:
-              `RK_H1` if the spline is constructing as a differentiable function,
-              `RK_H2` if the spline is constructing as a twice differentiable function.
-
-Return: a value of the Gram matrix spectral condition number.
-"""
-@inline function get_cond(nodes::AbstractMatrix{T}, d_nodes::AbstractMatrix{T}, d_dirs::AbstractMatrix{T}, kernel::RK = RK_H1()) where {T <: Real, RK <: ReproducingKernel_1}
-    return get_cond(svectors(nodes), svectors(d_nodes), svectors(d_dirs), kernel)
-end
-@inline function get_cond(nodes::AbstractVecOfSVecs{n,T}, d_nodes::AbstractVecOfSVecs{n,T}, d_dirs::AbstractVecOfSVecs{n,T}, kernel::RK = RK_H1()) where {n, T <: Real, RK <: ReproducingKernel_1}
-    return _get_cond(nodes, d_nodes, d_dirs, kernel)
 end
 
 end # module NormalHermiteSplines

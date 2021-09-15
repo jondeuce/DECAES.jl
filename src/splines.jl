@@ -428,7 +428,7 @@ function local_search(
     end
 
     spl = interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, RK_H1())
-    u = NormalHermiteSplines.evaluate_one(spl, x)
+    u = NormalHermiteSplines.evaluate(spl, x)
 
     return (x, u)
 end
@@ -560,7 +560,7 @@ function spline_opt(
         if length(g) > 0
             @inbounds g[1] = Float64(evaluate_derivative(spl, x[1]))
         end
-        @inbounds Float64(evaluate_one(spl, x[1]))
+        @inbounds Float64(evaluate(spl, x[1]))
     end
     minf, minx, ret = NLopt.optimize(opt, Vector{Float64}(α₀))
     return (SVector{D,T}(minx), T(minf))
