@@ -17,7 +17,7 @@ end
 function build_suite()
     # Build suite of EPG algorithm benchmark groups
     suite = BenchmarkGroup()
-    for ETL in [32,48,64]
+    for ETL in [8,16,32,48,64]
         suite_ETL = suite["ETL=$ETL"] = BenchmarkGroup()
         for T in [Float32, Float64]
             suite_T = suite_ETL["T=$T"] = BenchmarkGroup()

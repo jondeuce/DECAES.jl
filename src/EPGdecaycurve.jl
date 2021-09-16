@@ -16,8 +16,8 @@ abstract type AbstractEPGWorkspace{T,ETL} end
 
 @inline Base.eltype(::AbstractEPGWorkspace{T}) where {T} = T
 @inline echotrainlength(::AbstractEPGWorkspace{T,ETL}) where {T,ETL} = ETL
-@inline get_mpsv(work::AbstractEPGWorkspace) = work.MPSV
-@inline get_decaycurve(work::AbstractEPGWorkspace) = work.dc
+@inline mpsv(work::AbstractEPGWorkspace) = work.MPSV
+@inline decaycurve(work::AbstractEPGWorkspace) = work.dc
 
 struct EPGOptions{T,ETL} <: FieldVector{5,T}
     α::T
@@ -38,7 +38,7 @@ end
     θ = setproperties!!(NamedTuple(θ), xs)
     EPGOptions(ETL, Tuple(θ)...)
 end
-Base.NamedTuple(θ::EPGOptions{T}) where {T} = NamedTuple{(:α,:TE,:T2,:T1,:β), NTuple{5,T}}(Tuple(θ))
+Base.NamedTuple(θ::EPGOptions{T}) where {T} = (Fs = fieldsof(EPGOptions); NamedTuple{Fs, NTuple{length(Fs),T}}(Tuple(θ)))
 
 @inline EPGdecaycurve_work(::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve_work(T, ETL)
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
@@ -87,8 +87,8 @@ using the extended phase graph algorithm using the given input parameters.
 """
 @inline EPGdecaycurve(ETL::Int, args::Real...) = EPGdecaycurve(EPGOptions(ETL, args...))
 @inline EPGdecaycurve(θ::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
-@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(get_decaycurve(work), work, EPGOptions{T,ETL}(args...))
-@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve!(get_decaycurve(work), work, θ)
+@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, EPGOptions{T,ETL}(args...))
+@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, θ)
 @inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(dc, work, EPGOptions{T,ETL}(args...))
 @inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL} = @timeit_debug TIMER() "EPG decay curve" epg_decay_curve!(dc, work, θ)
 
@@ -121,8 +121,8 @@ end
 
 function EPGWorkDualCache(::Type{T}, ::Val{ETL}, ::Val{chunk_size}) where {T, ETL, chunk_size}
     D = ForwardDiff.Dual{nothing, T, chunk_size}
-    work = EPGWork_ReIm_DualCache_Split(T, ETL)
-    dual_work = EPGWork_ReIm_DualCache_Split(D, ETL)
+    work = EPGWork_ReIm_DualVector_Split(T, ETL)
+    dual_work = EPGWork_ReIm_DualVector_Split(D, ETL)
     EPGWorkDualCache(work, dual_work)
 end
 
@@ -132,14 +132,14 @@ getindex(c::EPGWorkDualCache, ::Type{D}) where {D <: ForwardDiff.Dual} = remake(
 remake(x::Array, ::Type{T}) where {T} = x
 remake(x::Array, ::Type{D}) where {D <: ForwardDiff.Dual} = reinterpret(D, x)
 
-@inline function remake(work::EPGWork_ReIm_DualCache_Split{<:Any, ETL}, ::Type{D}) where {D <: ForwardDiff.Dual, ETL}
-    mpsv₁ = reinterpret(SVector{3,D}, work.MPSV₁.data)
-    mpsv₁ = SizedVector{ETL,SVector{3,D},typeof(mpsv₁)}(mpsv₁)
-    mpsv₂ = reinterpret(SVector{3,D}, work.MPSV₂.data)
-    mpsv₂ = SizedVector{ETL,SVector{3,D},typeof(mpsv₂)}(mpsv₂)
+@inline function remake(work::EPGWork_ReIm_DualVector_Split{<:Any, ETL}, ::Type{D}) where {D <: ForwardDiff.Dual, ETL}
+    MPSV₁ = reinterpret(SVector{3,D}, work.MPSV₁.data)
+    MPSV₁ = SizedVector{ETL,SVector{3,D},typeof(MPSV₁)}(MPSV₁)
+    MPSV₂ = reinterpret(SVector{3,D}, work.MPSV₂.data)
+    MPSV₂ = SizedVector{ETL,SVector{3,D},typeof(MPSV₂)}(MPSV₂)
     dc    = reinterpret(D, work.dc.data)
     dc    = SizedVector{ETL,D,typeof(dc)}(dc)
-    EPGWork_ReIm_DualCache_Split{D,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+    EPGWork_ReIm_DualVector_Split{D,ETL,typeof(MPSV₁),typeof(dc)}(MPSV₁, MPSV₂, dc)
 end
 =#
 
@@ -157,7 +157,7 @@ function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D
     θ = restructure(EPGOptions(f!), x, optfields(f!))
     DECAES.EPGdecaycurve!(y, epg_work, θ)
 end
-(f!::EPGFunctor)(x::AbstractVector{D}) where {D} = f!(get_decaycurve(f!.caches[D]), f!.caches[D], x)
+(f!::EPGFunctor)(x::AbstractVector{D}) where {D} = f!(decaycurve(f!.caches[D]), f!.caches[D], x)
 (f!::EPGFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D} = f!(y, f!.caches[D], x)
 
 struct EPGJacobianFunctor{T, ETL, Fs, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
@@ -337,7 +337,7 @@ function EPGWork_ReIm_Generated(T, ETL::Int)
 end
 
 function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T, ETL, A<:AbstractVector{T}, W<:EPGWork_ReIm_Generated{T,ETL}, O<:EPGOptions{T,ETL}}
-    mpsv(i::Int) = Symbol(:MPSV, i)
+    MPSV(i::Int) = Symbol(:MPSV, i)
     quote
         # Unpack workspace
         @unpack α, TE, T2, T1, β = θ
@@ -359,7 +359,7 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
 
         # Initialize MPSV vector elements
         $([
-            :($(mpsv(i)) = zero(SVector{3,$T}))
+            :($(MPSV(i)) = zero(SVector{3,$T}))
             for i in 1:ETL
         ]...)
 
@@ -368,8 +368,8 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
             m₀         = sin½α₁
             Mᵢ⁺        = V[b₁*m₀, 0, -c₁*m₀/2]
             dc[1]      = abs(Mᵢ⁺[1])
-            $(mpsv(1)) = Mᵢ⁺
-            $(mpsv(2)) = V[a₁*m₀, 0, 0]
+            $(MPSV(1)) = Mᵢ⁺
+            $(MPSV(2)) = V[a₁*m₀, 0, 0]
         end
 
         # Main loop
@@ -377,17 +377,17 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
             quote
                 # Initialize and update `dc` (j = 1)
                 @inbounds begin
-                    Mᵢ, Mᵢ₊₁   = $(mpsv(1)), $(mpsv(2))
+                    Mᵢ, Mᵢ₊₁   = $(MPSV(1)), $(MPSV(2))
                     Mᵢ⁺        = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
                     dc[$i]     = abs(Mᵢ⁺[1])
-                    $(mpsv(1)) = Mᵢ⁺
+                    $(MPSV(1)) = Mᵢ⁺
                 end
 
                 # Inner loop
                 $([
                     quote
-                        (Mᵢ₋₁, Mᵢ, Mᵢ₊₁) = (Mᵢ, Mᵢ₊₁, $(mpsv(j+1)))
-                        $(mpsv(j))       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+                        (Mᵢ₋₁, Mᵢ, Mᵢ₊₁) = (Mᵢ, Mᵢ₊₁, $(MPSV(j+1)))
+                        $(MPSV(j))       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
                     end
                     for j in 2:min(i, ETL-i)+1
                 ]...)
@@ -396,7 +396,7 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
         ]...)
 
         # Last echo
-        @inbounds dc[$ETL] = abs(F̄⋅$(mpsv(1)))
+        @inbounds dc[$ETL] = abs(F̄⋅$(MPSV(1)))
 
         return dc
     end
@@ -407,22 +407,22 @@ end
 end
 
 ####
-#### EPGWork_ReIm_DualCache
+#### EPGWork_ReIm_DualVector
 ####
 
-struct EPGWork_ReIm_DualCache{T, ETL, MPSVType <: AbstractVector{SVector{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+struct EPGWork_ReIm_DualVector{T, ETL, MPSVType <: AbstractVector{SVector{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_DualCache(T, ETL::Int)
-    mpsv₁ = SizedVector{ETL,SVector{3,T}}(undef)
-    mpsv₂ = SizedVector{ETL,SVector{3,T}}(undef)
+function EPGWork_ReIm_DualVector(T, ETL::Int)
+    MPSV₁ = SizedVector{ETL,SVector{3,T}}(undef)
+    MPSV₂ = SizedVector{ETL,SVector{3,T}}(undef)
     dc    = SizedVector{ETL,T}(undef)
-    EPGWork_ReIm_DualCache{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+    EPGWork_ReIm_DualVector{T,ETL,typeof(MPSV₁),typeof(dc)}(MPSV₁, MPSV₂, dc)
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualCache{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV₁, MPSV₂ = work
     @unpack α, TE, T2, T1, β = θ
@@ -482,22 +482,22 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualCache{T,
 end
 
 ####
-#### EPGWork_ReIm_DualCache_Split
+#### EPGWork_ReIm_DualVector_Split
 ####
 
-struct EPGWork_ReIm_DualCache_Split{T, ETL, MPSVType <: AbstractVector{SVector{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
+struct EPGWork_ReIm_DualVector_Split{T, ETL, MPSVType <: AbstractVector{SVector{3,T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T,ETL}
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_DualCache_Split(T, ETL::Int)
-    mpsv₁ = SizedVector{ETL,SVector{3,T}}(undef)
-    mpsv₂ = SizedVector{ETL,SVector{3,T}}(undef)
+function EPGWork_ReIm_DualVector_Split(T, ETL::Int)
+    MPSV₁ = SizedVector{ETL,SVector{3,T}}(undef)
+    MPSV₂ = SizedVector{ETL,SVector{3,T}}(undef)
     dc    = SizedVector{ETL,T}(undef)
-    EPGWork_ReIm_DualCache_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+    EPGWork_ReIm_DualVector_Split{T,ETL,typeof(MPSV₁),typeof(dc)}(MPSV₁, MPSV₂, dc)
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualCache_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV₁, MPSV₂ = work
     @unpack α, TE, T2, T1, β = θ
@@ -536,8 +536,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualCache_Sp
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
             MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
-        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁] # j = i
-        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0] # j = i + 1
+        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁]
+        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
@@ -568,10 +568,10 @@ struct EPGWork_ReIm_DualMVector_Split{T, ETL, MPSVType <: AbstractVector{SVector
     dc::DCType
 end
 function EPGWork_ReIm_DualMVector_Split(T, ETL::Int)
-    mpsv₁ = MVector{ETL,SVector{3,T}}(undef)
-    mpsv₂ = MVector{ETL,SVector{3,T}}(undef)
+    MPSV₁ = MVector{ETL,SVector{3,T}}(undef)
+    MPSV₂ = MVector{ETL,SVector{3,T}}(undef)
     dc    = MVector{ETL,T}(undef)
-    EPGWork_ReIm_DualMVector_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+    EPGWork_ReIm_DualMVector_Split{T,ETL,typeof(MPSV₁),typeof(dc)}(MPSV₁, MPSV₂, dc)
 end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
@@ -613,8 +613,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
             MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
-        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁] # j = i
-        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0] # j = i + 1
+        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁]
+        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
@@ -645,10 +645,10 @@ struct EPGWork_ReIm_DualPaddedMVector_Vec_Split{T, ETL, MPSVType <: AbstractVect
     dc::DCType
 end
 function EPGWork_ReIm_DualPaddedMVector_Vec_Split(T, ETL::Int)
-    mpsv₁ = MVector{ETL,Vec{4,T}}(undef)
-    mpsv₂ = MVector{ETL,Vec{4,T}}(undef)
+    MPSV₁ = MVector{ETL,Vec{4,T}}(undef)
+    MPSV₂ = MVector{ETL,Vec{4,T}}(undef)
     dc    = MVector{ETL,T}(undef)
-    EPGWork_ReIm_DualPaddedMVector_Vec_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+    EPGWork_ReIm_DualPaddedMVector_Vec_Split{T,ETL,typeof(MPSV₁),typeof(dc)}(MPSV₁, MPSV₂, dc)
 end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMVector_Vec_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
@@ -690,8 +690,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMV
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
             MPSV₁[j]       = V((sum(F*Mᵢ₋₁), sum(F̄*Mᵢ₊₁), sum(Z*Mᵢ), 0))
         end
-        MPSV₁[i]     = V((sum(F*Mᵢ), 0, sum(Z*Mᵢ₊₁), 0)) # j = i
-        MPSV₁[i+1]   = V((sum(F*Mᵢ₊₁), 0, 0, 0)) # j = i + 1
+        MPSV₁[i]     = V((sum(F*Mᵢ), 0, sum(Z*Mᵢ₊₁), 0))
+        MPSV₁[i+1]   = V((sum(F*Mᵢ₊₁), 0, 0, 0))
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
@@ -722,10 +722,10 @@ struct EPGWork_ReIm_DualPaddedVector_Split{T, ETL, MPSVType <: AbstractVector{SV
     dc::DCType
 end
 function EPGWork_ReIm_DualPaddedVector_Split(T, ETL::Int)
-    mpsv₁ = Vector{SVector{4,T}}(undef, ETL)
-    mpsv₂ = Vector{SVector{4,T}}(undef, ETL)
-    dc    = Vector{T}(undef, ETL)
-    EPGWork_ReIm_DualPaddedVector_Split{T,ETL,typeof(mpsv₁),typeof(dc)}(mpsv₁, mpsv₂, dc)
+    MPSV₁ = SizedVector{ETL,SVector{4,T}}(undef)
+    MPSV₂ = SizedVector{ETL,SVector{4,T}}(undef)
+    dc    = SizedVector{ETL,T}(undef)
+    EPGWork_ReIm_DualPaddedVector_Split{T,ETL,typeof(MPSV₁),typeof(dc)}(MPSV₁, MPSV₂, dc)
 end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
@@ -767,8 +767,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVe
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
             MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
         end
-        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁, 0] # j = i
-        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0, 0] # j = i + 1
+        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁, 0]
+        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
@@ -894,8 +894,8 @@ const EPG_Algorithms = Any[
     EPGWork_Basic_Cplx,
     EPGWork_Vec,
     EPGWork_ReIm,
-    EPGWork_ReIm_DualCache,
-    EPGWork_ReIm_DualCache_Split,
+    EPGWork_ReIm_DualVector,
+    EPGWork_ReIm_DualVector_Split,
     EPGWork_ReIm_DualMVector_Split,
     EPGWork_ReIm_DualPaddedMVector_Vec_Split,
     EPGWork_ReIm_DualPaddedVector_Split,
