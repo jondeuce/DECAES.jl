@@ -8,6 +8,7 @@ using DECAES.NormalHermiteSplines
 using StaticArrays
 using Random
 using LinearAlgebra
+const nhs = DECAES.NormalHermiteSplines
 
 # Packages from this local env
 using BenchmarkTools
@@ -43,33 +44,24 @@ function plot_neighbours(::Val{D} = Val(2)) where {D}
 end
 
 function plot_bisection_search(
-        ::Val{D} = Val(2);
+        ::Val{D},
+        ::Val{ETL},
+        prob::DECAES.NNLSDiscreteSurrogateSearch{D,T},
+        opts::DECAES.T2mapOptions{T};
         surrtype = :hermite,
-        npts     = 32,
-        mineval  = 5,
+        npts     = opts.nRefAngles,
+        mineval  = opts.nRefAnglesMin,
         maxeval  = npts,
-        flip     = 175.0,
-        refcon   = 150.0,
-    ) where {D}
+    ) where {D,T,ETL}
     surrtype === :cubic && @assert D == 1 "cubic splines only support 1D"
 
-    # grid    = DECAES.meshgrid(SVector{1,Float64}, range(0, 1; length = npts))
-    # xopt    = rand()
-    # f_true  = x -> sum(@. 5 * sin(5 * (x - xopt))^2 + (x - xopt)^2)
-    # ∇f_true = x -> @. 50 * sin(5 * (x - xopt)) * cos(5 * (x - xopt)) + 2 * (x - xopt)
-    # surr    = surrtype === :cubic ?
-    #     DECAES.CubicSplineSurrogate(I -> f_true(grid[I]), grid, SVector{1,Float64}[], Float64[]) :
-    #     DECAES.HermiteSplineSurrogate(I -> (f_true(grid[I]), ∇f_true(grid[I])), grid, zeros(Float64, size(grid)), SVector{1,Float64}[], Float64[], SVector{1,Float64}[], Float64[])
-
     # build surrogate
-    opts = DECAES.mock_t2map_opts(; MatrixSize = (1,1,1), nTE = 32, SetFlipAngle = flip, SetRefConAngle = refcon, nRefAngles = npts)
-    prob = DECAES.mock_surrogate_search_problem(Val(D), Val(32); opts = opts)
     surr = surrtype === :cubic ?
         DECAES.CubicSplineSurrogate(prob) :
         DECAES.HermiteSplineSurrogate(prob)
     f_true = function(x...)
         α, β = length(x) == 1 ? (x[1], opts.SetRefConAngle) : (x[1], x[2])
-        θ = DECAES.EPGOptions{Float64,32}(α, opts.TE, 0.0, opts.T1, β)
+        θ = DECAES.EPGOptions{T,ETL}(α, opts.TE, 0.0, opts.T1, β)
         A = DECAES.epg_decay_basis(θ, DECAES.logrange(opts.T2Range..., opts.nT2))
         nnls_prob = DECAES.NNLSProblem(A, prob.b)
         DECAES.solve!(nnls_prob, A, prob.b)
@@ -79,16 +71,17 @@ function plot_bisection_search(
     # solve discrete search problem
     state = DECAES.DiscreteSurrogateSearcher(surr; mineval = mineval, maxeval = maxeval)
     minx, miny = DECAES.bisection_search(surr, state; maxeval = maxeval)
-    minx, miny = DECAES.local_search(surr, state, minx; maxeval = maxeval)
+    # minx, miny = DECAES.local_search(surr, minx)
 
     # reconstruct surrogate from evaluated points and plot
     if surrtype === :cubic
-        spl = DECAES._make_spline(first.(surr.p), surr.u)
+        nodes = () -> surr.p
+        values = () -> surr.u
+        spl = DECAES._make_spline(first.(nodes()), values())
     else
-        σ    = DECAES.interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, DECAES.RK_H1())
-        spl  = (x...) -> DECAES.evaluate(σ, SVector(x...))
-        σ₀   = DECAES.interpolate(surr.p, surr.u, DECAES.RK_H1())
-        spl₀ = (x...) -> DECAES.evaluate(σ₀, SVector(x...))
+        nodes = () -> map(x -> nhs._unnormalize(surr.spl, x), nhs._get_nodes(surr.spl))
+        values = () -> nhs._get_values(surr.spl)
+        spl = (x...) -> nhs.evaluate(surr.spl, SVector(x...))
     end
 
     if D == 1
@@ -96,37 +89,46 @@ function plot_bisection_search(
         ax = fig[1,1] = Axis(fig)
         lines!(surr.grid[1][1]..surr.grid[end][1], f_true; color = :darkblue, label = "f")
         lines!(surr.grid[1][1]..surr.grid[end][1], x -> spl(x); color = :darkred, label = "spl")
-        scatter!(first.(surr.p), surr.u; markersize = 10, color = :blue, label = "pts")
+        scatter!(first.(nodes()), values(); markersize = 10, color = :blue, label = "pts")
         scatter!(first.(minx), [miny]; markersize = 10, color = :red, marker = :diamond, label = "min")
         fig[1,2] = Legend(fig, ax)
         return fig
     else
         xs = LinRange(surr.grid[1,1][1], surr.grid[end,end][1], 4*npts)
         ys = LinRange(surr.grid[1,1][2], surr.grid[end,end][2], 4*npts)
-        zs_withgrad = spl.(xs, ys')
-        zs_nograd = spl₀.(xs, ys')
+        zs = spl.(xs, ys')
         zs_true = f_true.(xs, ys')
 
         fig = Figure()
-        ax1 = Axis(fig[1,1]; title = L"$\sigma(x)$: no gradient")
-        contourf!(ax1, xs, ys, zs_nograd; limits = extrema(zs_true), levels = 50)
-        scatter!(ax1, (p->p[1]).(surr.p), (p->p[2]).(surr.p), surr.u; markersize = 5, color = :black, label = "pts")
+        ax1 = Axis(fig[1,1]; title = L"$\sigma(x)$")
+        contourf!(ax1, xs, ys, zs; limits = extrema(zs_true), levels = 50)
+        scatter!(ax1, (p->p[1]).(nodes()), (p->p[2]).(nodes()), values(); markersize = 5, color = :black, label = "pts")
         scatter!(ax1, [minx[1]], [minx[2]]; markersize = 10, color = :red, marker = :diamond, label = "min")
 
-        ax2 = Axis(fig[1,2]; title = L"$\sigma(x)$: with gradient")
-        contourf!(ax2, xs, ys, zs_withgrad; limits = extrema(zs_true), levels = 50)
-        scatter!(ax2, (p->p[1]).(surr.p), (p->p[2]).(surr.p), surr.u; markersize = 5, color = :black, label = "pts")
+        ax2 = Axis(fig[1,2]; title = L"f(x)")
+        cont2 = contourf!(ax2, xs, ys, zs_true; limits = extrema(zs_true), levels = 50)
+        scatter!(ax2, (p->p[1]).(nodes()), (p->p[2]).(nodes()), values(); markersize = 5, color = :black, label = "pts")
         scatter!(ax2, [minx[1]], [minx[2]]; markersize = 10, color = :red, marker = :diamond, label = "min")
 
-        ax3 = Axis(fig[1,3]; title = L"f(x)")
-        cont3 = contourf!(ax3, xs, ys, zs_true; limits = extrema(zs_true), levels = 50)
-        scatter!(ax3, (p->p[1]).(surr.p), (p->p[2]).(surr.p), surr.u; markersize = 5, color = :black, label = "pts")
-        scatter!(ax3, [minx[1]], [minx[2]]; markersize = 10, color = :red, marker = :diamond, label = "min")
-
-        # Colorbar(fig[2,1:3], cont3; vertical = false, flipaxis = false)
-        hidedecorations!.([ax1, ax2, ax3])
+        # Colorbar(fig[2,1:2], cont2; vertical = false, flipaxis = false)
+        hidedecorations!.([ax1, ax2])
         return fig
     end
+end
+function plot_bisection_search(
+        ::Val{D}; 
+        flip   = 175.0,
+        refcon = 150.0,
+        npts   = 32,
+        kwargs...,
+    ) where {D}
+    opts = DECAES.mock_t2map_opts(; MatrixSize = (1,1,1), nTE = 32, SetFlipAngle = flip, SetRefConAngle = refcon, nRefAngles = npts)
+    prob = DECAES.mock_surrogate_search_problem(Val(D), Val(32), opts)
+    plot_bisection_search(Val(D), Val(32), prob, opts; npts = npts, kwargs...)
+end
+function plot_bisection_search(b::AbstractVector, opts::T2mapOptions, ::Val{D}; kwargs...) where {D}
+    prob = DECAES.mock_surrogate_search_problem(b, opts, Val(D))
+    plot_bisection_search(Val(D), Val(opts.nTE), prob, opts; npts = opts.nRefAngles, kwargs...)
 end
 
 function benchmark_spline()

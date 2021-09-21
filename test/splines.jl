@@ -40,7 +40,7 @@ function test_mock_surrogate_search_problem(
         return l, ∇l
     end
 
-    prob = DECAES.mock_surrogate_search_problem(Val(2); opts = opts)
+    prob = DECAES.mock_surrogate_search_problem(Val(2), Val(opts.nTE), opts)
     work = DECAES.lsqnonneg_work(zeros(opts.nTE, opts.nT2), zeros(opts.nTE))
 
     for I in CartesianIndices(prob.αs)

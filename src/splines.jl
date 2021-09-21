@@ -196,38 +196,37 @@ function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
     return SVector{1,T}(p), T(u)
 end
 
-struct HermiteSplineSurrogate{D,T,F} <: AbstractSurrogate{D,T}
+struct HermiteSplineSurrogate{D,T,F,RK} <: AbstractSurrogate{D,T}
     fg::F
     grid::Array{SVector{D,T},D}
     ugrid::Array{T,D}
-    p::Vector{SVector{D,T}}
-    u::Vector{T}
-    s::Vector{SVector{D,T}}
-    e::Vector{SVector{D,T}}
-    du::Vector{T}
+    spl::NormalHermiteSplines.ElasticNormalSpline{D,T,RK}
 end
 
-function HermiteSplineSurrogate(fg, grid::Array{SVector{D,T},D}) where {D,T}
-    HermiteSplineSurrogate(fg, grid, zeros(T, size(grid)), SVector{D,T}[], T[], SVector{D,T}[], SVector{D,T}[], T[])
+function HermiteSplineSurrogate(fg, grid::Array{SVector{D,T},D}, kernel = RK_H1(one(T))) where {D,T}
+    spl = NormalHermiteSplines.ElasticNormalSpline(first(grid), last(grid), maximum(size(grid)), kernel)
+    HermiteSplineSurrogate(fg, grid, zeros(T, size(grid)), spl)
 end
 
 function update!(surr::HermiteSplineSurrogate{D,T}, I::CartesianIndex{D}) where {D,T}
     u, ∇u = surr.fg(I)
     @inbounds p = surr.grid[I]
-    push!(surr.p, p)
-    push!(surr.u, u)
+    insert!(surr.spl, p, u)
     @inbounds for i in 1:D
-        push!(surr.s, p)
-        push!(surr.e, basisvector(SVector{D,T}, i))
-        push!(surr.du, ∇u[i])
+        eᵢ = basisvector(SVector{D,T}, i)
+        insert!(surr.spl, p, eᵢ, ∇u[i])
     end
     return surr
 end
 
 function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
-    spl = interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, RK_H1())
-    u, I = findmin(evaluate!(vec(surr.ugrid), spl, vec(surr.grid)))
-    p = surr.grid[I]
+    u, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
+    @inbounds p = surr.grid[I]
+
+    p₀, p₁ = first(surr.grid), last(surr.grid)
+    Δp = maximum(Tuple(abs.(p₁ - p₀)))
+    p, u = local_search(surr, p; maxiter = 100, initial_step = Δp/100)
+
     return (p, u)
 end
 
@@ -323,18 +322,23 @@ function bisection_search(
         maxeval::Int,
     ) where {D,T}
 
-    # Repeat until convergence:
-    #   1. Get new suggestion from surrogate,
-    #   2. Find smallest bounding box containing the suggestion,
-    #       2a. Return if box is sufficiently small or if the maximum number of evaluations has been reched
-    #       2b. Otherwise, evaluate the box corners (see `is_evaluated`) and go to 1.
+    # Algorithm:
+    #   0. Get initial optimum suggestion from surrogate
+    #   REPEAT:
+    #       1. Find smallest bounding box containing the optimum suggestion
+    #       2. Evaluate the box corners
+    #       3. Get new optimum suggestion from surrogate:
+    #           IF: Box is sufficiently small or if the maximum number of evaluations has been reached:
+    #               RETURN: Current optimum
+    #           ELSE:
+    #               GOTO:   1.
+    x, u = suggest_point(surr)
     while true
-        x, u = suggest_point(surr)
         box = minimal_bounding_box(state, x)
+        evaluate_box!(surr, state, box; maxeval = maxeval)
+        x, u = suggest_point(surr)
         if state.numeval[] ≥ maxeval || converged(state, box)
             return (x, u)
-        else
-            evaluate_box!(surr, state, box; maxeval = maxeval)
         end
     end
 end
@@ -394,32 +398,35 @@ end
 
 function local_search(
         surr::HermiteSplineSurrogate{D,T},
-        state::DiscreteSurrogateSearcher{D,T},
-        x₀::SVector{D,T};
-        maxeval::Int,
+        x₀::SVector{D,T},
+        state::Union{Nothing, DiscreteSurrogateSearcher{D,T}} = nothing;
         maxiter::Int = 100,
+        maxeval::Int = maxiter,
         xtol_rel = 1e-6,
         xtol_abs = 1e-4,
         initial_step = 0.1,
     ) where {D,T}
 
-    box = BoundingBox(size(surr.grid))
-    for I in box.corners
-        update!(surr, state, I; maxeval = maxeval) # initialize surrogate with domain corners
+    if state !== nothing
+        box = BoundingBox(size(surr.grid))
+        for I in box.corners
+            update!(surr, state, I; maxeval = maxeval) # initialize surrogate with domain corners
+        end
     end
 
-    @inbounds x, xlo, xhi = x₀, state.grid[begin], state.grid[end]
+    x, xlo, xhi = x₀, first(surr.grid), last(surr.grid)
     Δx = SVector{D,T}(ntuple(d -> T(Inf), D))
     opt = ADAM{D,T}(initial_step)
 
     for _ in 1:maxiter
-        # Find nearest gridpoint to `x` and update surrogate
-        I = nearest_gridpoint(state, x)
-        update!(surr, state, I; maxeval = maxeval)
+        if state !== nothing
+            # Find nearest gridpoint to `x` and update surrogate
+            I = nearest_gridpoint(state, x)
+            update!(surr, state, I; maxeval = maxeval)
+        end
 
         # Perform gradient descent step using surrogate function
-        spl = interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, RK_H1())
-        ∇u = NormalHermiteSplines.evaluate_gradient(spl, x)
+        ∇u = NormalHermiteSplines.evaluate_gradient(surr.spl, x)
         Δx, opt = update(∇u, opt)
         x = @. clamp(x - Δx, xlo, xhi)
 
@@ -427,8 +434,7 @@ function local_search(
         maximum(abs.(Δx)) <= max(T(xtol_abs), T(xtol_rel) * maximum(abs.(x))) && break
     end
 
-    spl = interpolate(surr.p, surr.u, surr.s, surr.e, surr.du, RK_H1())
-    u = NormalHermiteSplines.evaluate(spl, x)
+    u = NormalHermiteSplines.evaluate(surr.spl, x)
 
     return (x, u)
 end
@@ -518,13 +524,13 @@ function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1,T}) where {T}
     CubicSplineSurrogate(f, prob.αs, SVector{1,T}[], T[])
 end
 
-function HermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D,T}) where {D,T}
+function HermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D,T}, kernel = RK_H1(one(T))) where {D,T}
     function fg(I)
         u = loss!(prob, I)
         ∇u = ∇loss!(prob, I)
         return u, ∇u
     end
-    return HermiteSplineSurrogate(fg, prob.αs)
+    return HermiteSplineSurrogate(fg, prob.αs, kernel)
 end
 
 function surrogate_spline_opt(
@@ -567,16 +573,16 @@ function spline_opt(
 end
 
 function mock_surrogate_search_problem(
-        ::Val{D} = Val(2),
-        ::Val{ETL} = Val(32);
-        opts::T2mapOptions = mock_t2map_opts(; MatrixSize = (1,1,1), nTE = ETL),
+        b::AbstractVector,
+        opts::T2mapOptions,
+        ::Val{D},
+        ::Val{ETL};
         alphas = range(50, 180, length = opts.nRefAngles),
         betas = range(50, 180, length = opts.nRefAngles),
     ) where {D,ETL}
 
     # Mock CPMG image
     @assert opts.nTE == ETL
-    b = vec(mock_image(opts))
     opt_vars = D == 1 ? (:α,) : (:α, :β)
     opt_ranges = D == 1 ? (alphas,) : (alphas, betas)
     As = zeros(ETL, opts.nT2, length.(opt_ranges)...)
@@ -596,4 +602,12 @@ function mock_surrogate_search_problem(
     end
 
     return NNLSDiscreteSurrogateSearch(As, ∇As, opt_ranges, b)
+end
+function mock_surrogate_search_problem(::Val{D}, ::Val{ETL}, opts = mock_t2map_opts(; MatrixSize = (1,1,1), nTE = ETL); kwargs...) where {D,ETL}
+    b = vec(mock_image(opts))
+    mock_surrogate_search_problem(b, opts, Val(D), Val(ETL); kwargs...)
+end
+function mock_surrogate_search_problem(b::AbstractVector, opts::T2mapOptions, ::Val{D}; kwargs...) where {D}
+    @assert length(b) == opts.nTE
+    mock_surrogate_search_problem(b, opts, Val(D), Val(length(b)); kwargs...)
 end

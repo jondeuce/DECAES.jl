@@ -228,16 +228,14 @@ end
 function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
     @unpack nnls_search_prob, alpha_opt, beta_opt = thread_buffer
 
-    nnls_search_surrogate = LEGACY[] ?
+    nnls_surrogate = LEGACY[] ?
         CubicSplineSurrogate(nnls_search_prob) :
         HermiteSplineSurrogate(nnls_search_prob)
+    # nnls_surrogate = CubicSplineSurrogate(nnls_search_prob)
+    # nnls_surrogate = HermiteSplineSurrogate(nnls_search_prob)
+    nnls_searcher = DiscreteSurrogateSearcher(nnls_surrogate; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
+    αs, _ = bisection_search(nnls_surrogate, nnls_searcher; maxeval = o.nRefAngles)
 
-    αs, _ = surrogate_spline_opt(
-        nnls_search_prob,
-        nnls_search_surrogate;
-        mineval = o.nRefAnglesMin,
-        maxeval = o.nRefAngles,
-    )
     (o.SetFlipAngle === nothing) && @inbounds(alpha_opt[] = αs[1])
     (o.SetRefConAngle === nothing) && @inbounds(beta_opt[] = o.SetFlipAngle === nothing ? αs[2] : αs[1])
 
