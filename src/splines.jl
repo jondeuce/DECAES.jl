@@ -169,6 +169,9 @@ _spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_sp
 
 abstract type AbstractSurrogate{D,T} end
 
+gridwidths(surr::AbstractSurrogate) = Tuple(abs.(last(surr.grid) - first(surr.grid)))
+gridspacings(surr::AbstractSurrogate) = gridwidths(surr) ./ size(surr.grid)
+
 struct CubicSplineSurrogate{T,F} <: AbstractSurrogate{1,T}
     f::F
     grid::Vector{SVector{1,T}}
@@ -222,11 +225,7 @@ end
 function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
     u, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
     @inbounds p = surr.grid[I]
-
-    p₀, p₁ = first(surr.grid), last(surr.grid)
-    Δp = maximum(Tuple(abs.(p₁ - p₀)))
-    p, u = local_search(surr, p; maxiter = 100, initial_step = Δp/100)
-
+    p, u = local_search(surr, p)
     return (p, u)
 end
 
@@ -238,7 +237,10 @@ struct BoundingBox{D,S,N}
     bounds::NTuple{D,NTuple{2,Int}}
     corners::SArray{S,CartesianIndex{D},D,N}
 end
-Base.show(io::IO, ::MIME"text/plain", box::BoundingBox{D}) where {D} = print(io, "$D-D BoundingBox with dimensions: " * join(box.bounds, " × "))
+corners(box::BoundingBox) = box.corners
+bounds(box::BoundingBox) = box.bounds
+widths(box::BoundingBox{D}) where {D} = ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D)
+Base.show(io::IO, ::MIME"text/plain", box::BoundingBox{D}) where {D} = print(io, "$D-D BoundingBox with dimensions: " * join(bounds(box), " × "))
 
 BoundingBox(widths::NTuple{D,Int}) where {D} = BoundingBox(tuple.(1, widths))
 BoundingBox(bounds::NTuple{D,NTuple{2,Int}}) where {D} = BoundingBox(bounds, corners(bounds))
@@ -251,12 +253,12 @@ BoundingBox(bounds::NTuple{D,NTuple{2,Int}}) where {D} = BoundingBox(bounds, cor
 end
 
 function opposite_corner(box::BoundingBox{D}, I::CartesianIndex{D}) where {D}
-    @inbounds lo, hi = box.corners[begin], box.corners[end]
+    @inbounds lo, hi = first(corners(box)), last(corners(box))
     return lo + hi - I
 end
 
 function bisect(box::BoundingBox{D}) where {D}
-    _, i = findmax(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D))
+    _, i = findmax(widths(box))
     left_bounds = ntuple(D) do d
         i !== d ? box.bounds[d] : (box.bounds[i][1], (box.bounds[i][1] + box.bounds[i][2]) ÷ 2)
     end
@@ -266,7 +268,7 @@ function bisect(box::BoundingBox{D}) where {D}
     return BoundingBox(left_bounds), BoundingBox(right_bounds)
 end
 
-splittable(box::BoundingBox{D}) where {D} = any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]) > 1, D))
+splittable(box::BoundingBox{D}) where {D} = any(widths(box) .> 1)
 
 ####
 #### Searching on a discrete grid using a surrogate function
@@ -335,7 +337,7 @@ function bisection_search(
     x, u = suggest_point(surr)
     while true
         box = minimal_bounding_box(state, x)
-        evaluate_box!(surr, state, box; maxeval = maxeval)
+        evaluate_box!(surr, state, box, x; maxeval = maxeval)
         x, u = suggest_point(surr)
         if state.numeval[] ≥ maxeval || converged(state, box)
             return (x, u)
@@ -368,8 +370,15 @@ function minimal_bounding_box(
     end
 end
 
-function evaluate_box!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}; maxeval::Int) where {D}
-    @inbounds for I in box.corners
+function evaluate_box!(
+        surr::AbstractSurrogate{D,T},
+        state::DiscreteSurrogateSearcher{D,T},
+        box::BoundingBox{D},
+        x::Union{Nothing, SVector{D,T}} = nothing;
+        maxeval::Int,
+    ) where {D,T}
+    cs = x === nothing ? corners(box) : sorted_corners(state, box, x)
+    @inbounds for I in cs
         is_evaluated(state, box) && break # box sufficiently evaluated
         update!(surr, state, I; maxeval = maxeval) && break # update surrogate, breaking if max evals reached
     end
@@ -378,19 +387,38 @@ end
 
 function is_evaluated(state::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D}
     # Box is considered sufficiently evaluated when all of the corners have been evaluted
-    count(I -> @inbounds(state.seen[I]), box.corners) >= 2^D
+    count(I -> @inbounds(state.seen[I]), corners(box)) >= 2^D
 end
 
 function converged(::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D}
     # Convergence is defined as: bounding box has at least one side of length <= 1
-    any(ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]) <= 1, D))
+    any(widths(box) .<= 1)
+end
+
+function centre(state::DiscreteSurrogateSearcher{D,T}, box::BoundingBox{D}) where {D,T}
+    @inbounds lo = state.grid[first(corners(box))]
+    @inbounds hi = state.grid[last(corners(box))]
+    (lo + hi)/2
+end
+
+function sorted_corners(state::DiscreteSurrogateSearcher{D,T}, box::BoundingBox{D}, x::SVector{D,T}) where {D,T}
+    dist²(I) = @inbounds sum(abs2.(state.grid[I] - x))
+    cs = corners(box)
+    typeof(cs)(TupleTools.sort(Tuple(cs); by = dist²))
 end
 
 function contains(state::DiscreteSurrogateSearcher{D,T}, box::BoundingBox{D}, x::SVector{D,T}) where {D,T}
-    @inbounds bottomleft = state.grid[box.corners[begin]]
-    @inbounds topright = state.grid[box.corners[end]]
-    all(bottomleft .<= x .<= topright)
+    @inbounds lo = state.grid[first(corners(box))]
+    @inbounds hi = state.grid[last(corners(box))]
+    all(lo .<= x .<= hi)
 end
+
+function is_inside(grid::AbstractArray{SVector{D,T},D}, x::SVector{D,T}) where {D,T}
+    @inbounds lo = first(grid)
+    @inbounds hi = last(grid)
+    all(lo .< x .< hi)
+end
+is_inside(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T}) where {D,T} = is_inside(state.grid, x)
 
 ####
 #### Local optimization using surrogate functions
@@ -404,34 +432,41 @@ function local_search(
         maxeval::Int = maxiter,
         xtol_rel = 1e-6,
         xtol_abs = 1e-4,
-        initial_step = 0.1,
+        initial_step = maximum(gridwidths(surr)) / 25,
+        xeval_radius = √sum(abs2, gridspacings(surr)) - sqrt(eps(T)),
     ) where {D,T}
 
     if state !== nothing
+        # Initialize surrogate with domain corners
         box = BoundingBox(size(surr.grid))
-        for I in box.corners
-            update!(surr, state, I; maxeval = maxeval) # initialize surrogate with domain corners
+        for I in corners(box)
+            update!(surr, state, I; maxeval = maxeval)
         end
     end
 
-    x, xlo, xhi = x₀, first(surr.grid), last(surr.grid)
-    Δx = SVector{D,T}(ntuple(d -> T(Inf), D))
+    x, xlast = x₀, x₀
+    xlo, xhi = first(surr.grid), last(surr.grid)
     opt = ADAM{D,T}(initial_step)
 
     for _ in 1:maxiter
         if state !== nothing
             # Find nearest gridpoint to `x` and update surrogate
-            I = nearest_gridpoint(state, x)
-            update!(surr, state, I; maxeval = maxeval)
+            I, xI = nearest_gridpoint(state, x)
+            dmin = minimum(NormalHermiteSplines._get_nodes(surr.spl)) do p
+                norm(xI - NormalHermiteSplines._unnormalize(surr.spl, p))
+            end
+            if dmin > xeval_radius
+                update!(surr, state, I; maxeval = maxeval)
+            end
         end
 
         # Perform gradient descent step using surrogate function
         ∇u = NormalHermiteSplines.evaluate_gradient(surr.spl, x)
         Δx, opt = update(∇u, opt)
-        x = @. clamp(x - Δx, xlo, xhi)
+        xlast, x = x, @. clamp(x - Δx, xlo, xhi)
 
         # Check for convergence
-        maximum(abs.(Δx)) <= max(T(xtol_abs), T(xtol_rel) * maximum(abs.(x))) && break
+        maximum(abs.(x - xlast)) <= max(T(xtol_abs), T(xtol_rel) * maximum(abs.(x))) && break
     end
 
     u = NormalHermiteSplines.evaluate(surr.spl, x)
@@ -439,19 +474,24 @@ function local_search(
     return (x, u)
 end
 
-function nearest_gridpoint(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T}) where {D,T}
-    @inbounds xlo, xhi = state.grid[begin], state.grid[end]
-    @inbounds Ilo, Ihi = CartesianIndices(state.grid)[begin], CartesianIndices(state.grid)[end]
+function nearest_gridpoint(grid::AbstractArray{SVector{D,T},D}, x::SVector{D,T}) where {D,T}
+    @inbounds xlo, xhi = first(grid), last(grid)
+    @inbounds Ilo, Ihi = first(CartesianIndices(grid)), last(CartesianIndices(grid))
     lo, hi = SVector(Tuple(Ilo)), SVector(Tuple(Ihi))
     i = @. clamp(round(Int, (x - xlo) * (hi - lo) / (xhi - xlo) + lo), lo, hi)
-    return CartesianIndex(Tuple(i))
+    I = CartesianIndex(Tuple(i))
+    xI = @inbounds grid[I]
+    return I, xI
 end
+nearest_gridpoint(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T}) where {D,T} = nearest_gridpoint(state.grid, x)
 
-function test_nearest_gridpoint()
-    grid = meshgrid(SVector, range(-3, 4, length=4), range(1, 5, length=7))
-    I = nearest_gridpoint(grid, SVector(10.0, -10.0))
-    I, grid[I]
+function nearest_interior_gridpoint(grid::AbstractArray{SVector{D,T},D}, x::SVector{D,T}) where {D,T}
+    R = CartesianIndices(grid)
+    One = CartesianIndex(ntuple(d -> 1, D))
+    Ilo, Ihi = first(R) + One, last(R) - One
+    return nearest_gridpoint(@views(grid[Ilo:Ihi]), x)
 end
+nearest_interior_gridpoint(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T}) where {D,T} = nearest_interior_gridpoint(state.grid, x)
 
 ####
 #### Global optimization for NNLS problem

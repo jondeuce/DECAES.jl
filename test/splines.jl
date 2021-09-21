@@ -52,7 +52,7 @@ function test_mock_surrogate_search_problem(
     end
 end
 
-function test_opposite_corner()
+function test_bounding_box()
     for bounds in [
             ((2,3),),
             ((2,3), (5,7)),
@@ -66,11 +66,16 @@ function test_opposite_corner()
     end
 end
 
-function test_minimal_bounding_box()
+function test_discrete_searcher()
     grid  = DECAES.meshgrid(SVector{2,Float64}, 1:5, 1:10)
     surr  = DECAES.HermiteSplineSurrogate(I -> (1.0, zero(SVector{2,Float64})), grid)
     state = DECAES.DiscreteSurrogateSearcher(surr; mineval = 0, maxeval = 0)
     state.seen[[1,5], [1,10]] .= true
+
+    @test DECAES.sorted_corners(state, DECAES.BoundingBox(((2,4), (3,7))), SA[3.5, 6.5]) == SMatrix{2,2}((CartesianIndex(4, 7), CartesianIndex(2, 7), CartesianIndex(4, 3), CartesianIndex(2, 3)))
+    @test DECAES.sorted_corners(state, DECAES.BoundingBox(((2,4), (3,7))), SA[2.5, 6.5]) == SMatrix{2,2}((CartesianIndex(2, 7), CartesianIndex(4, 7), CartesianIndex(2, 3), CartesianIndex(4, 3)))
+    @test DECAES.sorted_corners(state, DECAES.BoundingBox(((2,4), (3,7))), SA[2.5, 4.5]) == SMatrix{2,2}((CartesianIndex(2, 3), CartesianIndex(4, 3), CartesianIndex(2, 7), CartesianIndex(4, 7)))
+    @test DECAES.sorted_corners(state, DECAES.BoundingBox(((2,4), (3,7))), SA[3.5, 4.5]) == SMatrix{2,2}((CartesianIndex(4, 3), CartesianIndex(2, 3), CartesianIndex(4, 7), CartesianIndex(2, 7)))
 
     #  1  -------  1  ----------  1
     #  |  0  0  0  |  0  0  0  0  |
@@ -99,7 +104,7 @@ end
         test_mock_surrogate_search_problem()
     end
     @testset "bounding box" begin
-        test_opposite_corner()
-        test_minimal_bounding_box()
+        test_bounding_box()
+        test_discrete_searcher()
     end
 end
