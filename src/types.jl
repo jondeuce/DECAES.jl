@@ -102,6 +102,10 @@ end
 T2mapOptions(args...; kwargs...) = T2mapOptions{Float64}(args...; kwargs...)
 T2mapOptions(image::Array{T,4}; kwargs...) where {T} = T2mapOptions{T}(; kwargs..., MatrixSize = size(image)[1:3], nTE = size(image)[4])
 
+t2_times(o::T2mapOptions{T}) where {T} = logrange(o.T2Range..., o.nT2)
+flip_angles(o::T2mapOptions{T}) where {T} = o.SetFlipAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetFlipAngle]
+refcon_angles(o::T2mapOptions{T}) where {T} = o.SetRefConAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetRefConAngle]
+
 function _show_string(o::T2mapOptions)
     io = IOBuffer()
     print(io, "T2-distribution analysis settings:")

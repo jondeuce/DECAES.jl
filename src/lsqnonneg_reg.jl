@@ -190,6 +190,8 @@ function NNLSChi2RegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T
     NNLSChi2RegProblem(C, d, m, n, nnls_work, nnls_work_smooth_cache)
 end
 
+solution(work::NNLSChi2RegProblem) = solution(get_cache(work.nnls_work_smooth_cache))
+
 """
     lsqnonneg_chi2(C::AbstractMatrix, d::AbstractVector, Chi2Factor::Real)
 
@@ -545,6 +547,8 @@ function NNLSLCurveRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where 
     nnls_work_smooth_cache = NNLSTikhonovRegProblemCache(C, d)
     NNLSLCurveRegProblem(C, d, m, n, nnls_work, nnls_work_smooth_cache)
 end
+
+solution(work::NNLSLCurveRegProblem) = solution(get_cache(work.nnls_work_smooth_cache))
 
 """
     lsqnonneg_lcurve(C::AbstractMatrix, d::AbstractVector)
@@ -946,6 +950,8 @@ function NNLSGCVRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     nnls_work_smooth_cache = NNLSTikhonovRegProblemCache(C, d)
     NNLSGCVRegProblem(C, d, m, n, Aμ, C_buf, Ct_buf, CtC_buf, nnls_work, nnls_work_smooth_cache)
 end
+
+solution(work::NNLSGCVRegProblem) = solution(get_cache(work.nnls_work_smooth_cache))
 
 """
     lsqnonneg_gcv(C::AbstractMatrix, d::AbstractVector)

@@ -78,15 +78,11 @@ function T2mapSEcorr_(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T
     # =========================================================================
     @timeit_debug TIMER() "Initialization" begin
         # Initialize output maps and distributions
-        maps = init_output_t2maps(image, opts)
-        distributions = init_output_t2distributions(image, opts)
+        maps = init_output_t2maps(opts)
+        distributions = init_output_t2distributions(opts)
 
         # Initialize reusable temporary buffers
-        thread_buffers = [thread_buffer_maker(image, opts) for _ in 1:Threads.nthreads()]
-        Threads.@threads for i in 1:length(thread_buffers)
-            # Compute lookup table of EPG decay bases
-            init_epg_decay_basis!(thread_buffers[i], opts)
-        end
+        thread_buffers = [thread_buffer_maker(opts) for _ in 1:Threads.nthreads()]
     end
 
     # =========================================================================
@@ -119,26 +115,26 @@ function T2mapSEcorr_(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T
     return maps, distributions
 end
 
-function init_output_t2distributions(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
+function init_output_t2distributions(opts::T2mapOptions{T}) where {T}
     distributions = fill(T(NaN), opts.MatrixSize..., opts.nT2)
     return distributions
 end
 
-function init_output_t2maps(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
+function init_output_t2maps(opts::T2mapOptions{T}) where {T}
     maps = Dict{String,Any}()
-    init_output_t2maps!(thread_buffer_maker(image, opts), maps, opts)
+    init_output_t2maps!(thread_buffer_maker(opts), maps, opts)
     return maps
 end
 
 function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {T}
-    @unpack T2_times, flip_angles, refcon_angles, decay_basis, decay_basis_set = thread_buffer
+    @unpack T2_times, flip_angles, refcon_angles, decay_basis = thread_buffer
 
     # Misc. processing parameters
     maps["echotimes"]      = convert(Array{T}, copy(opts.TE .* (1:opts.nTE)))
     maps["t2times"]        = convert(Array{T}, copy(T2_times))
     maps["refangleset"]    = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(flip_angles)) : T(opts.SetFlipAngle)
     maps["refconangleset"] = opts.SetRefConAngle === nothing ? convert(Array{T}, copy(refcon_angles)) : T(opts.SetRefConAngle)
-    maps["decaybasisset"]  = convert(Array{T}, copy(decay_basis_set))
+    # maps["decaybasisset"]  = convert(Array{T}, copy(decay_basis_set))
 
     # Default output maps
     maps["gdn"]   = fill(T(NaN), opts.MatrixSize...)
@@ -204,7 +200,7 @@ function voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, o
 
     # Calculate T2 distribution and map parameters
     @timeit_debug TIMER() "Calculate T2 Dist" begin
-        fit_T2_distribution!(thread_buffer, opts)
+        t2_distribution!(thread_buffer.T2_dist_work)
     end
 
     # Save loop results to outputs
@@ -216,23 +212,13 @@ end
 # =========================================================
 # Flip angle optimization
 # =========================================================
-function optimize_flip_angle_work(o::T2mapOptions{T}) where {T}
-    work = (
-        nnls_work  = lsqnonneg_work(zeros(T, o.nTE, o.nT2), zeros(T, o.nTE)),
-        decay_pred = zeros(T, o.nTE),
-        residuals  = zeros(T, o.nTE),
-    )
-    return work
-end
-
 function optimize_flip_angle!(thread_buffer, o::T2mapOptions)
-    @unpack nnls_search_prob, alpha_opt, beta_opt = thread_buffer
+    @unpack flip_angle_work = thread_buffer
+    @unpack α_search_prob, alpha_opt, beta_opt = flip_angle_work
 
     nnls_surrogate = LEGACY[] ?
-        CubicSplineSurrogate(nnls_search_prob) :
-        HermiteSplineSurrogate(nnls_search_prob)
-    # nnls_surrogate = CubicSplineSurrogate(nnls_search_prob)
-    # nnls_surrogate = HermiteSplineSurrogate(nnls_search_prob)
+        CubicSplineSurrogate(α_search_prob.nnls_search_prob) :
+        HermiteSplineSurrogate(α_search_prob.nnls_search_prob)
     nnls_searcher = DiscreteSurrogateSearcher(nnls_surrogate; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
     αs, _ = bisection_search(nnls_surrogate, nnls_searcher; maxeval = o.nRefAngles)
 
@@ -245,32 +231,81 @@ end
 # =========================================================
 # EPG decay curve fitting
 # =========================================================
-function init_epg_decay_basis!(thread_buffer, o::T2mapOptions)
-    @unpack decay_curve_work, decay_curve_jac!, ∇decay_basis_set, decay_basis_set, decay_basis, nnls_search_prob, decay_curve_opts, T2_times = thread_buffer
+struct EPGDiscreteSurrogateSearch{T,ETL,opt_vars,W<:AbstractEPGWorkspace{T,ETL},J<:EPGJacobianFunctor{T,ETL,opt_vars},P<:NNLSDiscreteSurrogateSearch{1,T}}
+    θ::EPGOptions{T,ETL}
+    T2_times::Vector{T}
+    epg_work::W
+    epg_jac_functor!::J
+    nnls_search_prob::P
+end
 
-    if o.SetFlipAngle === nothing || o.SetRefConAngle === nothing
-        # Loop to compute basis for each angle
-        @inbounds for I in CartesianIndices(nnls_search_prob.αs)
-            αs = nnls_search_prob.αs[I]
-            θ  = restructure(EPGOptions(decay_curve_jac!), αs, optfields(decay_curve_jac!))
-            ∇epg_decay_basis!(uview(∇decay_basis_set, :, :, :, I), uview(decay_basis_set, :, :, I), decay_curve_jac!, θ, T2_times)
-        end
-    else
-        # Compute basis for fixed flip angle `SetFlipAngle`
-        epg_decay_basis!(decay_basis, decay_curve_work, decay_curve_opts, T2_times)
+function EPGDiscreteSurrogateSearch(o::T2mapOptions{T}, θ::EPGOptions{T,ETL}, ::Val{opt_var}, decay_data::AbstractVector{T}) where {T, ETL, opt_var}
+    opt_range =
+        opt_var === :α ? flip_angles(o) :
+        opt_var === :β ? refcon_angles(o) :
+        error("Optimization variable must be one of :α or :β")
+    T2_times         = t2_times(o)
+    decay_basis_set  = zeros(T, ETL, o.nT2, length(opt_range))
+    ∇decay_basis_set = zeros(T, ETL, o.nT2, 1, length(opt_range))
+    epg_work         = EPGdecaycurve_work(θ)
+    epg_jac_functor! = EPGJacobianFunctor(θ, (opt_var,))
+    nnls_search_prob = NNLSDiscreteSurrogateSearch(decay_basis_set, ∇decay_basis_set, (opt_range,), decay_data)
+    EPGDiscreteSurrogateSearch(θ, T2_times, epg_work, epg_jac_functor!, nnls_search_prob)
+end
+
+function ∇epg_decay_basis!(work::EPGDiscreteSurrogateSearch{T,ETL,opt_vars}, θ::EPGOptions{T,ETL}) where {T,ETL,opt_vars}
+    @inbounds for I in CartesianIndices(work.nnls_search_prob.αs)
+        αs = work.nnls_search_prob.αs[I]
+        θ  = restructure(θ, αs, opt_vars)
+        ∇epg_decay_basis!(uview(work.nnls_search_prob.∇As, :, :, :, I), uview(work.nnls_search_prob.As, :, :, I), work.epg_jac_functor!, θ, work.T2_times)
     end
+    return work
+end
 
-    return nothing
+struct EPGDecayBasisWorkspace_v4{T, A1<:AbstractMatrix{T}, A2<:AbstractVector{T}, S1<:Union{Nothing, <:EPGDiscreteSurrogateSearch{T}}, S2<:Union{Nothing, <:EPGDiscreteSurrogateSearch{T}}}
+    decay_basis::A1
+    decay_data::A2
+    alpha_opt::Base.RefValue{T}
+    beta_opt::Base.RefValue{T}
+    α_search_prob::S1
+    β_search_prob::S2
+end
+
+function EPGDecayBasisWorkspace_v4(o::T2mapOptions{T}, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
+    alpha_opt = Ref(o.SetFlipAngle === nothing ? T(180.0) : o.SetFlipAngle)
+    beta_opt = Ref(o.SetRefConAngle === nothing ? T(180.0) : o.SetRefConAngle)
+    θ = EPGOptions(o.nTE, alpha_opt[], o.TE, T(NaN), o.T1, beta_opt[])
+
+    if o.SetFlipAngle !== nothing && o.SetRefConAngle !== nothing
+        # Compute basis for fixed `SetFlipAngle` and `SetRefConAngle`
+        epg_decay_basis!(decay_basis, EPGdecaycurve_work(θ), θ, t2_times(o))
+        α_search_prob = β_search_prob = nothing
+    else
+        # Compute basis for each angle
+        if o.SetFlipAngle === nothing
+            α_search_prob = EPGDiscreteSurrogateSearch(o, θ, Val(:α), decay_data)
+            ∇epg_decay_basis!(α_search_prob, θ)
+        else
+            α_search_prob = nothing
+        end
+        if o.SetRefConAngle === nothing
+            β_search_prob = EPGDiscreteSurrogateSearch(o, θ, Val(:β), decay_data)
+            ∇epg_decay_basis!(β_search_prob, θ)
+        else
+            β_search_prob = nothing
+        end
+    end
+    EPGDecayBasisWorkspace_v4(decay_basis, decay_data, alpha_opt, beta_opt, α_search_prob, β_search_prob)
 end
 
 function epg_decay_basis!(thread_buffer, o::T2mapOptions)
-    @unpack decay_curve_work, decay_basis, alpha_opt, beta_opt, T2_times = thread_buffer
+    @unpack decay_curve_work, decay_basis, flip_angle_work, T2_times = thread_buffer
+    @unpack alpha_opt, beta_opt = flip_angle_work
     decay_curve_opts = EPGOptions(decay_curve_work, alpha_opt[], o.TE, zero(eltype(T2_times)), o.T1, beta_opt[])
     epg_decay_basis!(decay_basis, decay_curve_work, decay_curve_opts, T2_times)
 end
 
 function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}, T2_times::AbstractVector) where {T,ETL}
-
     # Compute the NNLS basis over T2 space
     @timeit_debug TIMER() "EPGdecaycurve!" begin
         @inbounds for j in 1:length(T2_times)
@@ -279,7 +314,6 @@ function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::Abst
             EPGdecaycurve!(decay_curve, decay_curve_work, decay_curve_opts)
         end
     end
-
     return decay_basis
 end
 
@@ -290,7 +324,6 @@ function epg_decay_basis(θ::EPGOptions{T,ETL}, T2_times::AbstractVector) where 
 end
 
 function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T,3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T,ETL}, θ::EPGOptions{T,ETL}, T2_times::AbstractVector) where {T,ETL}
-
     # Compute the NNLS basis over T2 space
     @timeit_debug TIMER() "∇EPGdecaycurve!" begin
         @inbounds for j in 1:length(T2_times)
@@ -300,7 +333,6 @@ function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T,3}, decay_basis::Ab
             decay_curve_jac!(∇decay_curve, decay_curve, decay_curve_opts)
         end
     end
-
     return ∇decay_basis
 end
 
@@ -315,54 +347,61 @@ end
 # =========================================================
 # T2-distribution fitting
 # =========================================================
-function T2_distribution_work(decay_basis, decay_data, o::T2mapOptions{T}) where {T}
-    work = if o.Reg == "none"
-        # Fit T2 distribution using unregularized NNLS
-        lsqnonneg_work(decay_basis, decay_data)
-    elseif o.Reg == "chi2"
-        # Fit T2 distribution using chi2-based regularized NNLS
-        lsqnonneg_chi2_work(decay_basis, decay_data)
-    elseif o.Reg == "gcv"
-        # Fit T2 distribution using GCV-based regularized NNLS
-        lsqnonneg_gcv_work(decay_basis, decay_data)
-    elseif o.Reg == "lcurve"
-        # Fit T2 distribution using L-curve-based regularized NNLS
-        lsqnonneg_lcurve_work(decay_basis, decay_data)
-    end
+abstract type RegularizationMethod end
+struct NoRegularization <: RegularizationMethod end
+struct ChiSquared{T} <: RegularizationMethod; Chi2Factor::T; end
+struct GCV <: RegularizationMethod end
+struct LCurve <: RegularizationMethod end
 
-    return work
+function regularization_method(o::T2mapOptions)
+    o.Reg == "none"   ? NoRegularization() : # Fit T2 distribution using unregularized NNLS
+    o.Reg == "chi2"   ? ChiSquared(o.Chi2Factor) : # Fit T2 distribution using chi2-based regularized NNLS
+    o.Reg == "gcv"    ? GCV() : # Fit T2 distribution using GCV-based regularized NNLS
+    o.Reg == "lcurve" ? LCurve() : # Fit T2 distribution using L-curve-based regularized NNLS
+    error("Unrecognized regularization method: $(o.Reg)")
 end
 
-function fit_T2_distribution!(thread_buffer, o::T2mapOptions{T}) where {T}
-    @unpack T2_dist_work, T2_dist, mu_opt, chi2fact_opt = thread_buffer
+nnls_workspace(::NoRegularization, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_work(decay_basis, decay_data)
+nnls_workspace(::ChiSquared, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_chi2_work(decay_basis, decay_data)
+nnls_workspace(::GCV, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_gcv_work(decay_basis, decay_data)
+nnls_workspace(::LCurve, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_lcurve_work(decay_basis, decay_data)
 
-    @unpack x, mu, chi2factor = if o.Reg == "none"
-        # Fit T2 distribution using unregularized NNLS
-        (; x = lsqnonneg!(T2_dist_work), mu = zero(T), chi2factor = one(T))
-    elseif o.Reg == "chi2"
-        # Fit T2 distribution using chi2 based regularized NNLS
-        lsqnonneg_chi2!(T2_dist_work, o.Chi2Factor)
-    elseif o.Reg == "gcv"
-        # Fit T2 distribution using gcv based regularization
-        lsqnonneg_gcv!(T2_dist_work)
-    elseif o.Reg == "lcurve"
-        # Fit T2 distribution using lcurve based regularization
-        lsqnonneg_lcurve!(T2_dist_work)
-    end
-
-    copyto!(T2_dist, x)
-    mu_opt[] = mu
-    chi2fact_opt[] = chi2factor
-
-    return nothing
+struct T2DistWorkspace{Reg,T,W}
+    reg::Reg
+    nnls_work::W
+    μ::Base.RefValue{T}
+    χ²fact::Base.RefValue{T}
 end
+function T2DistWorkspace(reg::RegularizationMethod, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, μ::Base.RefValue{T} = Ref(T(NaN)), χ²fact::Base.RefValue{T} = Ref(T(NaN))) where {T}
+    T2DistWorkspace(reg, nnls_workspace(reg, decay_basis, decay_data), μ, χ²fact)
+end
+
+function nnls!(t2work::T2DistWorkspace{NoRegularization, T}) where {T}
+    x, t2work.μ[], t2work.χ²fact[] = lsqnonneg!(t2work.nnls_work), zero(T), one(T)
+end
+
+function nnls!(t2work::T2DistWorkspace{ChiSquared{T}, T}) where {T}
+    x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_chi2!(t2work.nnls_work, t2work.reg.Chi2Factor)
+end
+
+function nnls!(t2work::T2DistWorkspace{GCV, T}) where {T}
+    x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_gcv!(t2work.nnls_work)
+end
+
+function nnls!(t2work::T2DistWorkspace{LCurve, T}) where {T}
+    x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_lcurve!(t2work.nnls_work)
+end
+
+t2_distribution!(t2work::T2DistWorkspace) = nnls!(t2work)
+solution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
 
 # =========================================================
 # Save thread local results to output maps
 # =========================================================
 function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::CartesianIndex)
-    @unpack T2_dist, T2_times, logT2_times, alpha_opt, beta_opt, mu_opt, chi2fact_opt, decay_data, decay_basis = thread_buffer
-    @unpack decay_calc, residuals, gva_buf, curr_count = thread_buffer
+    @unpack T2_dist_work, flip_angle_work, logT2_times, decay_data, decay_basis, decay_calc, residuals, gva_buf = thread_buffer
+    @unpack alpha_opt, beta_opt = flip_angle_work
+    T2_dist = solution(T2_dist_work)
 
     # Compute and save parameters of distribution
     @inbounds begin
@@ -387,7 +426,7 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
     # Optionally save regularization parameters
     if o.SaveRegParam
         @unpack mu, chi2factor = maps
-        @inbounds mu[I], chi2factor[I] = mu_opt[], chi2fact_opt[]
+        @inbounds mu[I], chi2factor[I] = T2_dist_work.μ[], T2_dist_work.χ²fact[]
     end
 
     # Optionally save ℓ²-norm of residuals
@@ -412,59 +451,28 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
         end
     end
 
-    # Increment progress counter
-    curr_count[] += 1
-
     return nothing
 end
 
 # =========================================================
 # Utility functions
 # =========================================================
-function thread_buffer_maker(image::Array{T,4}, o::T2mapOptions{T}) where {T}
-    opt_α            = o.SetFlipAngle === nothing
-    opt_β            = o.SetRefConAngle === nothing
-    opt_vars         = (:α, :β)[[opt_α, opt_β]]
-    n_opt_vars       = length(opt_vars)
-    flip_angles      = opt_α ? range(o.MinRefAngle, T(180); length = o.nRefAngles) : (o.SetFlipAngle : o.SetFlipAngle)
-    refcon_angles    = opt_β ? range(o.MinRefAngle, T(180); length = o.nRefAngles) : (o.SetRefConAngle : o.SetRefConAngle)
-    opt_ranges       = (flip_angles, refcon_angles)[[opt_α, opt_β]]
-    decay_basis      = zeros(T, o.nTE, o.nT2)
-    ∇decay_basis     = zeros(T, o.nTE, o.nT2, n_opt_vars)
-    decay_basis_set  = zeros(T, o.nTE, o.nT2, length.(opt_ranges)...)
-    ∇decay_basis_set = zeros(T, o.nTE, o.nT2, n_opt_vars, length.(opt_ranges)...)
-    decay_data       = zeros(T, o.nTE)
-    decay_curve_opts = EPGOptions(o.nTE, (opt_α ? T(NaN) : o.SetFlipAngle), o.TE, zero(T), o.T1, (opt_β ? T(NaN) : o.SetRefConAngle))
-    decay_curve_work = EPGdecaycurve_work(T, o.nTE)
-    decay_curve_jac! = EPGJacobianFunctor(decay_curve_opts, opt_vars)
-    nnls_search_prob = NNLSDiscreteSurrogateSearch(decay_basis_set, ∇decay_basis_set, opt_ranges, decay_data)
+function thread_buffer_maker(o::T2mapOptions{T}) where {T}
+    decay_basis = zeros(T, o.nTE, o.nT2)
+    decay_data  = zeros(T, o.nTE)
     buffer = (
-        curr_count       = Ref(0),
-        total_count      = sum(>(o.Threshold), @views(image[:,:,:,1])),
         T2_times         = logrange(o.T2Range..., o.nT2),
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
-        flip_angles      = flip_angles,
-        refcon_angles    = refcon_angles,
-        opt_vars         = opt_vars,
-        decay_basis_set  = decay_basis_set,
-        ∇decay_basis_set = ∇decay_basis_set,
+        flip_angles      = flip_angles(o),
+        refcon_angles    = refcon_angles(o),
         decay_basis      = decay_basis,
-        ∇decay_basis     = ∇decay_basis,
         decay_data       = decay_data,
         decay_calc       = zeros(T, o.nTE),
         residuals        = zeros(T, o.nTE),
-        decay_curve_opts = decay_curve_opts,
-        decay_curve_work = decay_curve_work,
-        decay_curve_jac! = decay_curve_jac!,
-        nnls_search_prob = nnls_search_prob,
-        flip_angle_work  = optimize_flip_angle_work(o),
-        T2_dist_work     = T2_distribution_work(decay_basis, decay_data, o),
-        alpha_opt        = Ref(decay_curve_opts.α),
-        beta_opt         = Ref(decay_curve_opts.β),
-        T2_dist          = zeros(T, o.nT2),
         gva_buf          = zeros(T, o.nT2),
-        mu_opt           = Ref(T(NaN)),
-        chi2fact_opt     = Ref(T(NaN)),
+        decay_curve_work = EPGdecaycurve_work(T, o.nTE),
+        flip_angle_work  = EPGDecayBasisWorkspace_v4(o, decay_basis, decay_data),
+        T2_dist_work     = T2DistWorkspace(regularization_method(o), decay_basis, decay_data),
     )
     return buffer
 end
