@@ -35,14 +35,12 @@ See also:
 T2partSEcorr(T2distributions::Array{T,4}; kwargs...) where {T} = T2partSEcorr(stderr, T2distributions; kwargs...)
 T2partSEcorr(io::IO, T2distributions::Array{T,4}; kwargs...) where {T} = T2partSEcorr(io, T2distributions, T2partOptions(T2distributions; kwargs...))
 T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T} = T2partSEcorr(stderr, T2distributions, opts)
-T2partSEcorr(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T} = @timeit_debug TIMER() "T2partSEcorr" T2partSEcorr_(io, T2distributions, opts)
 
-function T2partSEcorr_(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
+function T2partSEcorr(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
     @assert size(T2distributions) == (opts.MatrixSize..., opts.nT2)
 
     # Print settings to terminal
     !opts.Silent && printbody(io, _show_string(opts))
-    LEGACY[] = opts.legacy
 
     # Initial output
     maps = init_output_t2parts(T2distributions, opts)
@@ -55,7 +53,6 @@ function T2partSEcorr_(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{
         voxelwise_T2_parts!(thread_buffer, maps, T2distributions, opts, I)
     end
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
-    LEGACY[] = false
 
     return maps
 end

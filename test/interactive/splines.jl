@@ -77,7 +77,7 @@ function plot_bisection_search(
     if surrtype === :cubic
         nodes = () -> surr.p
         values = () -> surr.u
-        spl = DECAES._make_spline(first.(nodes()), values())
+        spl = DECAES.make_spline(first.(nodes()), values())
     else
         nodes = () -> map(x -> nhs._unnormalize(surr.spl, x), nhs._get_nodes(surr.spl))
         values = () -> nhs._get_values(surr.spl)

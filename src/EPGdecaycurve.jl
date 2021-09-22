@@ -90,7 +90,7 @@ using the extended phase graph algorithm using the given input parameters.
 @inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, EPGOptions{T,ETL}(args...))
 @inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, θ)
 @inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(dc, work, EPGOptions{T,ETL}(args...))
-@inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL} = @timeit_debug TIMER() "EPG decay curve" epg_decay_curve!(dc, work, θ)
+@inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL} = epg_decay_curve!(dc, work, θ)
 
 ####
 #### Jacobian utilities (currently hardcoded for `EPGWork_ReIm_DualMVector_Split`)

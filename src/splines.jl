@@ -25,21 +25,12 @@ Base.extrema(p::Poly) = PolynomialRoots.roots(derivative(p))
 #### Spline utils
 ####
 
-# These algorithms were changed compared to the original MATLAB version:
-# instead of brute force searching through the splines, numerical methods
-# are performed which are much more efficient and much more accurate.
-# For direct comparison of results with the MATLAB version, the brute force
-# version is implimented and can be used by setting the LEGACY flag.
-const LEGACY = Ref(false)
-spline_opt(args...; kwargs...)  = LEGACY[] ? _spline_opt_legacy_slow(args...; kwargs...)  : _spline_opt(args...; kwargs...)
-spline_root(args...; kwargs...) = LEGACY[] ? _spline_root_legacy_slow(args...; kwargs...) : _spline_root(args...; kwargs...)
-
-function _make_spline(X, Y; deg_spline = min(3, length(X)-1))
-    # @assert length(X) == length(Y) && length(X) > 1
-    spl = Dierckx.Spline1D(X, Y; k = deg_spline, bc = "extrapolate")
+function make_spline(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1))
+    @assert length(X) == length(Y) && length(X) > 1
+    return Dierckx.Spline1D(X, Y; k = deg_spline, bc = "extrapolate")
 end
 
-function _build_polynomials(spl)
+function build_polynomials(spl::Dierckx.Spline1D)
     k = spl.k
     t = Dierckx.get_knots(spl)[1:end-1]
     coeffs = zeros(k+1, length(t))
@@ -51,9 +42,9 @@ function _build_polynomials(spl)
 end
 
 # Global minimization through fitting a spline to data (X, Y)
-function _spline_opt(spl::Dierckx.Spline1D)
+function spline_opt(spl::Dierckx.Spline1D)
     knots = Dierckx.get_knots(spl)
-    polys = _build_polynomials(spl)
+    polys = build_polynomials(spl)
     x, y = knots[1], polys[1](0) # initial lefthand point
     @inbounds for (i, p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
@@ -71,45 +62,12 @@ function _spline_opt(spl::Dierckx.Spline1D)
     end
     return (; x, y)
 end
-_spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt(_make_spline(X, Y; deg_spline))
-
-# MATLAB spline optimization performs global optimization by sampling the spline
-# fit to data (X, Y) at points X[1]:0.001:X[end], and uses the minimum value.
-# This isn't very efficient; instead we use exact spline optimization and return
-# the (x,y) pair such that x ∈ X[1]:0.001:X[end] is nearest to the exact optimum
-function _spline_opt_legacy(spl::Dierckx.Spline1D)
-    xopt, yopt = _spline_opt(spl)
-    knots = Dierckx.get_knots(spl)
-    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    _, i0 = find_nearest(xs, xopt) # find nearest x in xs to xopt
-
-    # Note that the above finds the x value nearest the true minimizer, but we need the x value corresponding to
-    # the y value nearest the true minimum. Since we are near the minimum, search for a local minimum.
-    @unpack x, y, i = local_gridsearch(spl, xs, i0)
-
-    return (; x, y)
-end
-_spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt_legacy(_make_spline(X, Y; deg_spline))
-
-# Similar to above, but removes the extra trick and instead performs
-# exactly what the MATLAB implementation does
-function _spline_opt_legacy_slow(spl::Dierckx.Spline1D)
-    knots = Dierckx.get_knots(spl)
-    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    x, y = xs[1], spl(xs[1])
-    for (i,xᵢ) in enumerate(xs)
-        (i == 1) && continue
-        yᵢ = spl(xᵢ)
-        (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
-    end
-    return (; x, y)
-end
-_spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = _spline_opt_legacy_slow(_make_spline(X, Y; deg_spline))
+spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = spline_opt(make_spline(X, Y; deg_spline))
 
 # Root finding through fitting a spline to data (X, Y)
-function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
+function spline_root(spl::Dierckx.Spline1D, value::Number = 0)
     knots = Dierckx.get_knots(spl)
-    polys = _build_polynomials(spl)
+    polys = build_polynomials(spl)
     x = eltype(knots)(NaN)
     @inbounds for (i, p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
@@ -125,18 +83,61 @@ function _spline_root(spl::Dierckx.Spline1D, value::Number = 0)
     end
     return x
 end
-_spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X)-1)) = _spline_root(_make_spline(X, Y; deg_spline), value)
+spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X)-1)) = spline_root(make_spline(X, Y; deg_spline), value)
+
+####
+#### Legacy spline utils
+####
+####    These algorithms were changed compared to the original MATLAB version:
+####    instead of brute force searching through the splines, numerical methods
+####    are performed which are much more efficient and much more accurate.
+####    For direct comparison of results with the MATLAB version, the brute force
+####    version is implimented and can be used by setting the `legacy` flag.
+####
+
+# MATLAB spline optimization performs global optimization by sampling the spline
+# fit to data (X, Y) at points X[1]:0.001:X[end], and uses the minimum value.
+# This isn't very efficient; instead we use exact spline optimization and return
+# the (x,y) pair such that x ∈ X[1]:0.001:X[end] is nearest to the exact optimum
+function spline_opt_legacy(spl::Dierckx.Spline1D)
+    xopt, yopt = spline_opt(spl)
+    knots = Dierckx.get_knots(spl)
+    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    _, i0 = find_nearest(xs, xopt) # find nearest x in xs to xopt
+
+    # Note that the above finds the x value nearest the true minimizer, but we need the x value corresponding to
+    # the y value nearest the true minimum. Since we are near the minimum, search for a local minimum.
+    @unpack x, y, i = local_gridsearch(spl, xs, i0)
+
+    return (; x, y)
+end
+spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = spline_opt_legacy(make_spline(X, Y; deg_spline))
+
+# Similar to above, but removes the extra trick and instead performs
+# exactly what the MATLAB implementation does
+function spline_opt_legacy_slow(spl::Dierckx.Spline1D)
+    knots = Dierckx.get_knots(spl)
+    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    x, y = xs[1], spl(xs[1])
+    for (i,xᵢ) in enumerate(xs)
+        (i == 1) && continue
+        yᵢ = spl(xᵢ)
+        (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
+    end
+    return (; x, y)
+end
+spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = spline_opt_legacy_slow(make_spline(X, Y; deg_spline))
 
 # Brute force root finding through fitting a spline to data (X, Y):
 # MATLAB implementation of spline root finding performs root finding by sampling the
 # spline fit to data (X, Y) at points X[1]:0.001:X[end], and uses the nearest value.
 # This isn't very efficient; instead we use exact spline root finding and return
 # the nearest x ∈ X[1]:0.001:X[end] such that the y value is nearest zero
-function _spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
+function spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
     # Find x value nearest to the root
     knots = Dierckx.get_knots(spl)
     xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    xroot = _spline_root(spl, value)
+    xroot = spline_root(spl, value)
     _, i0 = find_nearest(xs, xroot) # find nearest x in xs to xroot
 
     # Note that the above finds the x value nearest the true root, but we need the x value corresponding to the
@@ -146,11 +147,11 @@ function _spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
 
     return x
 end
-_spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = _spline_root_legacy(_make_spline(X, Y; deg_spline), value)
+spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = spline_root_legacy(make_spline(X, Y; deg_spline), value)
 
 # Similar to above, but removes the extra trick and instead performs
 # exactly what the MATLAB implementation does
-function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
+function spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     knots = Dierckx.get_knots(spl)
     xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
     x, y = xs[1], abs(spl(xs[1]) - value)
@@ -161,7 +162,7 @@ function _spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     end
     return x
 end
-_spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = _spline_root_legacy_slow(_make_spline(X, Y; deg_spline), value)
+spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = spline_root_legacy_slow(make_spline(X, Y; deg_spline), value)
 
 ####
 #### Surrogate functions over discrete grids
@@ -177,25 +178,48 @@ struct CubicSplineSurrogate{T,F} <: AbstractSurrogate{1,T}
     grid::Vector{SVector{1,T}}
     p::Vector{SVector{1,T}}
     u::Vector{T}
+    npts::Base.RefValue{Int}
+    legacy::Bool
 end
 
-function CubicSplineSurrogate(f, grid::Vector{SVector{1,T}}) where {T}
-    CubicSplineSurrogate(f, grid, SVector{1,T}[], T[])
+function CubicSplineSurrogate(f, grid::Vector{SVector{1,T}}; legacy = false) where {T}
+    CubicSplineSurrogate(f, grid, SVector{1,T}[], T[], Ref(0), legacy)
 end
 
 function update!(surr::CubicSplineSurrogate, I::CartesianIndex{1})
     p = surr.grid[I]
-    pos = length(surr.p) + 1
-    @inbounds for i in 1:length(surr.p)
+    pos = surr.npts[] + 1
+    @inbounds for i in 1:surr.npts[]
         (p[1] <= surr.p[i][1]) && (pos = i; break)
     end
-    insert!(surr.p, pos, p)
-    insert!(surr.u, pos, surr.f(I))
+    u = surr.f(I)
+    insertat!(surr.p, pos, p, surr.npts[]+1)
+    insertat!(surr.u, pos, u, surr.npts[]+1)
+    surr.npts[] += 1
+    return surr
+end
+
+function insertat!(x::AbstractVector{T}, i, v::T, len = length(x)) where {T}
+    if len > length(x)
+        append!(x, similar(x, max(length(x), 1)))
+    end
+    last = v
+    @inbounds for j in i:len
+        x[j], last = last, x[j]
+    end
+    return x
+end
+
+function Base.empty!(surr::CubicSplineSurrogate)
+    surr.npts[] = 0
     return surr
 end
 
 function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
-    p, u = spline_opt(reinterpret(T, surr.p), surr.u)
+    npts = surr.npts[]
+    ps = reinterpret(T, view(surr.p, 1:npts))
+    us = view(surr.u, 1:npts)
+    p, u = surr.legacy ? spline_opt_legacy_slow(ps, us) : spline_opt(ps, us)
     return SVector{1,T}(p), T(u)
 end
 
@@ -222,9 +246,15 @@ function update!(surr::HermiteSplineSurrogate{D,T}, I::CartesianIndex{D}) where 
     return surr
 end
 
+function Base.empty!(surr::HermiteSplineSurrogate)
+    empty!(surr.spl)
+    return surr
+end
+
 function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
-    u, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
-    @inbounds p = surr.grid[I]
+    _, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
+    @inbounds _, p = nearest_interior_gridpoint(surr.grid, surr.grid[I])
+    # @inbounds p = surr.grid[I] #TODO
     p, u = local_search(surr, p)
     return (p, u)
 end
@@ -430,9 +460,9 @@ function local_search(
         state::Union{Nothing, DiscreteSurrogateSearcher{D,T}} = nothing;
         maxiter::Int = 100,
         maxeval::Int = maxiter,
-        xtol_rel = 1e-6,
+        xtol_rel = 1e-4,
         xtol_abs = 1e-4,
-        initial_step = maximum(gridwidths(surr)) / 25,
+        initial_step = maximum(gridwidths(surr)) / 100,
         xeval_radius = √sum(abs2, gridspacings(surr)) - sqrt(eps(T)),
     ) where {D,T}
 
@@ -506,13 +536,15 @@ struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: Abstract
     ∂Ax⁺::Vector{T}
     Ax⁺b::Vector{T}
     nnls_work::W
+    legacy::Bool
 end
 
 function NNLSDiscreteSurrogateSearch(
         As::AbstractArray{T},  # size(As)  = (M, N, P1..., PD)
         ∇As::AbstractArray{T}, # size(∇As) = (M, N, D, P1..., PD)
         αs::NTuple{D},         # size(αs)  = (P1..., PD)
-        b::AbstractVector{T},  # size(b)   = (M,)
+        b::AbstractVector{T};  # size(b)   = (M,)
+        legacy::Bool = false,
     ) where {D,T}
     M, N = size(As, 1), size(As, 2)
     @assert ndims(As) == 2 + D && ndims(∇As) == 3 + D # ∇As has extra dimension for parameter gradients
@@ -525,7 +557,7 @@ function NNLSDiscreteSurrogateSearch(
     ∂Ax⁺ = zeros(T, M)
     Ax⁺b = zeros(T, M)
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
-    NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, ∂Ax⁺, Ax⁺b, nnls_work)
+    NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, ∂Ax⁺, Ax⁺b, nnls_work, legacy)
 end
 
 load!(prob::NNLSDiscreteSurrogateSearch{D,T}, b::AbstractVector{T}) where {D,T} = copyto!(prob.b, b)
@@ -534,7 +566,7 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) whe
     @unpack As, b, nnls_work = prob
     solve!(nnls_work, uview(As, :, :, I), b)
     ℓ = chi2(nnls_work)
-    u = LEGACY[] ? ℓ : log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
+    u = prob.legacy ? ℓ : log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
     return u
 end
 
@@ -553,25 +585,31 @@ function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) 
             (x[j] > 0) && axpy!(x[j], uview(∇As, :, j, d, I), ∂Ax⁺)
         end
         ∂ℓ = 2 * dot(∂Ax⁺, Ax⁺b)
-        ∂u = LEGACY[] ? ∂ℓ : ∂ℓ / ℓ
+        ∂u = prob.legacy ? ∂ℓ : ∂ℓ / ℓ
         return ∂u
     end
     return SVector{D,T}(∇u)
 end
 
-function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1,T}) where {T}
-    f(I) = loss!(prob, I)
-    CubicSplineSurrogate(f, prob.αs, SVector{1,T}[], T[])
+function CubicSplineSurrogate(prehook!, prob::NNLSDiscreteSurrogateSearch{1,T}; legacy = false) where {T}
+    function f(I)
+        prehook!(I)
+        loss!(prob, I)
+    end
+    CubicSplineSurrogate(f, prob.αs, SVector{1,T}[], T[], Ref(0), legacy)
 end
+CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch; kwargs...) = CubicSplineSurrogate(I -> nothing, prob; kwargs...)
 
-function HermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D,T}, kernel = RK_H1(one(T))) where {D,T}
+function HermiteSplineSurrogate(prehook!, prob::NNLSDiscreteSurrogateSearch{D,T}) where {D,T}
     function fg(I)
+        prehook!(I)
         u = loss!(prob, I)
         ∇u = ∇loss!(prob, I)
         return u, ∇u
     end
-    return HermiteSplineSurrogate(fg, prob.αs, kernel)
+    return HermiteSplineSurrogate(fg, prob.αs, RK_H1(one(T)))
 end
+HermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch) = HermiteSplineSurrogate(I -> nothing, prob)
 
 function surrogate_spline_opt(
         prob::NNLSDiscreteSurrogateSearch{D},

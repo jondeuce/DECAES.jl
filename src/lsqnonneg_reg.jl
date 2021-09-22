@@ -222,89 +222,85 @@ where ``\\mu`` is determined by approximating a solution to the nonlinear equati
 - `mu::Real`: Resulting regularization parameter ``\\mu``
 - `Chi2Factor::Real`: Actual increase ``\\chi^2(\\mu)/\\chi^2_{min}``, which will be approximately equal to the input `Chi2Factor`
 """
-function lsqnonneg_chi2(C, d, Chi2Factor)
+function lsqnonneg_chi2(C, d, Chi2Factor; kwargs...)
     work = lsqnonneg_chi2_work(C, d)
-    lsqnonneg_chi2!(work, Chi2Factor)
+    lsqnonneg_chi2!(work, Chi2Factor; kwargs...)
 end
 lsqnonneg_chi2_work(C, d) = NNLSChi2RegProblem(C, d)
 
-function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection = true) where {T}
+function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection = true, legacy = false) where {T}
     # Non-regularized solution
-    @timeit_debug TIMER() "Non-Reg. lsqnonneg!" begin
-        solve!(work.nnls_work)
-        chi2_min = chi2(work.nnls_work)
-    end
+    solve!(work.nnls_work)
+    chi2_min = chi2(work.nnls_work)
 
     # Prepare to solve
     χ²target = Chi2Factor * chi2_min
     reset_cache!(work.nnls_work_smooth_cache)
 
-    @timeit_debug TIMER() "chi2factor search" begin
-        if LEGACY[]
-            # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit 
-            mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor) do μ
-                μ == 0 && return chi2_min
-                solve!(work.nnls_work_smooth_cache, μ)
-                return chi2(get_cache(work.nnls_work_smooth_cache))
-            end
-            if mu_final == 0
-                x_final = solution(work.nnls_work)
-            else
-                x_final = solve!(work.nnls_work_smooth_cache, mu_final)
-            end
-
-        elseif bisection
-            # Find bracketing interval containing root, then perform bisection search
-            f = function (logμ)
-                increment_cache_index!(work.nnls_work_smooth_cache)
-                return chi2factor_relerr!(get_cache(work.nnls_work_smooth_cache), logμ; χ²target)
-            end
-            cache = NamedTuple{(:x, :f), NTuple{2,T}}[]
-            a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6, cache)
-            bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor-1)/100, cache)
-
-            # Spline rootfinding on evaluated points to improve accuracy
-            sort!(cache; by = d -> d.x)
-            logmu_root = spline_root([d.x for d in cache], [d.f for d in cache]; deg_spline = 1)
-            logmu_root !== nothing && !any(d -> d.x ≈ logmu_root, cache) && cache!(cache, logmu_root, f(logmu_root))
-
-            # Return regularization which minimizes relerr
-            _, i = findmin([abs(d.f) for d in cache])
-            logmu_final, relerr_final = cache[i]
-            mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
-            x_final = solve!(work.nnls_work_smooth_cache, mu_final)
-
-        else
-            # Instead of rootfinding, reformulate as a minimization problem. Solve using NLopt.
-            alg = :LN_COBYLA # local, gradient-free, linear approximation of objective
-            # alg = :LN_BOBYQA # local, gradient-free, quadratic approximation of objective
-            # alg = :GN_AGS # global, gradient-free, hilbert curve based dimension reduction
-            # alg = :LN_NELDERMEAD # local, gradient-free, simplex method
-            # alg = :LN_SBPLX # local, gradient-free, subspace searching simplex method
-            # alg = :LD_CCSAQ # local, first-order (rough ranking: [:LD_MMA, :LD_SLSQP, :LD_LBFGS, :LD_CCSAQ, :LD_AUGLAG])
-
-            opt = NLopt.Opt(alg, 1)
-            opt.lower_bounds  = -8.0
-            opt.upper_bounds  = 2.0
-            opt.xtol_rel      = 0.05
-            opt.min_objective = function (logμ, ∇logμ)
-                @inbounds _logμ = logμ[1]
-                increment_cache_index!(work.nnls_work_smooth_cache)
-                loss = chi2factor_loss!(get_cache(work.nnls_work_smooth_cache), _logμ, ∇logμ; χ²target)
-                return Float64(loss)
-            end
-            minf, minx, ret   = NLopt.optimize(opt, [-4.0])
-
-            mu_final = exp(T(minx[1]))
-            x_final = solve!(work.nnls_work_smooth_cache, mu_final)
-            chi2_final = chi2(get_cache(work.nnls_work_smooth_cache))
+    if legacy
+        # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit 
+        mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor; legacy = legacy) do μ
+            μ == 0 && return chi2_min
+            solve!(work.nnls_work_smooth_cache, μ)
+            return chi2(get_cache(work.nnls_work_smooth_cache))
         end
+        if mu_final == 0
+            x_final = solution(work.nnls_work)
+        else
+            x_final = solve!(work.nnls_work_smooth_cache, mu_final)
+        end
+
+    elseif bisection
+        # Find bracketing interval containing root, then perform bisection search
+        f = function (logμ)
+            increment_cache_index!(work.nnls_work_smooth_cache)
+            return chi2factor_relerr!(get_cache(work.nnls_work_smooth_cache), logμ; χ²target)
+        end
+        cache = NamedTuple{(:x, :f), NTuple{2,T}}[]
+        a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6, cache)
+        bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor-1)/100, cache)
+
+        # Spline rootfinding on evaluated points to improve accuracy
+        sort!(cache; by = d -> d.x)
+        logmu_root = spline_root([d.x for d in cache], [d.f for d in cache]; deg_spline = 1)
+        logmu_root !== nothing && !any(d -> d.x ≈ logmu_root, cache) && cache!(cache, logmu_root, f(logmu_root))
+
+        # Return regularization which minimizes relerr
+        _, i = findmin([abs(d.f) for d in cache])
+        logmu_final, relerr_final = cache[i]
+        mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
+        x_final = solve!(work.nnls_work_smooth_cache, mu_final)
+
+    else
+        # Instead of rootfinding, reformulate as a minimization problem. Solve using NLopt.
+        alg = :LN_COBYLA # local, gradient-free, linear approximation of objective
+        # alg = :LN_BOBYQA # local, gradient-free, quadratic approximation of objective
+        # alg = :GN_AGS # global, gradient-free, hilbert curve based dimension reduction
+        # alg = :LN_NELDERMEAD # local, gradient-free, simplex method
+        # alg = :LN_SBPLX # local, gradient-free, subspace searching simplex method
+        # alg = :LD_CCSAQ # local, first-order (rough ranking: [:LD_MMA, :LD_SLSQP, :LD_LBFGS, :LD_CCSAQ, :LD_AUGLAG])
+
+        opt = NLopt.Opt(alg, 1)
+        opt.lower_bounds  = -8.0
+        opt.upper_bounds  = 2.0
+        opt.xtol_rel      = 0.05
+        opt.min_objective = function (logμ, ∇logμ)
+            @inbounds _logμ = logμ[1]
+            increment_cache_index!(work.nnls_work_smooth_cache)
+            loss = chi2factor_loss!(get_cache(work.nnls_work_smooth_cache), _logμ, ∇logμ; χ²target)
+            return Float64(loss)
+        end
+        minf, minx, ret   = NLopt.optimize(opt, [-4.0])
+
+        mu_final = exp(T(minx[1]))
+        x_final = solve!(work.nnls_work_smooth_cache, mu_final)
+        chi2_final = chi2(get_cache(work.nnls_work_smooth_cache))
     end
 
     return (x = x_final, mu = mu_final, chi2factor = chi2_final/chi2_min)
 end
 
-function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0)) where {T}
+function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0); legacy = false) where {T}
     # Minimize energy of spectrum; loop to find largest μ that keeps chi-squared in desired range
     μ_cache = T[zero(T)]
     χ²_cache = T[χ²min]
@@ -321,12 +317,12 @@ function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T
     end
 
     # Solve χ²(μ) = χ²fact * χ²min using a spline fitting root finding method
-    if LEGACY[]
+    if legacy
         # Legacy algorithm fits spline to all (μ, χ²) values observed, including for μ=0.
         # This poses several problems:
         #   1) while unlikely, it is possible for the spline to return a negative regularization parameter
         #   2) the μ values are exponentially spaced, leading to poorly conditioned splines
-        μ = spline_root(μ_cache, χ²_cache, χ²fact * χ²min)
+        μ = spline_root_legacy_slow(μ_cache, χ²_cache, χ²fact * χ²min)
         μ = μ === nothing ? μmin : μ
     else
         if length(μ_cache) == 2
@@ -736,7 +732,7 @@ function refine!(f, state::LCurveCornerState{T}, cache; Pfilter = nothing, analy
     if analytical
         x_opt, _, _ = maximize_curvature(state)
     else
-        C_spl = _make_spline(state.x⃗, [-cache[x].C for x in state.x⃗])
+        C_spl = make_spline(state.x⃗, [-cache[x].C for x in state.x⃗])
         x_opt, _ = spline_opt(C_spl)
     end
     maybecall!(f, x_opt, state, cache)
@@ -984,16 +980,15 @@ lsqnonneg_gcv_work(C, d) = NNLSGCVRegProblem(C, d)
 
 function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T,N}) where {T,N}
     # Find μ by minimizing the function G(μ) (GCV method)
-    @timeit_debug TIMER() "L-curve Optimization" begin
-        reset_cache!(work.nnls_work_smooth_cache)
-        # opt = NLopt.Opt(:LN_COBYLA, 1) # local, gradient-free, linear approximation of objective
-        opt = NLopt.Opt(:LN_BOBYQA, 1) # local, gradient-free, quadratic approximation of objective
-        opt.lower_bounds  = -8.0
-        opt.upper_bounds  = 2.0
-        opt.xtol_rel      = 0.05
-        opt.min_objective = (logμ, ∇logμ) -> Float64(gcv!(work, logμ[1]))
-        minf, minx, ret   = NLopt.optimize(opt, [-4.0])
-    end
+    reset_cache!(work.nnls_work_smooth_cache)
+
+    # opt = NLopt.Opt(:LN_COBYLA, 1) # local, gradient-free, linear approximation of objective
+    opt = NLopt.Opt(:LN_BOBYQA, 1) # local, gradient-free, quadratic approximation of objective
+    opt.lower_bounds  = -8.0
+    opt.upper_bounds  = 2.0
+    opt.xtol_rel      = 0.05
+    opt.min_objective = (logμ, ∇logμ) -> Float64(gcv!(work, logμ[1]))
+    minf, minx, ret   = NLopt.optimize(opt, [-4.0])
 
     # Return the final regularized solution
     mu_final = exp(T(minx[1]))
@@ -1020,45 +1015,43 @@ function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
     χ² = chi2(get_cache(work.nnls_work_smooth_cache))
     x = solution(get_cache(work.nnls_work_smooth_cache))
 
-    @timeit_debug TIMER() "Aμ" begin
-        if extract_subproblem
-            # Extract equivalent unconstrained least squares subproblem from NNLS problem
-            # by extracting columns of C which correspond to nonzero components of x
-            n′ = 0
-            for (j,xⱼ) in enumerate(x)
-                xⱼ ≈ 0 && continue
-                n′ += 1
-                @inbounds @simd ivdep for i in 1:m
-                    C_buf[i,n′] = C[i,j]
-                end
+    if extract_subproblem
+        # Extract equivalent unconstrained least squares subproblem from NNLS problem
+        # by extracting columns of C which correspond to nonzero components of x
+        n′ = 0
+        for (j,xⱼ) in enumerate(x)
+            xⱼ ≈ 0 && continue
+            n′ += 1
+            @inbounds @simd ivdep for i in 1:m
+                C_buf[i,n′] = C[i,j]
             end
-            C′ = reshape(uview(C_buf, 1:m*n′), m, n′)
-            Ct′ = reshape(uview(Ct_buf, 1:n′*m), n′, m)
-            CtC′ = reshape(uview(CtC_buf, 1:n′*n′), n′, n′)
-        else
-            # Use full matrix
-            C′ = C
-            Ct′ = Ct_buf
-            CtC′ = CtC_buf
         end
-
-        # Efficient compution of
-        #   Aμ = C * (C'C + μ^2*I)^-1 * C'
-        # where the matrices have sizes
-        #   C: (m,n), Aμ: (m,m), Ct: (n,m), CtC: (n,n)
-        mul!(CtC′, C′', C′) # C'C
-        @inbounds @simd ivdep for i in 1:n
-            CtC′[i,i] += μ^2 # C'C + μ^2*I
-        end
-        ldiv!(Ct′, cholesky!(Symmetric(CtC′)), C′') # (C'C + μ^2*I)^-1 * C'
-        mul!(Aμ, C′, Ct′) # C * (C'C + μ^2*I)^-1 * C'
-
-        # Return Generalized cross-validation. See equations 27 and 32 in
-        #   Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580
-        #   https://doi.org/10.1137/1034115
-        trace = m - tr(Aμ) # tr(I - Aμ) = m - tr(Aμ) for m x m matrix Aμ
-        gcv = χ² / trace^2 # ||C*X_reg - d||^2 / tr(I - Aμ)^2
+        C′ = reshape(uview(C_buf, 1:m*n′), m, n′)
+        Ct′ = reshape(uview(Ct_buf, 1:n′*m), n′, m)
+        CtC′ = reshape(uview(CtC_buf, 1:n′*n′), n′, n′)
+    else
+        # Use full matrix
+        C′ = C
+        Ct′ = Ct_buf
+        CtC′ = CtC_buf
     end
+
+    # Efficient compution of
+    #   Aμ = C * (C'C + μ^2*I)^-1 * C'
+    # where the matrices have sizes
+    #   C: (m,n), Aμ: (m,m), Ct: (n,m), CtC: (n,n)
+    mul!(CtC′, C′', C′) # C'C
+    @inbounds @simd ivdep for i in 1:n
+        CtC′[i,i] += μ^2 # C'C + μ^2*I
+    end
+    ldiv!(Ct′, cholesky!(Symmetric(CtC′)), C′') # (C'C + μ^2*I)^-1 * C'
+    mul!(Aμ, C′, Ct′) # C * (C'C + μ^2*I)^-1 * C'
+
+    # Return Generalized cross-validation. See equations 27 and 32 in
+    #   Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580
+    #   https://doi.org/10.1137/1034115
+    trace = m - tr(Aμ) # tr(I - Aμ) = m - tr(Aμ) for m x m matrix Aμ
+    gcv = χ² / trace^2 # ||C*X_reg - d||^2 / tr(I - Aμ)^2
 
     return gcv
 end

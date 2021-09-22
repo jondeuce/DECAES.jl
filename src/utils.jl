@@ -120,18 +120,13 @@ default_blocksize() = 64
 #### Timing utilities
 ####
 
-const GLOBAL_TIMER = TimerOutput() # Global timer object
-const THREAD_LOCAL_TIMERS = [TimerOutput() for _ in 1:Threads.nthreads()] # Thread-local timer objects
-RESET_TIMERS!() = foreach(reset_timer!, THREAD_LOCAL_TIMERS)
-TIMER() = @inbounds THREAD_LOCAL_TIMERS[Threads.threadid()]
-
 tic() = time()
 toc(t) = tic() - t
 
 function hour_min_sec(t)
-    hour = floor(Int, t/3600)
-    min = floor(Int, (t - 3600*hour)/60)
-    sec = floor(Int, t - 3600*hour - 60*min)
+    hour = floor(Int, t / 3600)
+    min = floor(Int, (t - 3600 * hour) / 60)
+    sec = floor(Int, t - 3600 * hour - 60 * min)
     return (; hour, min, sec)
 end
 
@@ -140,7 +135,7 @@ function pretty_time(t)
         "--h:--m:--s"
     else
         hh, mm, ss = hour_min_sec(t)
-        lpad(hh,2,"0") * "h:" * lpad(mm,2,"0") * "m:" * lpad(ss,2,"0") * "s"
+        lpad(hh, 2, "0") * "h:" * lpad(mm, 2, "0") * "m:" * lpad(ss, 2, "0") * "s"
     end
 end
 
