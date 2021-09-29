@@ -330,8 +330,8 @@ struct FlipAngleOptimizationWorkspace{T, ETL, A1<:AbstractMatrix{T}, A2<:Abstrac
 end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
-    α = Ref(o.SetFlipAngle === nothing ? T(180.0) : o.SetFlipAngle)
-    β = Ref(o.SetRefConAngle === nothing ? T(180.0) : o.SetRefConAngle)
+    α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
+    β = Ref(o.SetRefConAngle === nothing ? T(NaN) : o.SetRefConAngle)
     θ = EPGOptions(o.nTE, α[], o.TE, T(NaN), o.T1, β[])
     αβ_basis_set = EPGBasisSetFunctor(o, θ, Val((:α, :β)))
     α_basis_set_ensemble = β_basis_set_ensemble = αβ_basis_set_ensemble = nothing

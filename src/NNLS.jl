@@ -218,6 +218,12 @@ mutable struct NNLSWorkspace{T, I <: Integer}
     nsetp::I
 end
 
+@inline solution(work::NNLSWorkspace) = work.x
+@inline dual(work::NNLSWorkspace) = work.w
+@inline ncomponents(work::NNLSWorkspace) = work.nsetp
+@inline components(work::NNLSWorkspace) = uview(work.idx, 1:ncomponents(work))
+LinearAlgebra.LowerTriangular(work::NNLSWorkspace) = uview(work.QA, 1:ncomponents(work), components(work))
+
 function NNLSWorkspace{T,I}(m, n) where {T, I <: Integer}
     NNLSWorkspace{T,I}(
         zeros(T, m, n), # A
