@@ -23,9 +23,9 @@ function solve!(work::NNLSProblem, C, d)
 end
 solve!(work::NNLSProblem) = solve!(work, work.C, work.d)
 
-solution(work::NNLSProblem) = work.nnls_work.x
+solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 
-chi2(work::NNLSProblem) = work.nnls_work.rnorm^2
+chi2(work::NNLSProblem) = NNLS.residualnorm(work.nnls_work)^2
 
 """
     lsqnonneg(C::AbstractMatrix, d::AbstractVector)

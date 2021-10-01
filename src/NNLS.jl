@@ -38,6 +38,7 @@
 module NNLS
 
 using LinearAlgebra
+using UnPack: @unpack
 using UnsafeArrays: @uviews, uviews, uview
 using MuladdMacro: @muladd
 # using LoopVectorization: @avx
@@ -45,6 +46,102 @@ using MuladdMacro: @muladd
 export nnls, nnls!, NNLSWorkspace, load!
 
 @muladd begin
+
+struct NNLSWorkspace{T}
+    A::Matrix{T}
+    b::Vector{T}
+    x::Vector{T}
+    w::Vector{T}
+    zz::Vector{T}
+    idx::Vector{Int}
+    rnorm::Base.RefValue{T}
+    mode::Base.RefValue{Int}
+    nsetp::Base.RefValue{Int}
+end
+@inline solution(work::NNLSWorkspace) = work.x
+@inline dual(work::NNLSWorkspace) = work.w
+@inline residualnorm(work::NNLSWorkspace) = work.rnorm[]
+@inline ncomponents(work::NNLSWorkspace) = work.nsetp[]
+@inline components(work::NNLSWorkspace) = uview(work.idx, 1:ncomponents(work))
+@inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = uview(work.A, 1:ncomponents(work), components(work))
+@inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = choleskyfactor(work, Val(:L))'
+
+function NNLSWorkspace{T}(m, n) where {T}
+    NNLSWorkspace{T}(
+        zeros(T, m, n), # A
+        zeros(T, m),    # b
+        zeros(T, n),    # x
+        zeros(T, n),    # w
+        zeros(T, m),    # zz
+        zeros(Int, n),  # idx
+        Ref(zero(T)),   # rnorm
+        Ref(0),         # mode
+        Ref(0),         # nsetp
+    )
+end
+
+function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    m, n = size(A)
+    @assert size(b) == (m,)
+    work = NNLSWorkspace{T}(m, n)
+    load!(work, A, b)
+    return work
+end
+
+function NNLSWorkspace(m::Int, n::Int, ::Type{T} = Float64) where {T}
+    return NNLSWorkspace{T}(m, n)
+end
+
+function load!(work::NNLSWorkspace{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    @assert size(A) == size(work.A)
+    @assert size(b) == size(work.b)
+    copyto!(work.A, A)
+    copyto!(work.b, b)
+    return work
+end
+
+@noinline function checkargs(work::NNLSWorkspace)
+    m, n = size(work.A)
+    @assert size(work.b) == (m,)
+    @assert size(work.x) == (n,)
+    @assert size(work.w) == (n,)
+    @assert size(work.zz) == (m,)
+    @assert size(work.idx) == (n,)
+end
+
+"""
+x = nnls(A, b; ...)
+
+Solves non-negative least-squares problem by the active set method
+of Lawson & Hanson (1974).
+
+Optional arguments:
+    max_iter: maximum number of iterations (counts inner loop iterations)
+
+References:
+    Lawson, C.L. and R.J. Hanson, Solving Least-Squares Problems,
+    Prentice-Hall, Chapter 23, p. 161, 1974.
+"""
+function nnls(
+        A,
+        b::AbstractVector{T};
+        max_iter::Int = 3*size(A, 2)
+    ) where {T}
+    work = NNLSWorkspace(A, b)
+    nnls!(work, max_iter)
+    return solution(work)
+end
+
+function nnls!(
+        work::NNLSWorkspace{T},
+        A::AbstractMatrix{T},
+        b::AbstractVector{T},
+        max_iter::Int = 3*size(A, 2)
+    ) where {T}
+    load!(work, A, b)
+    nnls!(work, max_iter)
+    return solution(work)
+end
 
 """
 CONSTRUCTION AND/OR APPLICATION OF A SINGLE
@@ -56,7 +153,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@inline function construct_householder!(u::AbstractVector{T}, up::T)::T where {T}
+@inline function construct_householder!(u::AbstractVector{T}, up::T) where {T}
     if length(u) <= 1
         return up
     end
@@ -69,10 +166,10 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
 
     @inbounds u1 = u[1]
     cl = ifelse(u1 > 0, -cl, cl)
-    result = u1 - cl
+    up = u1 - cl
     @inbounds u[1] = cl
 
-    return result
+    return up
 end
 
 """
@@ -114,13 +211,13 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     end
 end
 
-@inline function apply_householder!(A::AbstractMatrix{T}, up, cols, nsetp, j) where {T}
+@inline function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int}, nsetp::Int, jup::Int) where {T}
     m, n = size(A)
     if m - nsetp <= 0
         return
     end
 
-    @inbounds u1 = A[nsetp,j]
+    @inbounds u1 = A[nsetp, jup]
     cl = abs(u1)
     @assert cl > 0
     b = up * u1
@@ -128,20 +225,21 @@ end
         return
     end
 
-    @inbounds A[nsetp,j] = up
-    @inbounds for jj in cols
+    @inbounds A[nsetp, jup] = up
+    @inbounds for ip in nsetp+1:n
+        j = idx[ip]
         sm = zero(T)
-        @inbounds @simd for k in nsetp:m #@avx
-            sm = sm + A[k,jj] * A[k,j]
+        @inbounds @simd for l in nsetp:m #@avx
+            sm = sm + A[l, j] * A[l, jup]
         end
         @inbounds if sm != 0
             sm /= b
-            @inbounds @simd ivdep for i in nsetp:m #@avx
-                A[i,jj] = A[i,jj] + sm * A[i,j]
+            @inbounds @simd ivdep for l in nsetp:m #@avx
+                A[l, j] = A[l, j] + sm * A[l, jup]
             end
         end
     end
-    @inbounds A[nsetp,j] = u1
+    @inbounds A[nsetp, jup] = u1
 
     return
 end
@@ -160,7 +258,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
       SIG IS COMPUTED LAST TO ALLOW FOR THE POSSIBILITY THAT
       SIG MAY BE IN THE SAME LOCATION AS A OR B .
 """
-@inline function orthogonal_rotmat(a::T, b::T)::Tuple{T, T, T} where {T}
+@inline function orthogonal_rotmat(a::T, b::T) where {T}
     if abs(a) > abs(b)
         xr = b / a
         yr = sqrt(one(T) + xr * xr)
@@ -188,128 +286,35 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@inline function solve_triangular_system!(zz, A, idx, nsetp, jj)
+@inline function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
     if nsetp <= 0
-        return jj
+        return
     end
-    ip = nsetp
-    @inbounds jj = idx[ip]
-    @inbounds zz[ip] /= A[ip, jj]
+    @inbounds j = idx[nsetp]
+    @inbounds zz[nsetp] /= A[nsetp, j]
     @inbounds for ip in nsetp-1:-1:1
         zz1 = zz[ip + 1]
-        @inbounds @simd ivdep for ii in 1:ip #@avx
-            zz[ii] = zz[ii] - A[ii, jj] * zz1
+        @inbounds @simd ivdep for l in 1:ip #@avx
+            zz[l] = zz[l] - A[l, j] * zz1
         end
-        jj = idx[ip]
-        zz[ip] /= A[ip, jj]
+        j = idx[ip]
+        zz[ip] /= A[ip, j]
     end
-    return jj
+    return
 end
 
-mutable struct NNLSWorkspace{T, I <: Integer}
-    QA::Matrix{T}
-    Qb::Vector{T}
-    x::Vector{T}
-    w::Vector{T}
-    zz::Vector{T}
-    idx::Vector{I}
-    rnorm::T
-    mode::I
-    nsetp::I
-end
-
-@inline solution(work::NNLSWorkspace) = work.x
-@inline dual(work::NNLSWorkspace) = work.w
-@inline ncomponents(work::NNLSWorkspace) = work.nsetp
-@inline components(work::NNLSWorkspace) = uview(work.idx, 1:ncomponents(work))
-LinearAlgebra.LowerTriangular(work::NNLSWorkspace) = uview(work.QA, 1:ncomponents(work), components(work))
-
-function NNLSWorkspace{T,I}(m, n) where {T, I <: Integer}
-    NNLSWorkspace{T,I}(
-        zeros(T, m, n), # A
-        zeros(T, m),    # b
-        zeros(T, n),    # x
-        zeros(T, n),    # w
-        zeros(T, m),    # zz
-        zeros(I, n),    # idx
-        zero(T),        # rnorm
-        zero(I),        # mode
-        zero(I),        # nsetp
-    )
-end
-
-function Base.resize!(work::NNLSWorkspace{T}, m::Integer, n::Integer) where {T}
-    work.QA = zeros(T, m, n)
-    work.Qb = zeros(T, m)
-    resize!(work.x, n)
-    resize!(work.w, n)
-    resize!(work.zz, m)
-    resize!(work.idx, n)
-end
-
-function load!(work::NNLSWorkspace{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
-    m, n = size(A)
-    @assert size(b) == (m,)
-    if size(work.QA, 1) != m || size(work.QA, 2) != n
-        resize!(work, m, n)
-    end
-    copyto!(work.QA, A)
-    copyto!(work.Qb, b)
-    work
-end
-
-function NNLSWorkspace(
-        m::Integer,
-        n::Integer,
-        eltype::Type{T} = Float64,
-        indextype::Type{I} = Int
-    ) where {T,I}
-    NNLSWorkspace{T,I}(m, n)
-end
-
-function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}, indextype::Type{I} = Int) where {T,I}
-    m, n = size(A)
-    @assert size(b) == (m,)
-    work = NNLSWorkspace{T,I}(m, n)
-    load!(work, A, b)
-    work
-end
-
-"""
-Views in Julia no longer allocate memory since v1.5, but unsafe views
-provided by the UnsafeArrays package are still faster.
-
-Note: will segfault if parent array is garbage collected. If this is
-a possibility, use `UnsafeArrays.@uviews(parent, I...)` instead.
-"""
-@inline function fastview(parent::DenseArray, start_ind::Integer, len::Integer)
-    uview(parent, start_ind:(start_ind + len - 1)) # uview checks for isbitstype(T) internally
-end
-
-@noinline function checkargs(work::NNLSWorkspace)
-    m, n = size(work.QA)
-    @assert size(work.Qb) == (m,)
-    @assert size(work.x) == (n,)
-    @assert size(work.w) == (n,)
-    @assert size(work.zz) == (m,)
-    @assert size(work.idx) == (n,)
-end
-
-@inline function largest_positive_dual(
-        w::AbstractVector{T},
-        idx::AbstractVector{TI},
-        range
-    ) where {T,TI}
+@inline function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
+    n = length(w)
     wmax = zero(T)
-    izmax = 0
-    @inbounds for i in range
-        j = idx[i]
+    i_wmax = 0
+    @inbounds for ip in nsetp+1:n
+        j = idx[ip]
         if w[j] > wmax
             wmax = w[j]
-            izmax = i
+            i_wmax = ip
         end
     end
-    wmax, izmax
+    wmax, i_wmax
 end
 
 """
@@ -326,60 +331,47 @@ N-VECTOR, X, THAT SOLVES THE LEAST SQUARES PROBLEM
                  A * X = B  SUBJECT TO X .GE. 0
 """
 function nnls!(
-        work::NNLSWorkspace{T,TI},
-        max_iter::Integer = 3*size(work.QA, 2)
-    ) where {T,TI}
+        work::NNLSWorkspace{T},
+        max_iter::Int = 3*size(work.A, 2)
+    ) where {T}
 
     checkargs(work)
-
-    A = work.QA
-    b = work.Qb
-    x = work.x
-    w = work.w
-    zz = work.zz
-    idx = work.idx
-    factor = T(0.01)
-    work.mode = 1
-
-    m = size(A, 1)
-    n = size(A, 2)
+    @unpack A, b, x, w, zz, idx = work
+    m, n = size(A)
 
     iter = 0
+    nsetp = 0
+    up = zero(T)
     fill!(x, zero(T))
     copyto!(idx, 1:n)
 
-    iz2 = n
-    iz1 = 1
-    iz = 0
-    j = 0
-    jj = 0
-    nsetp = 0
-    up = zero(T)
-
+    work.mode[] = 1
     terminated = false
 
     # ******  MAIN LOOP BEGINS HERE  ******
     @inbounds while true
+        local i_curr, j_curr, i_maxdual, j_maxdual
+
         # QUIT IF ALL COEFFICIENTS ARE ALREADY IN THE SOLUTION.
         # OR IF M COLS OF A HAVE BEEN TRIANGULARIZED.
-        if (iz1 > iz2 || nsetp >= m)
+        if (nsetp + 1 > n || nsetp >= m)
             terminated = true
             break
         end
 
         # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
-        @inbounds for i in iz1:iz2
-            idxi = idx[i]
+        @inbounds for ip in nsetp+1:n
+            j = idx[ip]
             sm = zero(T)
-            @inbounds @simd for l in (nsetp + 1):m #@avx
-                sm = sm + A[l, idxi] * b[l]
+            @inbounds @simd for l in nsetp+1:m #@avx
+                sm = sm + A[l, j] * b[l]
             end
-            w[idxi] = sm
+            w[j] = sm
         end
 
         @inbounds while true
             # FIND LARGEST POSITIVE W(J).
-            wmax, izmax = largest_positive_dual(w, idx, iz1:iz2)
+            wmax, i_wmax = largest_positive_dual(w, idx, nsetp)
 
             # IF WMAX .LE. 0. GO TO TERMINATION.
             # THIS INDICATES SATISFACTION OF THE KUHN-TUCKER CONDITIONS.
@@ -388,21 +380,21 @@ function nnls!(
                 break
             end
 
-            iz = izmax
-            j = idx[iz]
+            i_maxdual = i_wmax
+            j_maxdual = idx[i_maxdual]
 
             # THE SIGN OF W(J) IS OK FOR J TO BE MOVED TO SET P.
             # BEGIN THE TRANSFORMATION AND CHECK NEW DIAGONAL ELEMENT TO AVOID
             # NEAR LINEAR DEPENDENCE.
-            Asave = A[nsetp + 1, j]
-            up = construct_householder!(uview(A, nsetp+1:m, j), up)
-            if abs(A[nsetp + 1, j]) > 0
+            Asave = A[nsetp + 1, j_maxdual]
+            up = construct_householder!(uview(A, nsetp+1:m, j_maxdual), up)
+
+            if abs(A[nsetp + 1, j_maxdual]) > 0
                 # COL J IS SUFFICIENTLY INDEPENDENT.  COPY B INTO ZZ, UPDATE ZZ
                 # AND SOLVE FOR ZTEST ( = PROPOSED NEW VALUE FOR X(J) ).
-                # println("copying b into zz")
                 copyto!(zz, b)
-                apply_householder!(uview(A, nsetp+1:m, j), up, uview(zz, nsetp+1:m))
-                ztest = zz[nsetp + 1] / A[nsetp + 1, j]
+                apply_householder!(uview(A, nsetp+1:m, j_maxdual), up, uview(zz, nsetp+1:m))
+                ztest = zz[nsetp + 1] / A[nsetp + 1, j_maxdual]
 
                 # SEE IF ZTEST IS POSITIVE
                 if ztest > 0
@@ -413,8 +405,8 @@ function nnls!(
             # REJECT J AS A CANDIDATE TO BE MOVED FROM SET Z TO SET P.
             # RESTORE A(NPP1,J), SET W(J)=0., AND LOOP BACK TO TEST DUAL
             # COEFFS AGAIN.
-            A[nsetp + 1, j] = Asave
-            w[j] = zero(T)
+            A[nsetp + 1, j_maxdual] = Asave
+            w[j_maxdual] = zero(T)
         end
         if terminated
             break
@@ -426,26 +418,28 @@ function nnls!(
         # COL J,  SET W(J)=0.
         copyto!(b, zz)
 
-        idx[iz] = idx[iz1]
-        idx[iz1] = j
-        iz1 += 1
+        idx[i_maxdual] = idx[nsetp + 1]
+        idx[nsetp + 1] = j_maxdual
         nsetp += 1
 
-        if iz1 <= iz2
-            apply_householder!(A, up, uview(idx, iz1:iz2), nsetp, j)
+        if nsetp + 1 <= n
+            apply_householder!(A, up, idx, nsetp, j_maxdual)
         end
 
         if nsetp != m
-            @inbounds @simd ivdep for l in (nsetp + 1):m #@avx
-                A[l, j] = zero(T)
+            @inbounds @simd ivdep for l in nsetp+1:m #@avx
+                A[l, j_maxdual] = zero(T)
             end
         end
 
-        w[j] = zero(T)
+        w[j_maxdual] = zero(T)
 
         # SOLVE THE TRIANGULAR SYSTEM.
         # STORE THE SOLUTION TEMPORARILY IN ZZ().
-        jj = solve_triangular_system!(zz, A, idx, nsetp, jj)
+        solve_triangular_system!(zz, A, idx, nsetp)
+        if nsetp > 0
+            i_curr = first(idx)
+        end
 
         # ******  SECONDARY LOOP BEGINS HERE ******
         #
@@ -453,9 +447,8 @@ function nnls!(
         @inbounds while true
             iter += 1
             if iter > max_iter
-                work.mode = 3
+                work.mode[] = 3
                 terminated = true
-                # println("NNLS quitting on iteration count")
                 break
             end
 
@@ -463,12 +456,12 @@ function nnls!(
             # IF NOT COMPUTE ALPHA.
             alpha = convert(T, 2)
             @inbounds for ip in 1:nsetp
-                l = idx[ip]
+                j = idx[ip]
                 if zz[ip] <= 0
-                    t = -x[l] / (zz[ip] - x[l])
+                    t = -x[j] / (zz[ip] - x[j])
                     if alpha > t
                         alpha = t
-                        jj = ip
+                        i_curr = ip
                     end
                 end
             end
@@ -482,48 +475,48 @@ function nnls!(
             # OTHERWISE USE ALPHA WHICH WILL BE BETWEEN 0 AND 1 TO
             # INTERPOLATE BETWEEN THE OLD X AND THE NEW ZZ.
             @inbounds @simd for ip in 1:nsetp
-                l = idx[ip]
-                x[l] = x[l] + alpha * (zz[ip] - x[l])
+                j = idx[ip]
+                x[j] = x[j] + alpha * (zz[ip] - x[j])
             end
 
             # MODIFY A AND B AND THE INDEX ARRAYS TO MOVE COEFFICIENT I
             # FROM SET P TO SET Z.
-            i = idx[jj]
+            j_curr = idx[i_curr]
             @inbounds while true
-                x[i] = zero(T)
+                x[j_curr] = zero(T)
 
-                if jj != nsetp
-                    jj += 1
-                    @inbounds for jji in jj:nsetp
-                        ii = idx[jji]
-                        idx[jji - 1] = ii
-                        cc, ss, sig = orthogonal_rotmat(A[jji - 1, ii], A[jji, ii])
-                        A[jji - 1, ii] = sig
-                        A[jji, ii] = zero(T)
+                if i_curr != nsetp
+                    i_curr += 1
+                    @inbounds for ip in i_curr:nsetp
+                        j = idx[ip]
+                        idx[ip-1] = j
+
+                        cc, ss, sig = orthogonal_rotmat(A[ip-1, j], A[ip, j])
+                        A[ip-1, j] = sig
+                        A[ip, j]   = zero(T)
 
                         # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
-                        @inbounds @simd for l in 1:ii-1
-                            tmp = A[jji-1, l]
-                            A[jji-1, l] = cc * tmp + ss * A[jji, l]
-                            A[jji, l] = -ss * tmp + cc * A[jji, l]
+                        @inbounds @simd for l in 1:j-1
+                            tmp = A[ip-1, l]
+                            A[ip-1, l] =  cc * tmp + ss * A[ip, l]
+                            A[ip,   l] = -ss * tmp + cc * A[ip, l]
                         end
 
-                        @inbounds @simd for l in ii+1:n
-                            tmp = A[jji-1, l]
-                            A[jji-1, l] = cc * tmp + ss * A[jji, l]
-                            A[jji, l] = -ss * tmp + cc * A[jji, l]
+                        @inbounds @simd for l in j+1:n
+                            tmp = A[ip-1, l]
+                            A[ip-1, l] =  cc * tmp + ss * A[ip, l]
+                            A[ip,   l] = -ss * tmp + cc * A[ip, l]
                         end
 
                         # Apply procedure G2 (CC,SS,B(J-1),B(J))
-                        tmp = b[jji - 1]
-                        b[jji - 1] = cc * tmp + ss * b[jji]
-                        b[jji] = -ss * tmp + cc * b[jji]
+                        tmp = b[ip-1]
+                        b[ip-1] =  cc * tmp + ss * b[ip]
+                        b[ip]   = -ss * tmp + cc * b[ip]
                     end
                 end
 
                 nsetp -= 1
-                iz1 -= 1
-                idx[iz1] = i
+                idx[nsetp + 1] = j_curr
 
                 # SEE IF THE REMAINING COEFFS IN SET P ARE FEASIBLE.  THEY SHOULD
                 # BE BECAUSE OF THE WAY ALPHA WAS DETERMINED.
@@ -531,11 +524,11 @@ function nnls!(
                 # THAT ARE NONPOSITIVE WILL BE SET TO ZERO
                 # AND MOVED FROM SET P TO SET Z.
                 allfeasible = true
-                @inbounds for jji in 1:nsetp
-                    i = idx[jji]
-                    if x[i] <= 0
+                @inbounds for ip in 1:nsetp
+                    j_curr = idx[ip]
+                    if x[j_curr] <= 0
                         allfeasible = false
-                        jj = jji
+                        i_curr = ip
                         break
                     end
                 end
@@ -546,15 +539,18 @@ function nnls!(
 
             # COPY B( ) INTO ZZ( ).  THEN SOLVE AGAIN AND LOOP BACK.
             copyto!(zz, b)
-            jj = solve_triangular_system!(zz, A, idx, nsetp, jj)
+            solve_triangular_system!(zz, A, idx, nsetp)
+            if nsetp > 0
+                i_curr = first(idx)
+            end
         end
         if terminated
             break
         end
         # ******  END OF SECONDARY LOOP  ******
 
-        @inbounds @simd for i in 1:nsetp
-            x[idx[i]] = zz[i]
+        @inbounds @simd for ip in 1:nsetp
+            x[idx[ip]] = zz[ip]
         end
         # ALL NEW COEFFS ARE POSITIVE.  LOOP BACK TO BEGINNING.
     end
@@ -565,50 +561,16 @@ function nnls!(
 
     sm = zero(T)
     if nsetp < m
-        @inbounds @simd for i in (nsetp + 1):m #@avx
-            bi = b[i]
+        @inbounds @simd for ip in nsetp+1:m #@avx
+            bi = b[ip]
             sm = sm + bi * bi
         end
     else
         fill!(w, zero(T))
     end
-    work.rnorm = sqrt(sm)
-    work.nsetp = nsetp
+    work.rnorm[] = sqrt(sm)
+    work.nsetp[] = nsetp
     return work.x
-end
-
-function nnls!(
-        work::NNLSWorkspace{T},
-        A::AbstractMatrix{T},
-        b::AbstractVector{T},
-        max_iter::Integer = 3*size(A, 2)
-    ) where {T}
-    load!(work, A, b)
-    nnls!(work, max_iter)
-    work.x
-end
-
-"""
-x = nnls(A, b; ...)
-
-Solves non-negative least-squares problem by the active set method
-of Lawson & Hanson (1974).
-
-Optional arguments:
-    max_iter: maximum number of iterations (counts inner loop iterations)
-
-References:
-    Lawson, C.L. and R.J. Hanson, Solving Least-Squares Problems,
-    Prentice-Hall, Chapter 23, p. 161, 1974.
-"""
-function nnls(
-        A,
-        b::AbstractVector{T};
-        max_iter::Integer = 3*size(A, 2)
-    ) where {T}
-    work = NNLSWorkspace(A, b)
-    nnls!(work, max_iter)
-    work.x
 end
 
 end # @muladd
