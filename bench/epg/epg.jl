@@ -24,7 +24,7 @@ function build_suite()
             for alg in DECAES.EPG_Algorithms
                 alg == DECAES.EPGWork_ReIm_Generated && continue
                 α, TE, T2, T1, β = T(163.0), T(11e-3), T(39e-3), T(1.1), T(151.0)
-                θ    = DECAES.EPGOptions{T,ETL}(α, TE, T2, T1, β)
+                θ    = DECAES.EPGOptions((; α, TE, T2, T1, β), Val(ETL), T)
                 work = alg(T, ETL)
                 suite_T["alg=$(nameof(alg))"] = @benchmarkable DECAES.EPGdecaycurve!($work, $θ)
             end

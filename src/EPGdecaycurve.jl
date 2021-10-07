@@ -9,6 +9,86 @@
     -im*sind(α)/2   im*sind(α)/2       cosd(α)]
 
 ####
+####
+####
+
+####
+# EPG parameterization interface
+# For each parameterization, define:
+#   - struct MyParameterization{T,ETL} <: FieldVector{N,T}
+#   - restructure(::MyParameterization, ::NTuple{N,T})
+#   - parameter getters
+
+struct EPGOptions{T,ETL} <: FieldVector{5,T}
+    α::T
+    TE::T
+    T2::T
+    T1::T
+    β::T
+end
+Base.NamedTuple(θ::EPGOptions) = NamedTuple{(:α, :TE, :T2, :T1, :β)}(Tuple(θ))
+@inline EPGOptions(xs::NamedTuple{(:α, :TE, :T2, :T1, :β)}, ::Val{ETL}, ::Type{T} = floattype(xs)) where {T,ETL} = EPGOptions{T,ETL}(Tuple(xs))
+@inline restructure(::EPGOptions{<:Any, ETL}, xs::NTuple{5,T}) where {T,ETL} = EPGOptions{T,ETL}(xs)
+
+@inline Base.eltype(::EPGOptions{T}) where {T} = T
+@inline echotrainlength(::EPGOptions{T,ETL}) where {T,ETL} = ETL
+@inline B1correction(θ::EPGOptions{T}) where {T} = T(θ.α / 180) # Multiplicative FA correction: A = α/180
+@inline flipangle(θ::EPGOptions{T}, i::Int) where {T} = ifelse(i == 0, T(90), ifelse(i == 1, T(180), θ.β)) # Pulse sequence: 90, 180, β, β, ...
+@inline echotime(θ::EPGOptions{T}) where {T} = θ.TE
+@inline T2time(θ::EPGOptions{T}) where {T} = θ.T2
+@inline T1time(θ::EPGOptions{T}) where {T} = θ.T1
+
+struct EPGIncreasingFlipAnglesOptions{T,ETL} <: FieldVector{6,T}
+    α::T
+    α1::T
+    α2::T
+    TE::T
+    T2::T
+    T1::T
+end
+Base.NamedTuple(θ::EPGIncreasingFlipAnglesOptions) = NamedTuple{(:α, :α1, :α2, :TE, :T2, :T1)}(Tuple(θ))
+@inline EPGIncreasingFlipAnglesOptions(xs::NamedTuple{(:α, :α1, :α2, :TE, :T2, :T1)}, ::Val{ETL}, ::Type{T} = floattype(xs)) where {T,ETL} = EPGIncreasingFlipAnglesOptions{T,ETL}(Tuple(xs))
+@inline restructure(::EPGIncreasingFlipAnglesOptions{<:Any, ETL}, xs::NTuple{6,T}) where {T,ETL} = EPGIncreasingFlipAnglesOptions{T,ETL}(xs)
+
+@inline Base.eltype(::EPGIncreasingFlipAnglesOptions{T}) where {T} = T
+@inline echotrainlength(::EPGIncreasingFlipAnglesOptions{T,ETL}) where {T,ETL} = ETL
+@inline B1correction(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = T(θ.α / 180) # Multiplicative FA correction: A = α/180
+@inline flipangle(θ::EPGIncreasingFlipAnglesOptions{T}, i::Int) where {T} = ifelse(i == 0, T(90), ifelse(i == 1, θ.α1, ifelse(i == 2, θ.α2, T(180)))) # Pulse sequence: 90, α1, α2, 180, 180, ...
+@inline echotime(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = θ.TE
+@inline T2time(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = θ.T2
+@inline T1time(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = θ.T1
+
+const EPGParameterization{T,ETL} = Union{
+    EPGOptions{T,ETL},
+    EPGIncreasingFlipAnglesOptions{T,ETL},
+}
+
+#### Destructuring/restructuring to/from vectors
+
+@generated function destructure(θ, ::Val{Fs}) where {Fs}
+    vals = [:(getproperty(θ, $(QuoteNode(F)))) for F in Fs]
+    :(Base.@_inline_meta; SVector{$(length(Fs)), $(eltype(θ))}(tuple($(vals...))))
+end
+destructure(θ, Fs::NTuple{N,Symbol}) where {N} = SVector{N, eltype(θ)}(map(F -> getproperty(θ, F), Fs))
+
+@generated function restructure(θ, x::AbstractVector{T}, ::Val{Fs}) where {T, Fs}
+    idxmap = NamedTuple{Fs}(ntuple(i -> i, length(Fs)))
+    vals   = [F ∈ Fs ? :(@inbounds(x[$(getproperty(idxmap, F))])) : :($T(getproperty(θ, $(QuoteNode(F))))) for F in fieldsof(θ)]
+    :(Base.@_inline_meta; restructure(θ, tuple($(vals...))))
+end
+function restructure(θ, x::AbstractVector{T}, Fs::NTuple{N,Symbol}) where {T, N}
+    fields = fieldsof(typeof(θ))
+    vals   = ntuple(length(θ)) do i
+        @inbounds for j in 1:N
+            (Fs[j] == fields[i]) && return x[j]
+        end
+        @inbounds T(getproperty(θ, fields[i]))
+    end
+    return restructure(θ, vals)
+end
+restructure(θ, x::NamedTuple{Fs}) where {Fs} = restructure(θ, SVector(Tuple(x)), Val(Fs))
+
+####
 #### Abstract Interface
 ####
 
@@ -19,78 +99,40 @@ abstract type AbstractEPGWorkspace{T,ETL} end
 @inline mpsv(work::AbstractEPGWorkspace) = work.MPSV
 @inline decaycurve(work::AbstractEPGWorkspace) = work.dc
 
-struct EPGOptions{T,ETL} <: FieldVector{5,T}
-    α::T
-    TE::T
-    T2::T
-    T1::T
-    β::T
-end
-
-@inline function EPGOptions(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real)
-    T = float(promote_type(typeof(α), typeof(TE), typeof(T2), typeof(T1), typeof(β)))
-    EPGOptions{T,ETL}(α, TE, T2, T1, β)
-end
-@inline EPGOptions(::EPGOptions{T,ETL}, α::Real, TE::Real, T2::Real, T1::Real, β::Real) where {T,ETL} = EPGOptions{T,ETL}(α, TE, T2, T1, β)
-@inline EPGOptions(::AbstractEPGWorkspace{T,ETL}, α::Real, TE::Real, T2::Real, T1::Real, β::Real) where {T,ETL} = EPGOptions{T,ETL}(α, TE, T2, T1, β)
-
-@inline function EPGOptions(θ::EPGOptions{<:Any,ETL}, xs::NamedTuple) where {ETL}
-    θ = setproperties!!(NamedTuple(θ), xs)
-    EPGOptions(ETL, Tuple(θ)...)
-end
-Base.NamedTuple(θ::EPGOptions{T}) where {T} = (Fs = fieldsof(EPGOptions); NamedTuple{Fs, NTuple{length(Fs),T}}(Tuple(θ)))
-
-@inline EPGdecaycurve_work(::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve_work(T, ETL)
+@inline EPGdecaycurve_work(::EPGParameterization{T,ETL}) where {T,ETL} = EPGdecaycurve_work(T, ETL)
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
-
-@generated function destructure(θ::EPGOptions{T,ETL}, ::Val{Fs}) where {T,ETL,Fs}
-    N = length(Fs)
-    vals = [:(getproperty(θ, $(QuoteNode(F)))) for F in Fs]
-    :(Base.@_inline_meta; SVector{$N,$T}(tuple($(vals...))))
-end
-destructure(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = SVector{N,T}(map(F -> getproperty(θ, F), Fs))
-
-@generated function restructure(θ::EPGOptions{<:Any,ETL}, x::AbstractVector{T}, ::Val{Fs}) where {T,ETL,Fs}
-    idxmap = NamedTuple{Fs}(ntuple(i -> i, length(Fs)))
-    vals   = [F ∈ Fs ? :(@inbounds(x[$(getproperty(idxmap, F))])) : :(getproperty(θ, $(QuoteNode(F)))) for F in fieldsof(θ)]
-    :(Base.@_inline_meta; EPGOptions{$T,$ETL}(tuple($(vals...))))
-end
-function restructure(θ::EPGOptions{<:Any,ETL}, x::AbstractVector{T}, Fs::NTuple{N,Symbol}) where {T,ETL,N}
-    fields = fieldsof(typeof(θ))
-    vals   = ntuple(length(θ)) do i
-        @inbounds for j in 1:N
-            (Fs[j] == fields[i]) && return x[j]
-        end
-        @inbounds getproperty(θ, fields[i])
-    end
-    return EPGOptions{T,ETL}(vals)
-end
-restructure(θ::EPGOptions{T,ETL}, x::NamedTuple{Fs}) where {T,ETL,Fs} = restructure(θ, SVector(Tuple(x)), Val(Fs))
 
 """
     EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real)
 
-Computes the normalized echo decay curve for a MR spin echo sequence
+Computes the normalized echo decay curve for a multi spin echo sequence
 using the extended phase graph algorithm using the given input parameters.
 
+The sequence of flip angles used is slight generalization of the standard
+90 degree excitation pulse followed by 180 degree pulse train.
+Here, the sequence used is `A*90, A*180, A*β, A*β, ...` where `A = α/180`
+accounts for B1 inhomogeneities. Equivalently, the pulse sequence can
+be written as `α/2, α, α * (β/180), α * (β/180), ...`.
+Note that if `α = β = 180`, we recover the standard `90, 180, 180, ...`
+pulse sequence.
+
 # Arguments
-- `ETL::Int`:         echo train length, i.e. number of echos
-- `α::Real`: angle of refocusing pulses (Units: degrees)
-- `TE::Real`:         inter-echo time (Units: seconds)
-- `T2::Real`:         transverse relaxation time (Units: seconds)
-- `T1::Real`:         longitudinal relaxation time (Units: seconds)
-- `β::Real`:     value of Refocusing Pulse Control Angle (Units: degrees)
+- `ETL::Int`:   echo train length, i.e. number of echos
+- `α::Real`:    angle of refocusing pulses (Units: degrees)
+- `TE::Real`:   inter-echo time (Units: seconds)
+- `T2::Real`:   transverse relaxation time (Units: seconds)
+- `T1::Real`:   longitudinal relaxation time (Units: seconds)
+- `β::Real`:    value of Refocusing Pulse Control Angle (Units: degrees)
 
 # Outputs
 - `decay_curve::AbstractVector`: normalized echo decay curve with length `ETL`
 """
-@inline EPGdecaycurve(ETL::Int, args::Real...) = EPGdecaycurve(EPGOptions(ETL, args...))
-@inline EPGdecaycurve(θ::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
-@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, EPGOptions{T,ETL}(args...))
-@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, θ)
-@inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(dc, work, EPGOptions{T,ETL}(args...))
-@inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL} = epg_decay_curve!(dc, work, θ)
+@inline EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions{floattype((α,TE,T2,T1,β)),ETL}((α,TE,T2,T1,β)))
+@inline EPGdecaycurve(θ::EPGParameterization{T,ETL}) where {T,ETL} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
+@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, EPGParameterization{T,ETL}(args...))
+@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, θ::EPGParameterization{T,ETL}) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, θ)
+@inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T,ETL}, θ::EPGParameterization{T,ETL}) where {T,ETL} = epg_decay_curve!(dc, work, θ)
 
 ####
 #### Jacobian utilities (currently hardcoded for `EPGWork_ReIm_DualMVector_Split`)
@@ -143,46 +185,46 @@ remake(x::Array, ::Type{D}) where {D <: ForwardDiff.Dual} = reinterpret(D, x)
 end
 =#
 
-struct EPGFunctor{T,ETL,Fs}
+struct EPGFunctor{T, ETL, Fs, Tθ <: EPGParameterization{T,ETL}}
     caches::EPGWorkCacheDict{ETL}
-    θ::EPGOptions{T,ETL}
+    θ::Tθ
 end
-EPGFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = EPGFunctor{T,ETL,Fs}(EPGWorkCacheDict{ETL}(), θ)
-EPGFunctor(f!::EPGFunctor{T,ETL,Fs}, θ::EPGOptions{T,ETL}) where {T,ETL,Fs} = EPGFunctor{T,ETL,Fs}(f!.caches, θ)
+EPGFunctor(θ::EPGParameterization{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N} = EPGFunctor{T,ETL,Fs,typeof(θ)}(EPGWorkCacheDict{ETL}(), θ)
+EPGFunctor(f!::EPGFunctor{T,ETL,Fs}, θ::EPGParameterization{T,ETL}) where {T,ETL,Fs} = EPGFunctor{T,ETL,Fs,typeof(θ)}(f!.caches, θ)
 
-@inline EPGOptions(f!::EPGFunctor) = f!.θ
+@inline parameters(f!::EPGFunctor) = f!.θ
 @inline optfields(::EPGFunctor{T,ETL,Fs}) where {T,ETL,Fs} = Val(Fs)
 
 function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D,ETL}, x::AbstractVector{D}) where {D,ETL}
-    θ = restructure(EPGOptions(f!), x, optfields(f!))
+    θ = restructure(parameters(f!), x, optfields(f!))
     DECAES.EPGdecaycurve!(y, epg_work, θ)
 end
 (f!::EPGFunctor)(x::AbstractVector{D}) where {D} = f!(decaycurve(f!.caches[D]), f!.caches[D], x)
 (f!::EPGFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D} = f!(y, f!.caches[D], x)
 
-struct EPGJacobianFunctor{T, ETL, Fs, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
-    f!::EPGFunctor{T,ETL,Fs}
+struct EPGJacobianFunctor{T, ETL, Fs, F <: EPGFunctor{T,ETL,Fs}, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
+    f!::F
     res::R
     cfg::C
 end
-function EPGJacobianFunctor(θ::EPGOptions{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N}
+function EPGJacobianFunctor(θ::EPGParameterization{T,ETL}, Fs::NTuple{N,Symbol}) where {T,ETL,N}
     f!  = EPGFunctor(θ, Fs)
     res = DiffResults.JacobianResult(zeros(T, ETL), zeros(T, N))
     cfg = ForwardDiff.JacobianConfig(f!, zeros(T, ETL), zeros(T, N), ForwardDiff.Chunk(N))
     return EPGJacobianFunctor(f!, res, cfg)
 end
 
-@inline EPGOptions(j!::EPGJacobianFunctor) = EPGOptions(j!.f!)
+@inline parameters(j!::EPGJacobianFunctor) = parameters(j!.f!)
 @inline optfields(j!::EPGJacobianFunctor) = optfields(j!.f!)
 
-function (j!::EPGJacobianFunctor{T,ETL})(J::Union{AbstractMatrix, DiffResults.DiffResult}, y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
+function (j!::EPGJacobianFunctor{T,ETL})(J::Union{AbstractMatrix, DiffResults.DiffResult}, y::AbstractVector{T}, θ::EPGParameterization{T,ETL}) where {T,ETL}
     @unpack f!, cfg = j!
     f! = EPGFunctor(f!, θ)
-    x  = destructure(EPGOptions(f!), optfields(f!))
+    x  = destructure(parameters(f!), optfields(f!))
     ForwardDiff.jacobian!(J, f!, y, x, cfg)
     return J isa AbstractMatrix ? J : DiffResults.jacobian(J)
 end
-(j!::EPGJacobianFunctor{T,ETL})(y::AbstractVector{T}, θ::EPGOptions{T,ETL}) where {T,ETL} = j!(j!.res, y, θ)
+(j!::EPGJacobianFunctor{T,ETL})(y::AbstractVector{T}, θ::EPGParameterization{T,ETL}) where {T,ETL} = j!(j!.res, y, θ)
 
 ####
 #### EPGWork_Basic_Cplx
@@ -207,12 +249,16 @@ end
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV = work
-    @unpack α, TE, T2, T1, β = θ
-    V = SA{Complex{T}} # alias
+    A   = B1correction(θ)
+    αₑₓ = A * 90
+    α₁  = A * 180
+    αᵢ  = A * θ.β
+    TE  = echotime(θ)
+    T2  = T2time(θ)
+    T1  = T1time(θ)
+    V   = SA{Complex{T}} # alias
 
     # Precompute compute element flip matrices and other intermediate variables
-    αₑₓ    = α/2
-    α₁, αᵢ = α, α * (β / 180)
     E1, E2 = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
     E      = SA{T}[E2, E2, E1]
     R₁     = element_flipmat(α₁)
@@ -227,6 +273,53 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T,ETL}
     @inbounds for i in 1:ETL
         # Relaxation for TE/2, followed by flip matrix
         R = i == 1 ? R₁ : Rᵢ
+        for j in 1:ETL
+            MPSV[j] = R * (E .* MPSV[j])
+        end
+
+        # Transition between phase states
+        Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
+        MPSV[1]  = V[Mᵢ[2], Mᵢ₊₁[2], Mᵢ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
+        for j in 2:ETL-1
+            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
+            MPSV[j]        = V[Mᵢ₋₁[1], Mᵢ₊₁[2], Mᵢ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
+        end
+        Mᵢ₋₁, Mᵢ  = Mᵢ, Mᵢ₊₁
+        MPSV[ETL] = V[Mᵢ₋₁[1], 0, Mᵢ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
+
+        # Relaxation for TE/2
+        for j in 1:ETL
+            MPSV[j] = E .* MPSV[j] # Relaxation for TE/2
+        end
+        dc[i] = abs(MPSV[1][1]) # first echo amplitude
+    end
+
+    return dc
+end
+
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T,ETL}, θ::EPGIncreasingFlipAnglesOptions{T,ETL}) where {T,ETL}
+    # Unpack workspace
+    @unpack MPSV = work
+    A   = B1correction(θ)
+    αₑₓ = A * flipangle(θ, 0)
+    TE  = echotime(θ)
+    T2  = T2time(θ)
+    T1  = T1time(θ)
+    V   = SA{Complex{T}} # alias
+
+    # Precompute compute element flip matrices and other intermediate variables
+    E1, E2 = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
+    E      = SA{T}[E2, E2, E1]
+
+    # Initialize magnetization phase state vector (MPSV)
+    @inbounds for j in 1:ETL
+        MPSV[j] = V[0, 0, 0]
+    end
+    @inbounds MPSV[1] = V[sind(αₑₓ), 0, 0] # initial magnetization in F1 state
+
+    @inbounds for i in 1:ETL
+        # Relaxation for TE/2, followed by flip matrix
+        R = element_flipmat(A * flipangle(θ, i))
         for j in 1:ETL
             MPSV[j] = R * (E .* MPSV[j])
         end
@@ -268,12 +361,15 @@ end
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV = work
-    @unpack α, TE, T2, T1, β = θ
-    V = SA{T} # alias
+    A  = B1correction(θ)
+    α₁ = deg2rad(A * 180)
+    αᵢ = deg2rad(A * θ.β)
+    TE = echotime(θ)
+    T2 = T2time(θ)
+    T1 = T1time(θ)
+    V  = SA{T} # alias
 
     # Precompute intermediate variables
-    α                = deg2rad(α)
-    α₁, αᵢ           = α, α*β/180
     E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
     sin½α₁, cos½α₁   = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
@@ -287,7 +383,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T,ETL}, θ::
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀      = sin½α₁
+        m₀      = sin½α₁ # since αₑₓ = ½α₁
         Mᵢ⁺     = V[b₁*m₀, 0, -c₁*m₀/2]
         dc[1]   = abs(Mᵢ⁺[1])
         MPSV[1] = Mᵢ⁺
@@ -340,11 +436,16 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
     MPSV(i::Int) = Symbol(:MPSV, i)
     quote
         # Unpack workspace
-        @unpack α, TE, T2, T1, β = θ
+        A = B1correction(θ)
+        α₁  = deg2rad(A * 180)
+        αᵢ  = deg2rad(A * θ.β)
+        TE  = echotime(θ)
+        T2  = T2time(θ)
+        T1  = T1time(θ)
 
         # Precompute intermediate variables
-        α                = deg2rad(α)
-        α₁, αᵢ           = α, α*β/180
+        # α                = deg2rad(α)
+        # α₁, αᵢ           = α, α*β/180
         V                = SA{$T} # alias
         E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
         sin½α₁,  cos½α₁  = sincos(α₁/2)
@@ -365,7 +466,7 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
 
         # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
         @inbounds begin
-            m₀         = sin½α₁
+            m₀         = sin½α₁ # since αₑₓ = ½α₁
             Mᵢ⁺        = V[b₁*m₀, 0, -c₁*m₀/2]
             dc[1]      = abs(Mᵢ⁺[1])
             $(MPSV(1)) = Mᵢ⁺
@@ -425,12 +526,17 @@ end
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV₁, MPSV₂ = work
-    @unpack α, TE, T2, T1, β = θ
-    V = SA{T} # alias
+    A  = B1correction(θ)
+    α₁ = deg2rad(A * 180)
+    αᵢ = deg2rad(A * θ.β)
+    TE = echotime(θ)
+    T2 = T2time(θ)
+    T1 = T1time(θ)
+    V  = SA{T} # alias
 
     # Precompute intermediate variables
-    α                = deg2rad(α)
-    α₁, αᵢ           = α, α*β/180
+    # α                = deg2rad(α)
+    # α₁, αᵢ           = α, α*β/180
     E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
     sin½α₁, cos½α₁   = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
@@ -444,7 +550,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁
+        m₀           = sin½α₁ # since αₑₓ = ½α₁
         Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2]
         dc[1]        = abs(Mᵢ⁺[1])
         MPSV₁[1]     = Mᵢ⁺
@@ -500,12 +606,17 @@ end
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV₁, MPSV₂ = work
-    @unpack α, TE, T2, T1, β = θ
-    V = SA{T} # alias
+    A  = B1correction(θ)
+    α₁ = deg2rad(A * 180)
+    αᵢ = deg2rad(A * θ.β)
+    TE = echotime(θ)
+    T2 = T2time(θ)
+    T1 = T1time(θ)
+    V  = SA{T} # alias
 
     # Precompute intermediate variables
-    α                = deg2rad(α)
-    α₁, αᵢ           = α, α*β/180
+    # α                = deg2rad(α)
+    # α₁, αᵢ           = α, α*β/180
     E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
     sin½α₁, cos½α₁   = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
@@ -519,7 +630,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_S
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁
+        m₀           = sin½α₁ # since αₑₓ = ½α₁
         Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2]
         dc[1]        = abs(Mᵢ⁺[1])
         MPSV₁[1]     = Mᵢ⁺
@@ -577,12 +688,17 @@ end
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV₁, MPSV₂ = work
-    @unpack α, TE, T2, T1, β = θ
-    V = SA{T} # alias
+    A  = B1correction(θ)
+    α₁ = deg2rad(A * 180)
+    αᵢ = deg2rad(A * θ.β)
+    TE = echotime(θ)
+    T2 = T2time(θ)
+    T1 = T1time(θ)
+    V  = SA{T} # alias
 
     # Precompute intermediate variables
-    α                = deg2rad(α)
-    α₁, αᵢ           = α, α*β/180
+    # α                = deg2rad(α)
+    # α₁, αᵢ           = α, α*β/180
     E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
     sin½α₁, cos½α₁   = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
@@ -596,7 +712,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁
+        m₀           = sin½α₁ # since αₑₓ = ½α₁
         Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2]
         dc[1]        = abs(Mᵢ⁺[1])
         MPSV₁[1]     = Mᵢ⁺
@@ -654,12 +770,17 @@ end
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMVector_Vec_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV₁, MPSV₂ = work
-    @unpack α, TE, T2, T1, β = θ
-    V = Vec{4,T} # alias
+    A  = B1correction(θ)
+    α₁ = deg2rad(A * 180)
+    αᵢ = deg2rad(A * θ.β)
+    TE = echotime(θ)
+    T2 = T2time(θ)
+    T1 = T1time(θ)
+    V  = Vec{4,T} # alias
 
     # Precompute intermediate variables
-    α                = deg2rad(α)
-    α₁, αᵢ           = α, α*β/180
+    # α                = deg2rad(α)
+    # α₁, αᵢ           = α, α*β/180
     E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
     sin½α₁, cos½α₁   = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
@@ -673,7 +794,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMV
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁
+        m₀           = sin½α₁ # since αₑₓ = ½α₁
         Mᵢ⁺          = V((b₁*m₀, 0, -c₁*m₀/2, 0))
         dc[1]        = abs(Mᵢ⁺[1])
         MPSV₁[1]     = Mᵢ⁺
@@ -731,12 +852,17 @@ end
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
     @unpack MPSV₁, MPSV₂ = work
-    @unpack α, TE, T2, T1, β = θ
-    V = SA{T} # alias
+    A  = B1correction(θ)
+    α₁ = deg2rad(A * 180)
+    αᵢ = deg2rad(A * θ.β)
+    TE = echotime(θ)
+    T2 = T2time(θ)
+    T1 = T1time(θ)
+    V  = SA{T} # alias
 
     # Precompute intermediate variables
-    α                = deg2rad(α)
-    α₁, αᵢ           = α, α*β/180
+    # α                = deg2rad(α)
+    # α₁, αᵢ           = α, α*β/180
     E₁, E₂           = exp(-(TE/2)/T1), exp(-(TE/2)/T2)
     sin½α₁, cos½α₁   = sincos(α₁/2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
@@ -750,7 +876,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVe
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁
+        m₀           = sin½α₁ # since αₑₓ = ½α₁
         Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2, 0]
         dc[1]        = abs(Mᵢ⁺[1])
         MPSV₁[1]     = Mᵢ⁺
@@ -811,19 +937,22 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, θ::E
     ###########################
     # Setup
     @unpack MPSV = work
-    @unpack α, TE, T2, T1, β = θ
+    A  = B1correction(θ)
+    α₁ = deg2rad(A * 180)
+    αᵢ = deg2rad(A * θ.β)
+    TE = echotime(θ)
+    T2 = T2time(θ)
+    T1 = T1time(θ)
 
     @inbounds begin
         # Initialize magnetization phase state vector (MPSV)
         E2, E1  = exp(-TE/T2), exp(-TE/T1)
         E2_half = exp(-(TE/2)/T2)
-        α1      = α # T1 flip angle
-        α2      = α * (β/180) # T2 flip angle
-        m0      = E2_half * sind(α1/2) # initial population
-        M1x     =  m0 * cosd(α1/2)^2 # M1x, M1y, M1z are elements resulting from first refocusing pulse applied to [m0, 0, 0]
-        M1y     =  m0 - M1x          # M1y = m0 * sind(α1/2)^2 = m0 - m0 * cosd(α1/2)^2 = m0 - M1x
-        M1z     = -m0 * sind(α1)/2   # Note: this is the imaginary part
-        dc[1]   = E2_half * abs(M1y) # first echo amplitude
+        m₀      = E2_half * sin(α₁/2) # initial population; since αₑₓ = α₁/2
+        M1x     =  m₀ * cos(α₁/2)^2   # M1x, M1y, M1z are elements resulting from first refocusing pulse applied to [m₀, 0, 0]
+        M1y     =  m₀ - M1x           # M1y = m₀ * sin(α₁/2)^2 = m₀ - m₀ * cos(α₁/2)^2 = m₀ - M1x
+        M1z     = -m₀ * sin(α₁)/2     # Note: this is the imaginary part
+        dc[1]   = E2_half * abs(M1y)  # first echo amplitude
 
         # Apply first relaxation matrix iteration on non-zero states
         MPSV[1] = Vec((E2 * M1y, zero(T)))
@@ -832,7 +961,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, θ::E
         MPSV[4] = Vec((E2 * M1x, zero(T)))
 
         # Extract matrix elements + initialize temporaries
-        a1, a2, a3, a4, a5 = sind(α2), cosd(α2), sind(α2/2)^2, cosd(α2/2)^2, sind(α2)/2 # independent elements of T2mat
+        a1, a2, a3, a4, a5 = sin(αᵢ), cos(αᵢ), sin(αᵢ/2)^2, cos(αᵢ/2)^2, sin(αᵢ)/2 # independent elements of T2mat
         b1, b2, b3, b4, b5 = E2*a1, E1*a2, E2*a3, E2*a4, E1*a5
         c1, c3, c4         = E2_half*a1, E2_half*a3, E2_half*a4
         b1F, b5F, c1F      = Vec((-b1, b1)), Vec((-b5, b5)), Vec((-c1, c1))

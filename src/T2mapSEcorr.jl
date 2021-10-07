@@ -196,15 +196,15 @@ end
 # =========================================================
 # EPG decay basis set construction
 # =========================================================
-struct EPGBasisSetFunctor{T, ETL, opt_vars, W <: AbstractEPGWorkspace{T, ETL}, F <: EPGFunctor{T, ETL, opt_vars}, J <: EPGJacobianFunctor{T, ETL, opt_vars}}
-    θ::EPGOptions{T,ETL}
+struct EPGBasisSetFunctor{T, ETL, opt_vars, Tθ <: EPGParameterization{T,ETL}, W <: AbstractEPGWorkspace{T, ETL}, F <: EPGFunctor{T, ETL, opt_vars}, J <: EPGJacobianFunctor{T, ETL, opt_vars}}
+    θ::Tθ
     T2_times::Vector{T}
     epg_work::W
     epg_functor!::F
     epg_jac_functor!::J
 end
 
-function EPGBasisSetFunctor(o::T2mapOptions{T}, θ::EPGOptions{T,ETL}, ::Val{opt_vars}) where {T, ETL, opt_vars}
+function EPGBasisSetFunctor(o::T2mapOptions{T}, θ::EPGParameterization{T,ETL}, ::Val{opt_vars}) where {T, ETL, opt_vars}
     epg_work = EPGdecaycurve_work(θ)
     epg_functor! = EPGFunctor(θ, opt_vars)
     epg_jac_functor! = EPGJacobianFunctor(θ, opt_vars)
@@ -213,23 +213,23 @@ end
 
 #### EPG basis set
 
-function epg_decay_basis!(f::EPGBasisSetFunctor{T,ETL}, decay_basis::AbstractMatrix{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
+function epg_decay_basis!(f::EPGBasisSetFunctor{T,ETL}, decay_basis::AbstractMatrix{T}, θ::EPGParameterization{T,ETL}) where {T,ETL}
     epg_decay_basis!(decay_basis, f.epg_work, θ, f.T2_times)
 end
 epg_decay_basis!(f::EPGBasisSetFunctor{T,ETL}, decay_basis::AbstractMatrix{T}, x::SVector{D,T}, ::Val{opt_vars}) where {D,T,ETL,opt_vars} = epg_decay_basis!(f, decay_basis, restructure(f.θ, x, Val(opt_vars)))
 epg_decay_basis!(f::EPGBasisSetFunctor{T,ETL,opt_vars}, decay_basis::AbstractMatrix{T}, x::SVector{D,T}) where {D,T,ETL,opt_vars} = epg_decay_basis!(f, decay_basis, restructure(f.θ, x, Val(opt_vars)))
 
-function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::AbstractEPGWorkspace{T,ETL}, θ::EPGOptions{T,ETL}, T2_times::AbstractVector) where {T,ETL}
+function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::AbstractEPGWorkspace{T,ETL}, θ::EPGParameterization{T,ETL}, T2_times::AbstractVector) where {T,ETL}
     # Compute the NNLS basis over T2 space
     @inbounds for j in 1:length(T2_times)
         decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is a bit faster than `Base.view`
-        θj = EPGOptions(θ, θ.α, θ.TE, T2_times[j], θ.T1, θ.β) # remake options with T2 of basis `j`
+        θj = restructure(θ, (; T2 = T2_times[j])) # remake options with T2 of basis `j`
         EPGdecaycurve!(decay_curve, decay_curve_work, θj)
     end
     return decay_basis
 end
 
-function epg_decay_basis(θ::EPGOptions{T,ETL}, T2_times::AbstractVector) where {T,ETL}
+function epg_decay_basis(θ::EPGParameterization{T,ETL}, T2_times::AbstractVector) where {T,ETL}
     decay_basis = zeros(T, ETL, length(T2_times))
     decay_curve_work = EPGdecaycurve_work(θ)
     epg_decay_basis!(decay_basis, decay_curve_work, θ, T2_times)
@@ -237,24 +237,24 @@ end
 
 #### Jacobian of EPG basis set
 
-function ∇epg_decay_basis!(f::EPGBasisSetFunctor{T,ETL}, ∇decay_basis::AbstractArray{T,3}, decay_basis::AbstractMatrix{T}, θ::EPGOptions{T,ETL}) where {T,ETL}
+function ∇epg_decay_basis!(f::EPGBasisSetFunctor{T,ETL}, ∇decay_basis::AbstractArray{T,3}, decay_basis::AbstractMatrix{T}, θ::EPGParameterization{T,ETL}) where {T,ETL}
     ∇epg_decay_basis!(∇decay_basis, decay_basis, f.epg_jac_functor!, θ, f.T2_times)
 end
 ∇epg_decay_basis!(f::EPGBasisSetFunctor{T,ETL}, ∇decay_basis::AbstractArray{T,3}, decay_basis::AbstractMatrix{T}, x::SVector{D,T}, ::Val{opt_vars}) where {D,T,ETL,opt_vars} = ∇epg_decay_basis!(f, ∇decay_basis, decay_basis, restructure(f.θ, x, Val(opt_vars)))
 ∇epg_decay_basis!(f::EPGBasisSetFunctor{T,ETL,opt_vars}, ∇decay_basis::AbstractArray{T,3}, decay_basis::AbstractMatrix{T}, x::SVector{D,T}) where {D,T,ETL,opt_vars} = ∇epg_decay_basis!(f, ∇decay_basis, decay_basis, restructure(f.θ, x, Val(opt_vars)))
 
-function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T,3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T,ETL}, θ::EPGOptions{T,ETL}, T2_times::AbstractVector) where {T,ETL}
+function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T,3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T,ETL}, θ::EPGParameterization{T,ETL}, T2_times::AbstractVector) where {T,ETL}
     # Compute the NNLS basis over T2 space
     @inbounds for j in 1:length(T2_times)
         decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is a bit faster than `Base.view`
         ∇decay_curve = uview(∇decay_basis, :, j, :)
-        θj = EPGOptions(θ, θ.α, θ.TE, T2_times[j], θ.T1, θ.β) # remake options with T2 of basis `j`
+        θj = restructure(θ, (; T2 = T2_times[j])) # remake options with T2 of basis `j`
         decay_curve_jac!(∇decay_curve, decay_curve, θj)
     end
     return ∇decay_basis
 end
 
-function ∇epg_decay_basis(θ::EPGOptions{T,ETL}, T2_times::AbstractVector, Fs::NTuple{N,Symbol}) where {T,ETL,N}
+function ∇epg_decay_basis(θ::EPGParameterization{T,ETL}, T2_times::AbstractVector, Fs::NTuple{N,Symbol}) where {T,ETL,N}
     decay_basis = zeros(T, ETL, length(T2_times))
     ∇decay_basis = zeros(T, ETL, length(T2_times), N)
     decay_curve_jac! = EPGJacobianFunctor(θ, Fs)
@@ -287,7 +287,7 @@ function EPGBasisSetEnsemble(o::T2mapOptions{T}, θ::EPGOptions{T,ETL}, ::Val{op
     EPGBasisSetEnsemble(decay_basis_set, ∇decay_basis_set, epg_basis_functor!, nnls_search_prob)
 end
 
-function epg_decay_basis!(work::EPGBasisSetEnsemble{D,T,ETL,opt_vars}, θ::EPGOptions{T,ETL}) where {D,T,ETL,opt_vars}
+function epg_decay_basis!(work::EPGBasisSetEnsemble{D,T,ETL,opt_vars}, θ::EPGParameterization{T,ETL}) where {D,T,ETL,opt_vars}
     @inbounds for I in CartesianIndices(work.nnls_search_prob.αs)
         x = work.nnls_search_prob.αs[I]
         θ = restructure(θ, x, Val(opt_vars))
@@ -299,7 +299,7 @@ end
 epg_decay_basis!(work::EPGBasisSetEnsemble{D,T,ETL}, x::SVector{D,T}, ::Val{opt_vars}) where {D,T,ETL,opt_vars} = epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, Val(opt_vars)))
 epg_decay_basis!(work::EPGBasisSetEnsemble{D,T,ETL,opt_vars}, x::SVector{D,T}) where {D,T,ETL,opt_vars} = epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, Val(opt_vars)))
 
-function ∇epg_decay_basis!(work::EPGBasisSetEnsemble{D,T,ETL,opt_vars}, θ::EPGOptions{T,ETL}) where {D,T,ETL,opt_vars}
+function ∇epg_decay_basis!(work::EPGBasisSetEnsemble{D,T,ETL,opt_vars}, θ::EPGParameterization{T,ETL}) where {D,T,ETL,opt_vars}
     @inbounds for I in CartesianIndices(work.nnls_search_prob.αs)
         x = work.nnls_search_prob.αs[I]
         θ = restructure(θ, x, Val(opt_vars))
@@ -332,7 +332,7 @@ end
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
     α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
     β = Ref(o.SetRefConAngle === nothing ? T(NaN) : o.SetRefConAngle)
-    θ = EPGOptions(o.nTE, α[], o.TE, T(NaN), o.T1, β[])
+    θ = EPGOptions((; α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = β[]), Val(o.nTE))
     αβ_basis_set = EPGBasisSetFunctor(o, θ, Val((:α, :β)))
     α_basis_set_ensemble = β_basis_set_ensemble = αβ_basis_set_ensemble = nothing
     α_surrogate = β_surrogate = αβ_surrogate = nothing

@@ -666,15 +666,15 @@ function mock_surrogate_search_problem(
     As = zeros(ETL, opts.nT2, length.(opt_ranges)...)
     ∇As = zeros(ETL, opts.nT2, D, length.(opt_ranges)...)
     T2s = logrange(opts.T2Range..., opts.nT2)
-    θ = EPGOptions(ETL, opts.SetFlipAngle, opts.TE, 0.0, opts.T1, opts.SetRefConAngle)
+    θ = EPGOptions((; α = opts.SetFlipAngle, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = opts.SetRefConAngle), Val(ETL), Float64)
     j! = EPGJacobianFunctor(θ, opt_vars)
 
     _, Rαs = SplitCartesianIndices(As, Val(2))
     for Iαs in Rαs
         @inbounds for j in 1:opts.nT2
             θαs = D == 1 ?
-                EPGOptions(θ, (T2 = T2s[j], α = alphas[Iαs[1]],)) :
-                EPGOptions(θ, (T2 = T2s[j], α = alphas[Iαs[1]], β = alphas[Iαs[2]]))
+                restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]],)) :
+                restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]], β = alphas[Iαs[2]]))
             j!(uview(∇As, :, j, :, Iαs), uview(As, :, j, Iαs), θαs)
         end
     end

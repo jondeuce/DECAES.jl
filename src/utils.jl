@@ -32,6 +32,9 @@ end
         :($(C(Symbol[fields...]))) # call container constructor on vector of symbols
 end
 
+@inline floattype(xs::Tuple) = float(promote_type(map(typeof, xs)...))
+@inline floattype(xs::NamedTuple) = floattype(Tuple(xs))
+
 function set_diag!(A::AbstractMatrix, val)
     @inbounds @simd ivdep for i in 1:min(size(A)...)
         A[i,i] = val

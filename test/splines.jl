@@ -12,7 +12,7 @@ function test_mock_surrogate_search_problem(
         )
     )
     function A(α, β)
-        theta = DECAES.EPGOptions{Float64,32}(α, opts.TE, 0.0, opts.T1, β)
+        theta = DECAES.EPGOptions((; α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β), Val(32), Float64)
         T2_times = DECAES.logrange(opts.T2Range..., opts.nT2)
         DECAES.epg_decay_basis(theta, T2_times)
     end
