@@ -603,7 +603,7 @@ Find the corner of the L-curve via curvature maximization using Algorithm 1 from
 A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”.
 IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
-function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::T = 0.05, Ctol::T = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
+function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
     # Initialize state
     msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [cache[x].C for x in state.x⃗])))
     cache === nothing && (cache = Dict{T, NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}}())
@@ -612,15 +612,15 @@ function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::
 
     # Tolerances are relative to initial curve size
     Ptopleft, Pbottomright = state.P⃗[1], state.P⃗[4]
-    Ptol = norm(Ptopleft - Pbottomright) * Ptol
-    Ctol = norm(Ptopleft - Pbottomright) * Ctol
+    Ptol = norm(Ptopleft - Pbottomright) * T(Ptol)
+    Ctol = norm(Ptopleft - Pbottomright) * T(Ctol)
 
     # For very small regularization, points on the L-curve may be extremely close,
     # and curvature calculations will be highly ill-posed. Similarly, while it should
     # not typically occur, additionally check for points on the L-curve becoming
     # extremely close for large regularization. Points which don't satisfy `Pfilter`
     # are assigned curvature -Inf.
-    Pfilter = P -> min(norm(P - Ptopleft), norm(P - Pbottomright)) > Ctol
+    Pfilter = P -> min(norm(P - Ptopleft), norm(P - Pbottomright)) > T(Ctol)
     update_curvature!(state, cache; Pfilter)
     msg("Starting", state)
 
@@ -646,7 +646,7 @@ function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol::T = 0.05, Ptol::
             msg("C₃ ≥ C₂; moved right", state)
         end
         backtracking && push!(state_cache, state)
-        is_converged(state; xtol, Ptol) && break
+        is_converged(state; xtol = T(xtol), Ptol = T(Ptol)) && break
     end
 
     if refine
@@ -669,7 +669,9 @@ function LCurveCornerState(f, x₁::T, x₄::T, cache = nothing) where {T}
     x₃   = x₁ + (x₄ - x₂)
     x⃗    = SA{T}[x₁, x₂, x₃, x₄]
     P⃗    = f.(exp.(x⃗))
-    foreach(i -> cache!(cache, x⃗[i], (P = P⃗[i], C = T(-Inf))), 1:4)
+    foreach(1:4) do i
+        cache!(cache, x⃗[i], (P = P⃗[i], C = T(-Inf)))
+    end
     return LCurveCornerState(x⃗, P⃗)
 end
 
