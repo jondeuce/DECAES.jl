@@ -1,7 +1,7 @@
 module DECAES
 
 using LinearAlgebra, SpecialFunctions, Statistics, Random
-import ArgParse, BangBang, Dierckx, DocStringExtensions, ForwardDiff, Logging, MAT, NIfTI, NLopt, Parameters, PolynomialRoots, ProgressMeter, SIMD, StaticArrays, TupleTools, UnPack, UnsafeArrays
+import ArgParse, BangBang, Dierckx, DocStringExtensions, ForwardDiff, Logging, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, ProgressMeter, SIMD, StaticArrays, TupleTools, UnPack, UnsafeArrays
 using ArgParse: @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
 using BangBang: setindex!!, setproperty!!, setproperties!!
 using Base.MathConstants: φ
@@ -17,9 +17,6 @@ using UnsafeArrays: @uviews, uviews, uview
 
 include("NNLS.jl")
 using .NNLS
-
-include("ParXRec.jl")
-using .ParXRec
 
 include("NormalHermiteSplines.jl")
 using .NormalHermiteSplines

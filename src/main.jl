@@ -417,18 +417,18 @@ function get_file_infos(opts::Dict{Symbol,Any})
 end
 
 function load_image(filename, ::Val{N}) where {N}
-    image = if maybe_get_suffix(filename) == ".mat"
+    if maybe_get_suffix(filename) == ".mat"
         # Load first `N`-dimensional array which is found, or throw an error if none are found
         data = MAT.matread(filename)
         array_keys = findall(x -> x isa AbstractArray{T,N} where {T}, data)
         if isempty(array_keys)
-            error("No 4D array was found in the input file: $filename")
+            error("No $(N)-D array was found in the input file: $filename")
         end
         if length(array_keys) > 1
             array_keys = sort(array_keys)
             @warn "Multiple possible images found in file: $(filename)\nChoosing field $(repr(array_keys[1])) out of the following options: $(join(repr.(array_keys), ", "))"
         end
-        data[array_keys[1]]
+        data = data[array_keys[1]]
 
     elseif maybe_get_suffix(filename) ∈ (".nii", ".nii.gz")
         # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned
@@ -436,15 +436,16 @@ function load_image(filename, ::Val{N}) where {N}
         # Loaded data is coerced to a `N`-dimensional array
         data = NIfTI.niread(filename)
         if data.header.scl_slope == 0
-            data.raw[ntuple(_ -> Colon(), N)...] # Return raw data
+            data = data.raw[ntuple(_ -> Colon(), N)...] # Return raw data
         else
-            data[ntuple(_ -> Colon(), N)...] # Return scaled data (getindex from the NIfTI package handles scaling)
+            data = data[ntuple(_ -> Colon(), N)...] # Return scaled data (getindex from the NIfTI package handles scaling)
         end
 
     elseif maybe_get_suffix(filename) ∈ (".par", ".xml", ".rec")
         # Load PAR/REC or XML/REC file, coercing resulting data into a `N`-dimensional array
-        _, data = ParXRec.parxrec(filename)
-        data[ntuple(_ -> Colon(), N)...]
+        rec = ParXRec.load(filename)
+        data = convert(Array, rec.data) # convert `AxisArray` to `Array`
+        data = data[ntuple(_ -> Colon(), N)...]
 
     else
         error("Currently, only $ALLOWED_FILE_SUFFIXES_STRING files are supported")
@@ -452,7 +453,8 @@ function load_image(filename, ::Val{N}) where {N}
 
     # Currently, the pipeline is ~twice as fast on Float64 arrays than Float32 arrays (unclear why).
     # However, the MATLAB toolbox converts images to double as well, so here we simply do the same
-    image = convert(Array{Float64,N}, image)
+    image = zeros(Float64, ntuple(i -> size(data, i), N))
+    image .= Float64.(data)
 
     return image
 end
