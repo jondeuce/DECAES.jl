@@ -23,8 +23,9 @@ const CLI_SETTINGS = ArgParseSettings(
         arg_type = String
         help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. The number of mask files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
     "--output", "-o"
+        nargs = '+' # If --output is passed, at least one input is required
         arg_type = String
-        help = "output directory. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). Outputs are stored with the same basename as the input files with additional suffixes; see --T2map and --T2part"
+        help = "one or more output directories. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). If one folder is passed, all output files from all processed images will be stored in the same folder, otherwise the number of output folders must equal the number of input files. Outputs are stored with the same basename as the input files with additional suffixes; see --T2map and --T2part"
     "--T2map"
         action = :store_true
         help = "call T2mapSEcorr to compute T2 distributions from 4D multi spin-echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat"
@@ -366,25 +367,29 @@ function get_file_infos(opts::Dict{Symbol, Any})
     end
 
     # Get output folders
-    outputfolders = if output === nothing
-        dirname.(inputfiles)
+    outputfolders = if isempty(output)
+        dirname.(inputfiles) # store results in folder containing corresponding input file
+    elseif length(output) == length(inputfiles)
+        String.(output) # store results from each input file in the respective output folder
+    elseif length(output) == 1
+        fill(String(only(output)), length(inputfiles)) # store all results in single folder
     else
-        [output for _ in 1:length(inputfiles)]
+        error("Incorrect number of output files passed ($(length(output))); must pass either 1 output folder (all results are stored in this folder), or the same number of output folders as input image files ($(length(inputfiles)))")
     end
 
     # Get mask files
     maskfiles = if isempty(mask)
-        fill(nothing, length(inputfiles))
+        fill(nothing, length(inputfiles)) # no mask passed
     elseif length(mask) == length(inputfiles)
-        String.(mask)
+        String.(mask) # one mask passed for each input file
     else
-        error("Number of mask files passed does not equal the number of input image files passed")
+        error("Number of mask files passed ($(length(mask))) does not equal the number of input image files passed ($(length(inputfiles))")
     end
 
     # Create file_info dictionaries
     file_info = Dict{Symbol, Any}[]
     for (inputfile, outputfolder, maskfile) in zip(inputfiles, outputfolders, maskfiles)
-        d = eltype(file_info)(
+        d = Dict{Symbol, Any}(
             :inputfile => inputfile,
             :outputfolder => outputfolder,
             :maskfile => maskfile,
