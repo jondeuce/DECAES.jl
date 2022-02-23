@@ -426,14 +426,14 @@ function load_image(filename, ::Val{N}) where {N}
         end
         if length(array_keys) > 1
             array_keys = sort(array_keys)
-            @warn "Multiple possible images found in file: $(filename)\nChoosing field $(repr(array_keys[1])) out of the following options: $(join(repr.(array_keys), ", "))"
+            @warn "Multiple possible images found in file: $(filename)\nChoosing variable $(repr(array_keys[1])) out of the following options: $(join(repr.(array_keys), ", "))"
         end
         data = data[array_keys[1]]
 
     elseif maybe_get_suffix(filename) ∈ (".nii", ".nii.gz")
-        # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned
+        # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned:
         #   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
-        # Loaded data is coerced to a `N`-dimensional array
+        # Loaded data is coerced into an `N`-dimensional array
         data = NIfTI.niread(filename)
         if data.header.scl_slope == 0
             data = data.raw[ntuple(_ -> Colon(), N)...] # Return raw data
@@ -442,9 +442,9 @@ function load_image(filename, ::Val{N}) where {N}
         end
 
     elseif maybe_get_suffix(filename) ∈ (".par", ".xml", ".rec")
-        # Load PAR/REC or XML/REC file, coercing resulting data into a `N`-dimensional array
+        # Load PAR/REC or XML/REC file, coercing resulting data into an `N`-dimensional array
         rec = ParXRec.load(filename)
-        data = convert(Array, rec.data) # convert `AxisArray` to `Array`
+        data = parent(rec.data) # get underlying data wrapped by `AxisArray`
         data = data[ntuple(_ -> Colon(), N)...]
 
     else

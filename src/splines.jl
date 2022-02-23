@@ -504,6 +504,42 @@ function local_search(
     return (x, u)
 end
 
+#=
+function local_search(
+        surr::HermiteSplineSurrogate{D,T},
+        x₀::SVector{D,T};
+        maxeval::Int = 100,
+        xtol_rel = 1e-4,
+        xtol_abs = 1e-4,
+    ) where {D,T}
+
+    # alg = :LN_COBYLA # local, gradient-free, linear approximation of objective
+    # alg = :LN_BOBYQA # local, gradient-free, quadratic approximation of objective
+    # alg = :LD_SLSQP # local, with-gradient, "Sequential Least-Squares Quadratic Programming"; uses dense-matrix methods (ordinary BFGS, not low-storage BFGS)
+    alg = :LD_LBFGS # local, with-gradient, low-storage BFGS
+
+    opt = NLopt.Opt(alg, D)
+    opt.lower_bounds = Vector{Float64}(first(surr.grid))
+    opt.upper_bounds = Vector{Float64}(last(surr.grid))
+    opt.xtol_rel = xtol_rel
+    opt.xtol_abs = xtol_abs
+    opt.maxeval = maxeval
+    opt.min_objective = function (x, g)
+        x⃗ = SVector{D,T}(ntuple(d -> @inbounds(x[d]), D))
+        @inbounds if length(g) > 0
+            g .= Float64.(NormalHermiteSplines.evaluate_gradient(surr.spl, x⃗))
+        end
+        return Float64(NormalHermiteSplines.evaluate(spl, x⃗))
+    end
+    minf, minx, ret = NLopt.optimize(opt, Vector{Float64}(x₀))
+
+    x = SVector{D,T}(ntuple(d -> @inbounds(minx[d]), D))
+    u = T(minf)
+
+    return (x, u)
+end
+=#
+
 function nearest_gridpoint(grid::AbstractArray{SVector{D,T},D}, x::SVector{D,T}) where {D,T}
     @inbounds xlo, xhi = first(grid), last(grid)
     @inbounds Ilo, Ihi = first(CartesianIndices(grid)), last(CartesianIndices(grid))
