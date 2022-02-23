@@ -76,13 +76,13 @@ See also:
     Chi2Factor::Union{T,Nothing} = nothing
     @assert (Reg == "chi2" && Chi2Factor !== nothing && Chi2Factor > 1.0) || Reg != "chi2"
 
-    "Refocusing pulse control angle for stimulated echo correction (Units: degrees)."
-    SetRefConAngle::Union{T,Nothing} = 180.0 # degrees
-    @assert SetRefConAngle === nothing || 0.0 <= SetRefConAngle <= 180.0
+    "Refocusing pulse control angle (Units: degrees)."
+    RefConAngle::Union{T,Nothing} = 180.0 # degrees
+    @assert RefConAngle === nothing || 0.0 < RefConAngle <= 180.0
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
     SetFlipAngle::Union{T,Nothing} = nothing
-    @assert SetFlipAngle === nothing || 0.0 <= SetFlipAngle <= 180.0
+    @assert SetFlipAngle === nothing || 0.0 < SetFlipAngle <= 180.0
 
     "Boolean flag to include a 3D array of the ``\\ell^2``-norms of the residuals from the NNLS fits in the output maps dictionary."
     SaveResidualNorm::Bool = false
@@ -104,7 +104,7 @@ T2mapOptions(image::Array{T,4}; kwargs...) where {T} = T2mapOptions{T}(; kwargs.
 
 t2_times(o::T2mapOptions{T}) where {T} = logrange(o.T2Range..., o.nT2)
 flip_angles(o::T2mapOptions{T}) where {T} = o.SetFlipAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetFlipAngle]
-refcon_angles(o::T2mapOptions{T}) where {T} = o.SetRefConAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetRefConAngle]
+refcon_angles(o::T2mapOptions{T}) where {T} = o.RefConAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.RefConAngle]
 
 function _show_string(o::T2mapOptions)
     io = IOBuffer()

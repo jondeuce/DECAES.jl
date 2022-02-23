@@ -3,7 +3,7 @@ using DECAES
 using Logging
 
 # Arbitrary default required parameters used during testing
-const default_paramdict = Dict{Symbol,Any}(
+default_paramdict = Dict{Symbol,Any}(
     :TE => 8e-3,
     :nT2 => 42,
     :T2Range => (12e-3, 1.8),
@@ -13,7 +13,7 @@ const default_paramdict = Dict{Symbol,Any}(
 )
 
 # Legacy settings which previously had defaults
-const legacy_default_paramdict = Dict{Symbol,Any}(
+legacy_default_paramdict = Dict{Symbol,Any}(
     :TE => 10e-3,
     :nT2 => 40,
     :T2Range => (15e-3, 2.0),
@@ -118,7 +118,7 @@ function construct_args(paramdict;
         t2part_args = T2part ? Dict{Symbol,Any}() : nothing
 
         # Only these params are used within MATLAB (possibly spelled differently)
-        mat_t2map_params  = [:Chi2Factor, :MinRefAngle, :nRefAngles, :nT2, :SetRefConAngle, :Reg, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
+        mat_t2map_params  = [:Chi2Factor, :MinRefAngle, :nRefAngles, :nT2, :RefConAngle, :Reg, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
         mat_t2part_params = [:T2Range, :SPWin, :MPWin, :Sigmoid]
 
         for (param, paramval) in paramdict
@@ -159,7 +159,7 @@ function jl_to_mat_param!(opts, param, paramval)
         opts[:Save_regparam] = ifelse(paramval, "yes", "no")
     elseif param == :nRefAngles # renamed parameter
         opts[:nAngles] = paramval
-    elseif param == :SetRefConAngle # renamed parameter
+    elseif param == :RefConAngle # renamed parameter
         opts[:RefCon] = paramval
     elseif param == :Reg # renamed value: "no" => "none", "lcurve" => "gcv"
         opts[:Reg] = paramval == "none" ? "no" : paramval == "gcv" ? "lcurve" : paramval
@@ -206,10 +206,10 @@ end
 # CLI parameter settings to loop over
 #   -Each param value will be tested individually, with all other params set to default values
 #   -Each list should contain some non-default/edge case values
-const cli_params_perms = Any[
+cli_params_perms = Any[
     (:MPWin            .=> [(38e-3, 180e-3)],),
     (:MinRefAngle      .=> [55.0],),
-    (:SetRefConAngle   .=> [172.0],),
+    (:RefConAngle      .=> [172.0],),
     (
         :Reg           .=> ["none", "chi2", "gcv", "lcurve"],
         :Chi2Factor    .=> [nothing, 1.025, nothing, nothing],
@@ -327,13 +327,13 @@ mxT2partSEcorr(image; kwargs...) =
     MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
 
 # Arbitrary non-default T2mapSEcorr options for testing
-const mat_t2map_params_perms = Any[
+mat_t2map_params_perms = Any[
     (:TE               .=> [9e-3],),
     (:T1               .=> [1.1],),
     (:Threshold        .=> [250.0],),
     (:nT2              .=> [10, 59],), # Include odd number
     (:T2Range          .=> [(8e-3, 1.0)],),
-    (:SetRefConAngle   .=> [175.0],),
+    (:RefConAngle      .=> [175.0],),
     (:MinRefAngle      .=> [60.0],),
     (:nRefAngles       .=> [7, 12],),
     (
@@ -348,7 +348,7 @@ const mat_t2map_params_perms = Any[
 ]
 
 # Arbitrary non-default T2partSEcorr options for testing
-const mat_t2part_params_perms = Any[
+mat_t2part_params_perms = Any[
     (:T2Range    .=> [(11e-3, 1.5)],),
     (:SPWin      .=> [(12e-3, 28e-3)],),
     (:MPWin      .=> [(35e-3, 150e-3)],),
