@@ -666,7 +666,7 @@ function mock_surrogate_search_problem(
     As = zeros(ETL, opts.nT2, length.(opt_ranges)...)
     ∇As = zeros(ETL, opts.nT2, D, length.(opt_ranges)...)
     T2s = logrange(opts.T2Range..., opts.nT2)
-    θ = EPGOptions((; α = opts.SetFlipAngle, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = opts.SetRefConAngle), Val(ETL), Float64)
+    θ = EPGOptions((; α = opts.SetFlipAngle, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = opts.RefConAngle), Val(ETL), Float64)
     j! = EPGJacobianFunctor(θ, opt_vars)
 
     _, Rαs = SplitCartesianIndices(As, Val(2))

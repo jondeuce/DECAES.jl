@@ -125,13 +125,9 @@ add_arg_group!(CLI_SETTINGS,
         arg_type = Float64
         help = "to skip B1 inhomogeneity correction, use --SetFlipAngle to assume a fixed refocusing flip angle for all voxels (Units: degrees)."
         group = :B1_SE_corr
-    "--SetRefConAngle"
-        arg_type = Float64
-        help = "refocusing pulse control angle for stimulated echo correction. Unlike B1 inhomogeneity correction, stimulated echo correction must be performed manually. By default, --SetRefConAngle is set to 180 degrees, equivalent to no stimulated echo correction (Units: degrees)."
-        group = :B1_SE_corr
     "--RefConAngle"
         arg_type = Float64
-        help = "Deprecated flag; see --SetRefConAngle."
+        help = "refocusing pulse control angle (default: 180 degrees). The sequence of flip angles used within the extended phase graph algorithm to perform stimulated echo correction is (90, 180, β, β, ..., β), where β is the refocusing pulse control angle. For typical multi spin-echo sequences this parameter should not be changed (Units: degrees)."
         group = :B1_SE_corr
 end
 
@@ -327,7 +323,7 @@ end
 ####
 
 function handle_cli_deprecations!(opts)
-    handle_renamed_cli_flag!(opts, :RefConAngle => :SetRefConAngle)
+    return opts
 end
 
 function handle_renamed_cli_flag!(opts, oldnew::Pair{Symbol, Symbol})

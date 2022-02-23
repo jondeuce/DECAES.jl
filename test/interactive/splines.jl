@@ -60,7 +60,7 @@ function plot_bisection_search(
         DECAES.CubicSplineSurrogate(prob) :
         DECAES.HermiteSplineSurrogate(prob)
     f_true = function(x...)
-        α, β = length(x) == 1 ? (x[1], opts.SetRefConAngle) : (x[1], x[2])
+        α, β = length(x) == 1 ? (x[1], opts.RefConAngle) : (x[1], x[2])
         θ = DECAES.EPGOptions((; α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β), Val(ETL), T)
         A = DECAES.epg_decay_basis(θ, DECAES.logrange(opts.T2Range..., opts.nT2))
         nnls_prob = DECAES.NNLSProblem(A, prob.b)
@@ -124,7 +124,7 @@ function plot_bisection_search(
         npts   = 32,
         kwargs...,
     ) where {D}
-    opts = DECAES.mock_t2map_opts(; MatrixSize = (1,1,1), nTE = 32, SetFlipAngle = flip, SetRefConAngle = refcon, nRefAngles = npts)
+    opts = DECAES.mock_t2map_opts(; MatrixSize = (1,1,1), nTE = 32, SetFlipAngle = flip, RefConAngle = refcon, nRefAngles = npts)
     prob = DECAES.mock_surrogate_search_problem(Val(D), Val(32), opts)
     plot_bisection_search(Val(D), Val(32), prob, opts; npts = npts, kwargs...)
 end

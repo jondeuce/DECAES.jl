@@ -128,8 +128,7 @@ function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {
     maps["echotimes"]      = convert(Array{T}, copy(opts.TE .* (1:opts.nTE)))
     maps["t2times"]        = convert(Array{T}, copy(T2_times))
     maps["refangleset"]    = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(flip_angles)) : T(opts.SetFlipAngle)
-    maps["refconangleset"] = opts.SetRefConAngle === nothing ? convert(Array{T}, copy(refcon_angles)) : T(opts.SetRefConAngle)
-    # maps["decaybasisset"]  = convert(Array{T}, copy(decay_basis_set))
+    # maps["decaybasisset"]  = convert(Array{T}, copy(decay_basis_set)) #TODO
 
     # Default output maps
     maps["gdn"]   = fill(T(NaN), opts.MatrixSize...)
@@ -138,7 +137,6 @@ function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {
     maps["fnr"]   = fill(T(NaN), opts.MatrixSize...)
     maps["snr"]   = fill(T(NaN), opts.MatrixSize...)
     maps["alpha"] = fill(T(NaN), opts.MatrixSize...)
-    maps["beta"]  = fill(T(NaN), opts.MatrixSize...)
 
     # Optional output maps
     if opts.SaveResidualNorm
@@ -155,7 +153,7 @@ function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {
     end
 
     if opts.SaveNNLSBasis
-        if opts.SetFlipAngle === nothing || opts.SetRefConAngle === nothing
+        if opts.SetFlipAngle === nothing
             maps["decaybasis"] = fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) # unique decay basis set for each voxel
         else
             maps["decaybasis"] = convert(Array{T}, copy(decay_basis)) # single decay basis set used for all voxels
@@ -180,7 +178,7 @@ function voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, o
     end
 
     # Find optimum flip angle and compute EPG decay basis
-    if opts.SetFlipAngle === nothing || opts.SetRefConAngle === nothing
+    if opts.SetFlipAngle === nothing
         optimize_flip_angle!(thread_buffer.flip_angle_work, opts)
     end
 
@@ -274,11 +272,8 @@ end
 
 function EPGBasisSetEnsemble(o::T2mapOptions{T}, θ::EPGOptions{T,ETL}, ::Val{opt_vars}, decay_data::AbstractVector{T}) where {T, ETL, opt_vars}
     opt_ranges = ntuple(length(opt_vars)) do i
-        opt_vars[i] === :α ?
-            flip_angles(o) :
-        opt_vars[i] === :β ?
-            refcon_angles(o) :
-            error("Optimization variable must be one of :α or :β")
+        opt_vars[i] === :α ? flip_angles(o) :
+            error("Optimization variable must be the flip angle :α")
     end
     decay_basis_set    = zeros(T, ETL, o.nT2, length.(opt_ranges)...)
     ∇decay_basis_set   = zeros(T, ETL, o.nT2, length(opt_vars), length.(opt_ranges)...)
@@ -315,80 +310,48 @@ end
 # =========================================================
 # Flip angle optimization
 # =========================================================
-struct FlipAngleOptimizationWorkspace{T, ETL, A1<:AbstractMatrix{T}, A2<:AbstractVector{T}, B <: EPGBasisSetFunctor{T,ETL}, E1 <: Union{Nothing, <:EPGBasisSetEnsemble{1, T, ETL}}, E2 <: Union{Nothing, <:EPGBasisSetEnsemble{1, T, ETL}}, E3 <: Union{Nothing, <:EPGBasisSetEnsemble{2, T, ETL}}, S1 <: Union{Nothing, AbstractSurrogate{1, T}}, S2 <: Union{Nothing, AbstractSurrogate{1, T}}, S3 <: Union{Nothing, AbstractSurrogate{2, T}}}
+struct FlipAngleOptimizationWorkspace{T, ETL, A1<:AbstractMatrix{T}, A2<:AbstractVector{T}, B <: EPGBasisSetFunctor{T,ETL}, E <: Union{Nothing, <:EPGBasisSetEnsemble{1, T, ETL}}, S <: Union{Nothing, AbstractSurrogate{1, T}}}
     decay_basis::A1
     decay_data::A2
     α::Base.RefValue{T}
-    β::Base.RefValue{T}
-    αβ_basis_set::B
-    α_basis_set_ensemble::E1
-    β_basis_set_ensemble::E2
-    αβ_basis_set_ensemble::E3
-    α_surrogate::S1
-    β_surrogate::S2
-    αβ_surrogate::S3
+    α_basis_set::B
+    α_basis_set_ensemble::E
+    α_surrogate::S
 end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
     α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
-    β = Ref(o.SetRefConAngle === nothing ? T(NaN) : o.SetRefConAngle)
-    θ = EPGOptions((; α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = β[]), Val(o.nTE))
-    αβ_basis_set = EPGBasisSetFunctor(o, θ, Val((:α, :β)))
-    α_basis_set_ensemble = β_basis_set_ensemble = αβ_basis_set_ensemble = nothing
-    α_surrogate = β_surrogate = αβ_surrogate = nothing
+    θ = EPGOptions((; α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle), Val(o.nTE))
+    α_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
 
-    if o.SetFlipAngle !== nothing && o.SetRefConAngle !== nothing
-        # Compute basis for fixed `SetFlipAngle` and `SetRefConAngle`
-        epg_decay_basis!(αβ_basis_set, decay_basis, SA{T}[α[], β[]])
+    if o.SetFlipAngle !== nothing
+        # Compute basis for fixed `SetFlipAngle`
+        epg_decay_basis!(α_basis_set, decay_basis, SA{T}[α[]])
+        α_basis_set_ensemble = nothing
+        α_surrogate = nothing
     else
         # Compute basis for each angle
-        if o.SetFlipAngle === nothing
-            α_basis_set_ensemble = EPGBasisSetEnsemble(o, θ, Val((:α,)), decay_data)
-            ∇epg_decay_basis!(α_basis_set_ensemble, θ)
-            α_surrogate = o.legacy ?
-                CubicSplineSurrogate(α_basis_set_ensemble.nnls_search_prob; legacy = true) :
-                HermiteSplineSurrogate(α_basis_set_ensemble.nnls_search_prob)
-        end
-        if o.SetRefConAngle === nothing
-            β_basis_set_ensemble = EPGBasisSetEnsemble(o, θ, Val((:β,)), decay_data)
-            ∇epg_decay_basis!(β_basis_set_ensemble, θ)
-            β_surrogate = CubicSplineSurrogate(β_basis_set_ensemble.nnls_search_prob) do I
-                if o.SetFlipAngle === nothing
-                    βI = β_basis_set_ensemble.nnls_search_prob.αs[I][1]
-                    decay_basis = uview(β_basis_set_ensemble.decay_basis_set, :, :, I)
-                    epg_decay_basis!(β_basis_set_ensemble.epg_basis_functor!, decay_basis, SA[α[], βI], Val((:α, :β)))
-                end
-            end
-        end
-        if o.SetFlipAngle === nothing && o.SetRefConAngle === nothing
-            αβ_basis_set_ensemble = EPGBasisSetEnsemble(o, θ, Val((:α, :β)), decay_data)
-            ∇epg_decay_basis!(αβ_basis_set_ensemble, θ)
-            αβ_surrogate = HermiteSplineSurrogate(αβ_basis_set_ensemble.nnls_search_prob)
-        end
+        α_basis_set_ensemble = EPGBasisSetEnsemble(o, θ, Val((:α,)), decay_data)
+        ∇epg_decay_basis!(α_basis_set_ensemble, θ)
+        α_surrogate = o.legacy ?
+            CubicSplineSurrogate(α_basis_set_ensemble.nnls_search_prob; legacy = true) :
+            HermiteSplineSurrogate(α_basis_set_ensemble.nnls_search_prob)
     end
 
-    FlipAngleOptimizationWorkspace(decay_basis, decay_data, α, β, αβ_basis_set, α_basis_set_ensemble, β_basis_set_ensemble, αβ_basis_set_ensemble, α_surrogate, β_surrogate, αβ_surrogate)
+    FlipAngleOptimizationWorkspace(decay_basis, decay_data, α, α_basis_set, α_basis_set_ensemble, α_surrogate)
 end
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
 
     if o.SetFlipAngle === nothing
+        # Find optimal flip angle
         empty!(work.α_surrogate)
         nnls_searcher = DiscreteSurrogateSearcher(work.α_surrogate; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
         α_opt, _ = bisection_search(work.α_surrogate, nnls_searcher; maxeval = o.nRefAngles)
         work.α[] = α_opt[1]
-    end
 
-    if o.SetRefConAngle === nothing
-        empty!(work.β_surrogate)
-        nnls_searcher = DiscreteSurrogateSearcher(work.β_surrogate; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
-        β_opt, _ = bisection_search(work.β_surrogate, nnls_searcher; maxeval = o.nRefAngles)
-        work.β[] = β_opt[1]
-    end
-
-    # Compute basis using optimized flip angles
-    if o.SetFlipAngle === nothing || o.SetRefConAngle === nothing
-        epg_decay_basis!(work.αβ_basis_set, work.decay_basis, SA[work.α[], work.β[]])
+        # Compute basis using optimized flip angles
+        epg_decay_basis!(work.α_basis_set, work.decay_basis, SA[work.α[]])
     end
 
     return nothing
@@ -454,7 +417,7 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
 
     # Compute and save parameters of distribution
     @inbounds begin
-        @unpack gdn, ggm, gva, fnr, snr, alpha, beta = maps
+        @unpack gdn, ggm, gva, fnr, snr, alpha = maps
         mul!(decay_calc, decay_basis, T2_dist)
         residuals .= decay_calc .- decay_data
         gdn[I]   = sum(T2_dist)
@@ -464,7 +427,6 @@ function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::C
         fnr[I]   = sum(T2_dist) / sqrt(sum(abs2, residuals)/(o.nTE-1))
         snr[I]   = maximum(decay_data) / std(residuals)
         alpha[I] = flip_angle_work.α[]
-        beta[I]  = flip_angle_work.β[]
     end
 
     # Save distribution
