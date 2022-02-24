@@ -80,12 +80,12 @@ See also:
     @assert (Reg == "chi2" && Chi2Factor !== nothing && Chi2Factor > 1.0) || Reg != "chi2"
 
     "Refocusing pulse control angle (Units: degrees)."
-    RefConAngle::Union{T,Nothing} = 180.0 # degrees
-    @assert RefConAngle === nothing || 0.0 < RefConAngle <= 180.0
+    RefConAngle::T = 180.0 # degrees
+    @assert 0.0 <= RefConAngle <= 180.0
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
     SetFlipAngle::Union{T,Nothing} = nothing
-    @assert SetFlipAngle === nothing || 0.0 < SetFlipAngle <= 180.0
+    @assert SetFlipAngle === nothing || 0.0 <= SetFlipAngle <= 180.0
 
     "Boolean flag to include a 3D array of the ``\\ell^2``-norms of the residuals from the NNLS fits in the output maps dictionary."
     SaveResidualNorm::Bool = false
@@ -173,6 +173,18 @@ See also:
 end
 T2partOptions(args...; kwargs...) = T2partOptions{Float64}(args...; kwargs...)
 T2partOptions(t2dist::Array{T,4}; kwargs...) where {T} = T2partOptions{T}(; kwargs..., MatrixSize = size(t2dist)[1:3], nT2 = size(t2dist)[4])
+
+function T2partOptions(o::T2mapOptions{T}; kwargs...) where {T}
+    T2partOptions{T}(;
+        legacy = o.legacy,
+        threaded = o.threaded,
+        MatrixSize = o.MatrixSize,
+        nT2 = o.nT2,
+        T2Range = o.T2Range,
+        Silent = o.Silent,
+        kwargs...,
+    )
+end
 
 function _show_string(o::T2partOptions)
     io = IOBuffer()

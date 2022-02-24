@@ -90,7 +90,7 @@ function T2mapSEcorr(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T}
 
     # Run analysis in parallel
     indices = filter(I -> image[I,1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
-    indices_blocks = Iterators.partition(eachindex(indices), default_blocksize())
+    indices_blocks = split_indices(length(indices), default_blocksize())
     progmeter = opts.Silent ? nothing : DECAESProgress(io, length(indices_blocks), "Computing T2-Distribution: "; dt = 5.0)
     signals = permutedims(image[indices, :]) # Permute image for cache locality
 

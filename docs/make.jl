@@ -1,4 +1,10 @@
-using Documenter, DECAES
+try
+    @eval using Pkg, Documenter, DECAES
+catch e
+    Pkg.develop(PackageSpec(path = joinpath(@__DIR__, "..")))
+    Pkg.instantiate()
+    @eval using Pkg, Documenter, DECAES
+end
 
 makedocs(;
     modules = [DECAES],

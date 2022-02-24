@@ -280,7 +280,7 @@ function suggest_point(surr::HermiteSplineSurrogate{1,T}) where {T}
     end
 
     # Use Brent's method to search for a minimum on the interval (p₁, p₂)
-    @inbounds xᵒᵖᵗ, uᵒᵖᵗ = brent(p₁[1], p₂[1]; xrtol = T(1e-6), xtol = T(1e-6), maxiters = 10) do x
+    @inbounds xᵒᵖᵗ, uᵒᵖᵗ = brent(p₁[1], p₂[1]; xrtol = T(1e-4), xtol = T(1e-4), maxiters = 10) do x
         p = SA{T}[x]
         u = NormalHermiteSplines.evaluate(surr.spl, p)
         return u

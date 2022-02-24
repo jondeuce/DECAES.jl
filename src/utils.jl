@@ -115,6 +115,12 @@ end
     iobuf::IOBuffer
     iolock::ReentrantLock = Threads.ReentrantLock()
     last_msg::Ref{String} = Ref("")
+    ch::Channel{String} = Channel{String}(; spawn = true) do ch
+        for msg in ch
+            println(io, msg)
+            flush(io)
+        end
+    end
 end
 
 function DECAESProgress(io::IO, n::Int, desc::AbstractString; kwargs...)
@@ -143,9 +149,9 @@ function maybe_print!(p::DECAESProgress)
         msg = replace(msg, "\u1b[A" => "")
         if msg != p.last_msg[]
             lock(p.iolock) do
-                println(p.io, msg)
                 p.last_msg[] = msg
             end
+            put!(p.ch, msg)
         end
     end
 end
@@ -200,6 +206,7 @@ function split_indices(len::Integer, basesize::Integer)
     np = max(1, div(len′, basesize))
     return (Int(1 + ((i - 1) * len′) ÷ np) : Int((i * len′) ÷ np) for i in 1:np)
 end
+split_indices(r, basesize::Integer) = isempty(r) ? (r for _ in 1:1) : (r[i[begin] + begin - 1 : i[end] + begin - 1] for i in split_indices(length(r), basesize))
 
 default_blocksize() = 64
 
@@ -210,24 +217,17 @@ default_blocksize() = 64
 # argument at `@spawn`-time, obviating the need to tie the resource to the `threadid()`.
 # 
 #   See: https://juliafolds.github.io/data-parallelism/tutorials/concurrency-patterns/#worker_pool
-function workerpool(work!, allocate, inputs::Channel, progmeter::Union{DECAESProgress, Nothing} = nothing; ntasks = Threads.nthreads())
-    if progmeter !== nothing
-        @assert length(progmeter) == length(inputs.data)
-    end
-
-    @sync begin
-        if progmeter !== nothing
-            Threads.@spawn begin
-                while !isempty(inputs)
-                    ProgressMeter.update!(progmeter, length(progmeter) - length(inputs.data))
-                end
-                ProgressMeter.finish!(progmeter)
-            end
-        end
-        for _ in 1:ntasks
-            Threads.@spawn allocate() do resource
-                for input in inputs
+function workerpool(work!, allocate, inputs::Channel, progmeter::Union{DECAESProgress, Progress, Nothing} = nothing; ntasks = Threads.nthreads())
+    @sync for _ in 1:ntasks
+        Threads.@spawn allocate() do resource
+            for input in inputs
+                if progmeter === nothing
                     work!(input, resource)
+                else
+                    @sync begin
+                        Threads.@spawn work!(input, resource)
+                        ProgressMeter.next!(progmeter)
+                    end
                 end
             end
         end
@@ -359,7 +359,6 @@ end
 #### Generate (moderately) realistic mock images
 ####
 
-# Mock CPMG image
 function mock_t2map_opts(::Type{T} = Float64; kwargs...) where {T}
     T2mapOptions{T}(;
         MatrixSize = (2,2,2),
@@ -412,4 +411,24 @@ end
 # Mock T2 distribution, computed with default parameters
 function mock_T2_dist(o::T2mapOptions = mock_t2map_opts(Float64); kwargs...)
     T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]
+end
+
+# Simple benchmark
+function mock_t2map_benchmark(; plot = false, kwargs...)
+    t2map_opts = mock_t2map_opts(; MatrixSize = (64,64,64), SetFlipAngle = 165.0, RefConAngle = 180.0, SaveResidualNorm = true, kwargs...)
+    t2part_opts = T2partOptions(t2map_opts; SPWin = (t2map_opts.T2Range[1], 40e-3), MPWin = (40e-3, t2map_opts.T2Range[2]))
+
+    image = mock_image(t2map_opts)
+    # t2maps, t2dist = Main.@btime T2mapSEcorr($image, $(T2mapOptions(t2map_opts; SetFlipAngle = nothing)))
+    t2maps, t2dist = @time T2mapSEcorr(image, T2mapOptions(t2map_opts; SetFlipAngle = nothing))
+    t2part = @time T2partSEcorr(t2dist, t2part_opts)
+
+    if plot
+        dα = vec(t2maps["alpha"] .- t2map_opts.SetFlipAngle)
+        relerr = vec(t2maps["resnorm"] ./ sqrt.(sum(abs2, image; dims = 4)))
+        Main.UnicodePlots.histogram(dα; title = "MAE flip angle = $(mean(abs.(dα)))") |> display
+        Main.UnicodePlots.histogram(relerr; title = "relative resnorm = $(mean(relerr))") |> display
+    end
+
+    return t2maps, t2dist, t2part
 end
