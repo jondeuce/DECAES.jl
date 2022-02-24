@@ -253,10 +253,46 @@ end
 
 function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
     _, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
-    @inbounds _, p = nearest_interior_gridpoint(surr.grid, surr.grid[I])
-    # @inbounds p = surr.grid[I] #TODO
+    @inbounds p = surr.grid[I]
     p, u = local_search(surr, p)
     return (p, u)
+end
+
+# Specialize the 1D case to use the faster and more robust Brent-Dekker method
+function suggest_point(surr::HermiteSplineSurrogate{1,T}) where {T}
+    u₀, I = findmin(evaluate!(surr.ugrid, surr.spl, surr.grid))
+    @inbounds p₀ = surr.grid[I]
+
+    @inbounds if I == 1
+        # Grid minimizer is at the left endpoint
+        p₁, p₂ = p₀, surr.grid[I+1]
+    elseif I == length(surr.ugrid)
+        # Grid minimizer is at the right endpoint
+        p₁, p₂ = surr.grid[I-1], p₀
+    else
+        # Check gradient at grid minimizer
+        ∇u0 = NormalHermiteSplines.evaluate_gradient(surr.spl, p₀)
+        if ∇u0[1] < 0
+            p₁, p₂ = p₀, surr.grid[I+1] # negative gradient -> minimum is to the right
+        else
+            p₁, p₂ = surr.grid[I-1], p₀ # positive gradient -> minimum is to the left
+        end
+    end
+
+    # Use Brent's method to search for a minimum on the interval (p₁, p₂)
+    @inbounds xᵒᵖᵗ, uᵒᵖᵗ = brent(p₁[1], p₂[1]; xrtol = T(1e-6), xtol = T(1e-6), maxiters = 10) do x
+        p = SA{T}[x]
+        u = NormalHermiteSplines.evaluate(surr.spl, p)
+        return u
+    end
+    pᵒᵖᵗ = SA{T}[xᵒᵖᵗ]
+
+    # Brent's method doesn't evaluate the boundaries of the search interval; check manually
+    if u₀ < uᵒᵖᵗ
+        pᵒᵖᵗ, uᵒᵖᵗ = p₀, u₀
+    end
+
+    return (pᵒᵖᵗ, uᵒᵖᵗ)
 end
 
 ####

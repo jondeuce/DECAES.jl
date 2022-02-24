@@ -20,6 +20,9 @@ See also:
     "Perform T2-mapping using legacy algorithms."
     legacy::Bool = false
 
+    "Perform T2-mapping using multiple threads."
+    threaded::Bool = Threads.nthreads() > 1
+
     "Size of first 3 dimensions of input 4D image. This argument has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`."
     MatrixSize::NTuple{3,Int}
     @assert all(MatrixSize .>= 1)
@@ -137,6 +140,9 @@ See also:
 @with_kw_noshow struct T2partOptions{T<:Real}
     "Calculate T2-parts using legacy algorithms."
     legacy::Bool = false
+
+    "Perform T2-parts using multiple threads."
+    threaded::Bool = Threads.nthreads() > 1
 
     "Size of first 3 dimensions of input 4D T2 distribution. This argument is has no default, but is inferred automatically as `size(t2dist)[1:3]` when calling `T2partSEcorr(t2dist; kwargs...)`."
     MatrixSize::NTuple{3,Int}

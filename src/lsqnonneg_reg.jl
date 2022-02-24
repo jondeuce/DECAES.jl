@@ -526,6 +526,119 @@ function bracketing_interval(f, a, δ, dilate = 1; maxiters = 1000, cache = noth
 end
 
 ####
+#### Optimization methods. `brent` is a modified code from Optim.jl:
+####
+####    https://github.com/JuliaNLSolvers/Optim.jl/blob/1189ba0347ba567e43d1d4de94588aaf8a9e3ac0/src/univariate/solvers/brent.jl#L23
+####
+#### Optim.jl is licensed under the MIT License:
+#### > Copyright (c) 2012: John Myles White, Tim Holy, and other contributors.
+#### > Copyright (c) 2016: Patrick Kofod Mogensen, John Myles White, Tim Holy, and other contributors.
+#### > Copyright (c) 2017: Patrick Kofod Mogensen, Asbjørn Nilsen Riseth, John Myles White, Tim Holy, and other contributors.
+#### > Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+#### > The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+#### > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+function brent(
+        f, x₁::T, x₂::T;
+        xrtol = sqrt(eps(T)),
+        xtol = eps(T),
+        maxiters::Int = 1_000,
+    ) where {T <: AbstractFloat}
+    @assert x₁ <= x₂ "x₁ must be less than x₂"
+
+    φ::T = (3 - sqrt(T(5))) / 2
+    xᵒᵖᵗ = x₁ + φ * (x₂ - x₁)
+    yᵒᵖᵗ = f(xᵒᵖᵗ)
+
+    Δx_old = Δx = zero(T)
+    xᵒᵖᵗ_older = xᵒᵖᵗ_old = xᵒᵖᵗ
+    yᵒᵖᵗ_older = yᵒᵖᵗ_old = yᵒᵖᵗ
+
+    iteration = 0
+    converged = false
+
+    while iteration < maxiters
+        p = zero(T)
+        q = zero(T)
+        xₘ = (x₂ + x₁)/2
+
+        Δx_tol = xrtol * abs(xᵒᵖᵗ) + xtol
+        if abs(xᵒᵖᵗ - xₘ) + (x₂ - x₁)/2 <= 2*Δx_tol
+        # if abs(xᵒᵖᵗ - xᵒᵖᵗ_old) <= Δx_tol
+            converged = true
+            break
+        end
+
+        iteration += 1
+
+        if abs(Δx_old) > Δx_tol
+            # Compute parabola interpolation
+            # xᵒᵖᵗ + p/q is the optimum of the parabola
+            # Also, q is guaranteed to be positive
+
+            r = (xᵒᵖᵗ - xᵒᵖᵗ_old) * (yᵒᵖᵗ - yᵒᵖᵗ_older)
+            q = (xᵒᵖᵗ - xᵒᵖᵗ_older) * (yᵒᵖᵗ - yᵒᵖᵗ_old)
+            p = (xᵒᵖᵗ - xᵒᵖᵗ_older) * q - (xᵒᵖᵗ - xᵒᵖᵗ_old) * r
+            q = 2*(q - r)
+
+            if q > 0
+                p = -p
+            else
+                q = -q
+            end
+        end
+
+        if abs(p) < abs(q * Δx_old/2) && p < q * (x₂ - xᵒᵖᵗ) && p < q * (xᵒᵖᵗ - x₁)
+            Δx_old = Δx
+            Δx = p/q
+
+            # The function must not be evaluated too close to x₂ or x₁
+            x_tmp = xᵒᵖᵗ + Δx
+            if (x_tmp - x₁) < 2*Δx_tol || (x₂ - x_tmp) < 2*Δx_tol
+                Δx = (xᵒᵖᵗ < xₘ) ? Δx_tol : -Δx_tol
+            end
+        else
+            Δx_old = (xᵒᵖᵗ < xₘ) ? x₂ - xᵒᵖᵗ : x₁ - xᵒᵖᵗ
+            Δx = φ * Δx_old
+        end
+
+        # The function must not be evaluated too close to xᵒᵖᵗ
+        if abs(Δx) >= Δx_tol
+            xᵒᵖᵗ_new = xᵒᵖᵗ + Δx
+        else
+            xᵒᵖᵗ_new = xᵒᵖᵗ + ((Δx > 0) ? Δx_tol : -Δx_tol)
+        end
+
+        yᵒᵖᵗ_new = f(xᵒᵖᵗ_new)
+
+        if yᵒᵖᵗ_new < yᵒᵖᵗ
+            if xᵒᵖᵗ_new < xᵒᵖᵗ
+                x₂ = xᵒᵖᵗ
+            else
+                x₁ = xᵒᵖᵗ
+            end
+            xᵒᵖᵗ_older, xᵒᵖᵗ_old, xᵒᵖᵗ = xᵒᵖᵗ_old, xᵒᵖᵗ, xᵒᵖᵗ_new
+            yᵒᵖᵗ_older, yᵒᵖᵗ_old, yᵒᵖᵗ = yᵒᵖᵗ_old, yᵒᵖᵗ, yᵒᵖᵗ_new
+        else
+            if xᵒᵖᵗ_new < xᵒᵖᵗ
+                x₁ = xᵒᵖᵗ_new
+            else
+                x₂ = xᵒᵖᵗ_new
+            end
+            if yᵒᵖᵗ_new <= yᵒᵖᵗ_old || xᵒᵖᵗ_old == xᵒᵖᵗ
+                xᵒᵖᵗ_older, xᵒᵖᵗ_old = xᵒᵖᵗ_old, xᵒᵖᵗ_new
+                yᵒᵖᵗ_older, yᵒᵖᵗ_old = yᵒᵖᵗ_old, yᵒᵖᵗ_new
+            elseif yᵒᵖᵗ_new <= yᵒᵖᵗ_older || xᵒᵖᵗ_older == xᵒᵖᵗ || xᵒᵖᵗ_older == xᵒᵖᵗ_old
+                xᵒᵖᵗ_older = xᵒᵖᵗ_new
+                yᵒᵖᵗ_older = yᵒᵖᵗ_new
+            end
+        end
+    end
+
+    return (xᵒᵖᵗ, yᵒᵖᵗ)
+end
+
+####
 #### L-curve method for choosing Tikhonov regularization parameter
 ####
 

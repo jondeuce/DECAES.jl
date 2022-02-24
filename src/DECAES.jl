@@ -9,7 +9,7 @@ using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using ForwardDiff: DiffResults
 using Logging: ConsoleLogger, with_logger
 using Parameters: @with_kw, @with_kw_noshow
-using ProgressMeter: Progress, BarGlyphs, finish!, next!
+using ProgressMeter: Progress, BarGlyphs
 using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
 using SIMD: FloatingTypes, Vec, shufflevector
 using UnPack: @unpack, @pack!

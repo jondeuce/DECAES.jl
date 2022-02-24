@@ -74,34 +74,29 @@ function T2mapSEcorr(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     # =========================================================================
     # Initialization
     # =========================================================================
-    # Initialize output maps and distributions
     maps = init_output_t2maps(opts)
     distributions = init_output_t2distributions(opts)
-
-    # Initialize reusable temporary buffers
-    thread_buffers = [thread_buffer_maker(opts) for _ in 1:Threads.nthreads()]
 
     # =========================================================================
     # Process all pixels
     # =========================================================================
     LinearAlgebra.BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
 
+    # For each worker in the worker pool, allocate a separete thread-local buffer, then run the work function `work!`
+    function with_thread_buffer(work!)
+        thread_buffer = thread_buffer_maker(opts)
+        work!(thread_buffer)
+    end
+
     # Run analysis in parallel
     indices = filter(I -> image[I,1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
-    if opts.Silent
-        tforeach(indices) do I
-            thread_buffer = thread_buffers[Threads.threadid()]
-            voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
-        end
-    else
-        bigblocks = Iterators.partition(indices, 8 * Threads.nthreads() * default_blocksize()) .|> copy
-        progmeter = DECAESProgress(io, length(bigblocks), "Computing T2-Distribution: "; dt = 5.0)
-        for bigblock in bigblocks
-            tforeach(bigblock) do I
-                thread_buffer = thread_buffers[Threads.threadid()]
-                voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts, I)
-            end
-            next!(progmeter)
+    indices_blocks = Iterators.partition(eachindex(indices), default_blocksize())
+    progmeter = opts.Silent ? nothing : DECAESProgress(io, length(indices_blocks), "Computing T2-Distribution: "; dt = 5.0)
+    signals = permutedims(image[indices, :]) # Permute image for cache locality
+
+    workerpool(with_thread_buffer, indices_blocks, progmeter; ntasks = opts.threaded ? Threads.nthreads() : 1) do inds, thread_buffer
+        @inbounds for j in inds
+            voxelwise_T2_distribution!(thread_buffer, maps, distributions, uview(signals, :, j), opts, indices[j])
         end
     end
 
@@ -166,15 +161,10 @@ end
 # =========================================================
 # Main loop function
 # =========================================================
-function voxelwise_T2_distribution!(thread_buffer, maps, distributions, image, opts::T2mapOptions, I::CartesianIndex)
-    # Skip low signal voxels
-    @inbounds if !(image[I,1] > opts.Threshold)
-        return nothing
-    end
-
-    # Extract decay curve from the voxel
+function voxelwise_T2_distribution!(thread_buffer, maps, distributions, signal, opts::T2mapOptions, I::CartesianIndex)
+    # Copy decay curve into the thread buffer
     @inbounds @simd for j in 1:opts.nTE
-        thread_buffer.decay_data[j] = image[I,j]
+        thread_buffer.decay_data[j] = signal[j]
     end
 
     # Find optimum flip angle and compute EPG decay basis

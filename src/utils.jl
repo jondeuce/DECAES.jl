@@ -85,6 +85,90 @@ end
 mapfindmax(f, xs) = mapfind(f, findmax, xs)
 mapfindmin(f, xs) = mapfind(f, findmin, xs)
 
+####
+#### Timing utilities
+####
+
+tic() = time()
+toc(t) = tic() - t
+
+function hour_min_sec(t)
+    hour = floor(Int, t / 3600)
+    min = floor(Int, (t - 3600 * hour) / 60)
+    sec = floor(Int, t - 3600 * hour - 60 * min)
+    return (; hour, min, sec)
+end
+
+function pretty_time(t)
+    if isnan(t) || isinf(t)
+        "--h:--m:--s"
+    else
+        hh, mm, ss = hour_min_sec(t)
+        lpad(hh, 2, "0") * "h:" * lpad(mm, 2, "0") * "m:" * lpad(ss, 2, "0") * "s"
+    end
+end
+
+@with_kw struct DECAESProgress
+    progmeter::Progress
+    n::Int
+    io::IO
+    iobuf::IOBuffer
+    iolock::ReentrantLock = Threads.ReentrantLock()
+    last_msg::Ref{String} = Ref("")
+end
+
+function DECAESProgress(io::IO, n::Int, desc::AbstractString; kwargs...)
+    iobuf = IOBuffer()
+    DECAESProgress(
+        progmeter = Progress(n; dt = 0.0, desc = desc, color = :cyan, output = iobuf, barglyphs = BarGlyphs("[=> ]"), kwargs...),
+        n = n,
+        io = io,
+        iobuf = iobuf,
+    )
+end
+DECAESProgress(n::Int, desc::AbstractString; kwargs...) = DECAESProgress(stderr, n, desc; kwargs...)
+
+Base.length(p::DECAESProgress) = p.n
+ProgressMeter.next!(p::DECAESProgress) = (ProgressMeter.next!(p.progmeter); maybe_print!(p))
+ProgressMeter.finish!(p::DECAESProgress) = (ProgressMeter.finish!(p.progmeter); maybe_print!(p))
+ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.progmeter, counter); maybe_print!(p))
+
+function maybe_print!(p::DECAESProgress)
+    # Inner progress meter prints to the internal IOBuffer `p.iobuf`.
+    # Here, we only print to `p.io` if there is a new message.
+    msg = String(take!(p.iobuf)) # Note: take!(::IOBuffer) is threadsafe
+    if !isempty(msg)
+        msg = replace(msg, "\r" => "")
+        msg = replace(msg, "\u1b[K" => "")
+        msg = replace(msg, "\u1b[A" => "")
+        if msg != p.last_msg[]
+            lock(p.iolock) do
+                println(p.io, msg)
+                p.last_msg[] = msg
+            end
+        end
+    end
+end
+
+printheader(io, s) = (println(io, ""); printstyled(io, "* " * s * "\n"; color = :cyan))
+printbody(io, s) = println(io, s)
+
+# Macro for timing arbitrary code snippet and printing time
+macro showtime(io, msg, ex)
+    quote
+        local io = $(esc(io))
+        printheader(io, $(esc(msg)) * " ...")
+        local val
+        local t = @elapsed val = $(esc(ex))
+        printheader(io, "Done ($(round(t; digits = 2)) seconds)")
+        val
+    end
+end
+
+####
+#### Threading utils
+####
+
 # Threaded `foreach` construct, borrowing implementation from ThreadTools.jl:
 # 
 #   https://github.com/baggepinnen/ThreadTools.jl/blob/55aaf2bbe735e52cefaad143e7614d4f00e312b0/src/ThreadTools.jl#L57
@@ -119,79 +203,44 @@ end
 
 default_blocksize() = 64
 
-####
-#### Timing utilities
-####
-
-tic() = time()
-toc(t) = tic() - t
-
-function hour_min_sec(t)
-    hour = floor(Int, t / 3600)
-    min = floor(Int, (t - 3600 * hour) / 60)
-    sec = floor(Int, t - 3600 * hour - 60 * min)
-    return (; hour, min, sec)
-end
-
-function pretty_time(t)
-    if isnan(t) || isinf(t)
-        "--h:--m:--s"
-    else
-        hh, mm, ss = hour_min_sec(t)
-        lpad(hh, 2, "0") * "h:" * lpad(mm, 2, "0") * "m:" * lpad(ss, 2, "0") * "s"
+# Worker pool for allocating thread-local resources. This is a more robust alternative to
+# the (now anti-)pattern of allocating vectors of thread-local storage buffers and indexing them
+# by `threadid()`; this is no longer guaranteed to work in v1.7+, as tasks are now allowed to
+# migrate across threads. Instead, here we allocate a local `resource` via the `allocate` function
+# argument at `@spawn`-time, obviating the need to tie the resource to the `threadid()`.
+# 
+#   See: https://juliafolds.github.io/data-parallelism/tutorials/concurrency-patterns/#worker_pool
+function workerpool(work!, allocate, inputs::Channel, progmeter::Union{DECAESProgress, Nothing} = nothing; ntasks = Threads.nthreads())
+    if progmeter !== nothing
+        @assert length(progmeter) == length(inputs.data)
     end
-end
 
-@with_kw mutable struct DECAESProgress
-    progmeter::Progress
-    io::IO
-    iobuf::IOBuffer
-    iolock::ReentrantLock = Threads.ReentrantLock()
-    last_msg::AbstractString = ""
-end
-
-function DECAESProgress(io::IO, n::Int, desc::AbstractString; kwargs...)
-    iobuf = IOBuffer()
-    DECAESProgress(
-        io = io,
-        iobuf = iobuf,
-        progmeter = Progress(n;
-            dt = 0.0, desc = desc, color = :cyan, output = iobuf, barglyphs = BarGlyphs("[=> ]"),
-            kwargs...
-        )
-    )
-end
-DECAESProgress(n::Int, desc::AbstractString; kwargs...) = DECAESProgress(stderr, n, desc; kwargs...)
-
-function ProgressMeter.next!(p::DECAESProgress)
-    next!(p.progmeter)
-    msg = String(take!(p.iobuf)) # take!(::IOBuffer) is threadsafe
-    if !isempty(msg)
-        msg = replace(msg, "\r" => "")
-        msg = replace(msg, "\u1b[K" => "")
-        msg = replace(msg, "\u1b[A" => "")
-        if msg != p.last_msg
-            lock(p.iolock) do
-                println(p.io, msg)
-                p.last_msg = msg
+    @sync begin
+        if progmeter !== nothing
+            Threads.@spawn begin
+                while !isempty(inputs)
+                    ProgressMeter.update!(progmeter, length(progmeter) - length(inputs.data))
+                end
+                ProgressMeter.finish!(progmeter)
+            end
+        end
+        for _ in 1:ntasks
+            Threads.@spawn allocate() do resource
+                for input in inputs
+                    work!(input, resource)
+                end
             end
         end
     end
 end
 
-printheader(io, s) = (println(io, ""); printstyled(io, "* " * s * "\n"; color = :cyan))
-printbody(io, s) = println(io, s)
-
-# Macro for timing arbitrary code snippet and printing time
-macro showtime(io, msg, ex)
-    quote
-        local io = $(esc(io))
-        printheader(io, $(esc(msg)) * " ...")
-        local val
-        local t = @elapsed val = $(esc(ex))
-        printheader(io, "Done ($(round(t; digits = 2)) seconds)")
-        val
+function workerpool(work!, allocate, inputs, args...; kwargs...)
+    ch = Channel{eltype(inputs)}(length(inputs))
+    for inds in inputs
+        put!(ch, inds)
     end
+    close(ch)
+    workerpool(work!, allocate, ch, args...; kwargs...)
 end
 
 ####
@@ -321,6 +370,17 @@ function mock_t2map_opts(::Type{T} = Float64; kwargs...) where {T}
         Reg = "lcurve",
         SetFlipAngle = 165.0,
         RefConAngle = 150.0,
+        kwargs...
+    )
+end
+
+function mock_t2parts_opts(::Type{T} = Float64; kwargs...) where {T}
+    T2partOptions{T}(;
+        MatrixSize = (2,2,2),
+        nT2 = 40,
+        T2Range = (10e-3, 2.0),
+        SPWin = (10e-3, 40e-3),
+        MPWin = (40e-3, 2.0),
         kwargs...
     )
 end
