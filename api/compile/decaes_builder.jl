@@ -6,7 +6,7 @@ cp(joinpath(@__DIR__, "Project.toml"), Base.active_project(); force = true)
 Pkg.instantiate(; io = devnull)
 
 # Add DECAES to temporary environment
-Pkg.develop(Pkg.PackageSpec(; path = joinpath(@__DIR__, "../..")); io = devnull)
+Pkg.add(Pkg.PackageSpec(; path = joinpath(@__DIR__, "../..")); io = devnull)
 
 using DECAES, PackageCompiler
 
