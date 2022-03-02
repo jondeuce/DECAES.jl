@@ -1,14 +1,13 @@
+# DECAES is assumed to be installed in the active project environment
 using Pkg
+using DECAES
 
 # Copy Project.toml file to a temporary project folder and instantiate
 Pkg.activate(; temp = true, io = devnull)
 cp(joinpath(@__DIR__, "Project.toml"), Base.active_project(); force = true)
 Pkg.instantiate(; io = devnull)
 
-# Add DECAES to temporary environment
-Pkg.add(Pkg.PackageSpec(; path = joinpath(@__DIR__, "../..")); io = devnull)
-
-using DECAES, PackageCompiler
+using PackageCompiler
 
 """
     build_decaes(build_path::String; kwargs...)

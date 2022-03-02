@@ -341,7 +341,7 @@ end
 
 function compile_decaes_app()
     compile_script = joinpath(pkgdir(DECAES), "api", "compile", "decaes_builder.jl")
-    cmd = `$(Base.julia_cmd()) --startup-file=no $(compile_script)`
+    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(compile_script)`
     run(cmd)
 end
 
