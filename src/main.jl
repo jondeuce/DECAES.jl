@@ -14,9 +14,8 @@ const CLI_SETTINGS = ArgParseSettings(
 
 @add_arg_table! CLI_SETTINGS begin
     "input"
-        nargs = '+' # At least one input is required
+        nargs = '*' # At least one input is required, but this is checked internally
         arg_type = String
-        required = true
         help = "one or more input filenames. Valid file types are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
     "--mask", "-m"
         nargs = '+' # If --mask is passed, at least one input is required
@@ -181,6 +180,18 @@ add_arg_group!(CLI_SETTINGS,
         group = :bet_args
 end
 
+add_arg_group!(CLI_SETTINGS,
+    "Compiling DECAES (experimental)",
+    :compilation,
+)
+
+@add_arg_table! CLI_SETTINGS begin
+    "--compile"
+        action = :store_true
+        help = "compile DECAES into a relocatable executable app and exit. A folder 'decaes_app' is generated in the working directory. The app can be run from the command line using the syntax './decaes_app/bin/decaes <DECAES arguments> --julia-args <Julia arguments>'. Note: PackageCompiler.jl will be automatically downloaded and installed on first use."
+        group = :compilation
+end
+
 """
     main(command_line_args = ARGS)
 
@@ -197,6 +208,12 @@ function main(command_line_args::Vector{String} = ARGS)
     opts = parse_args(command_line_args, CLI_SETTINGS; as_symbols = true)
     opts === nothing && return # Help message was triggered. Return nothing instead of exit(0)
     opts = handle_cli_deprecations!(opts)
+
+    if opts[:compile]
+        # Compile DECAES into a relocatable app
+        compile_decaes_app()
+        return nothing
+    end
 
     # Get input file list and output folder list
     for file_info in get_file_infos(opts)
@@ -322,6 +339,12 @@ function julia_main()::Cint
     return 0
 end
 
+function compile_decaes_app()
+    compile_script = joinpath(pkgdir(DECAES), "api", "compile", "decaes_builder.jl")
+    cmd = `$(Base.julia_cmd()) --startup-file=no $(compile_script)`
+    run(cmd)
+end
+
 ####
 #### Helper functions
 ####
@@ -371,6 +394,7 @@ end
 
 function get_file_infos(opts::Dict{Symbol,Any})
     @unpack input, output, mask = opts
+    @assert !isempty(input) "At least one input file is required"
 
     # Read in input files
     inputfiles = String[path for path in input if is_allowed_suffix(path)]

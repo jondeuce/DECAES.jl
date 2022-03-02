@@ -243,7 +243,7 @@ cli_params_perms = Any[
             paramdict[param] = paramval
         end
 
-        image = DECAES.mock_image(nTE = rand([4,5,20,37]))
+        image = DECAES.mock_image(nTE = rand(4:64))
         settings_kwargs_jl = Dict{Symbol,Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
         settings_kwargs_cli = Dict{Symbol,Any}(:argstype => :cli, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
         jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
@@ -398,7 +398,7 @@ function matlab_tests()
             mat_t2map_kwargs, _ = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2mapSEcorr
-            image = DECAES.mock_image(nTE = rand([4,5,20,37]))
+            image = DECAES.mock_image(nTE = rand(4:64))
             t2map_out_jl = DECAES.redirect_to_devnull() do
                 T2mapSEcorr(image; jl_t2map_kwargs...)
             end
@@ -431,7 +431,7 @@ function matlab_tests()
             _, mat_t2part_kwargs = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2partSEcorr
-            T2dist = DECAES.mock_T2_dist(nT2 = rand([5,19,20,40,60])) #rand([4,5,40,41]))
+            T2dist = DECAES.mock_T2_dist(nT2 = rand(4:64))
             t2part_jl = DECAES.redirect_to_devnull() do
                 T2partSEcorr(T2dist; jl_t2part_kwargs...)
             end

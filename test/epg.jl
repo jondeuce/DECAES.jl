@@ -19,11 +19,21 @@ function compare_epg(
 end
 
 @testset "EPG algorithms" begin
-    # NOTE: Generated function approach is extremely slow to compile for large ETL (around 16)
+    # In principle ETL testing range need not be too large (only need to test four ETL values >=4 which are unique mod 4),
+    # but since this file is also used for app precompilation, we should sweep over ETL values we expect to see in practice
+    # for the default algorithm.
+    #   NOTE: Generated function approach is extremely slow to compile for large ETL (around 16)
     epg_algs = DECAES.EPG_Algorithms
-    for i in 1:length(epg_algs), j in 1:i-1, T in [Float32, Float64], ETL in [4,5,6,7] # test four ETL >= 4 which are unique mod 4
-        algᵢ, algⱼ = epg_algs[i], epg_algs[j]
-        compare_epg(algᵢ(T, ETL), algⱼ(T, ETL))
+    for T in [Float32, Float64]
+        for i in 1:length(epg_algs), ETL in [4,5,6,7]
+            j = rand([1:i-1; i+1:length(epg_algs)])
+            algᵢ, algⱼ = epg_algs[i], epg_algs[j]
+            compare_epg(algᵢ(T, ETL), algⱼ(T, ETL))
+        end
+        for ETL in 4:64
+            alg = DECAES.EPGdecaycurve_work(T, ETL)
+            compare_epg(alg, alg)
+        end
     end
 end
 
