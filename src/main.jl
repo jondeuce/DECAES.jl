@@ -101,6 +101,10 @@ add_arg_group!(CLI_SETTINGS,
         arg_type = Float64
         help = "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold"
         group = :t2_map_part
+    "--Progress"
+        action = :store_true
+        help = "Print progress updates during T2 distribution computation. Note that this may cause a slowdown."
+        group = :t2_map_part
 end
 
 add_arg_group!(CLI_SETTINGS,
@@ -215,9 +219,9 @@ function main(command_line_args::Vector{String} = ARGS)
             logfile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".log"),
             suppress_terminal = opts[:quiet],
             suppress_logfile = opts[:dry],
-        ) do io
+        ) do
             try
-                main_(io, file_info, opts)
+                main_(file_info, opts)
             catch e
                 @warn "Error during processing of file: $(file_info[:inputfile])"
                 @warn sprint(showerror, e, catch_backtrace())
@@ -228,26 +232,26 @@ function main(command_line_args::Vector{String} = ARGS)
     return nothing
 end
 
-function main_(io::IO, file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
+function main_(file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
 
     # Starting message/starting time
     t_start = tic()
-    printheader(io, "Starting DECAES with $(Threads.nthreads()) threads")
+    @info "Starting DECAES with $(Threads.nthreads()) threads"
 
     # Load image(s)
-    image = @showtime(io,
+    image = @showtime(
         "Loading input file: $(file_info[:inputfile])",
         load_image(file_info[:inputfile]),
     )
 
     # Apply mask
     if file_info[:maskfile] !== nothing
-        @showtime(io,
+        @showtime(
             "Applying mask from file: '$(file_info[:maskfile])'",
             try_apply_maskfile!(image, file_info[:maskfile]),
         )
     elseif opts[:bet]
-        @showtime(io,
+        @showtime(
             "Making and applying BET mask with args: '$(opts[:betargs])'",
             try_apply_bet!(image, opts[:betpath], opts[:betargs]),
         )
@@ -255,15 +259,15 @@ function main_(io::IO, file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
 
     # Compute T2 distribution from input 4D multi-echo image
     if opts[:T2map]
-        maps, dist = @showtime(io,
+        maps, dist = @showtime(
             "Running T2mapSEcorr on file: $(file_info[:inputfile])",
-            T2mapSEcorr(io, image, t2map_options(image, opts)),
+            T2mapSEcorr(image, t2map_options(image, opts)),
         )
 
         # Save T2-distribution to .mat file
         savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2dist.mat")
         if !opts[:dry]
-            @showtime(io,
+            @showtime(
                 "Saving T2 distribution to file: $savefile",
                 MAT.matwrite(savefile, Dict{String,Any}("dist" => dist)),
             )
@@ -272,7 +276,7 @@ function main_(io::IO, file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
         # Save T2-maps to .mat file
         savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2maps.mat")
         if !opts[:dry]
-            @showtime(io,
+            @showtime(
                 "Saving T2 parameter maps to file: $savefile",
                 MAT.matwrite(savefile, maps),
             )
@@ -284,15 +288,15 @@ function main_(io::IO, file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
 
     # Analyze T2 distribution to produce parameter maps
     if opts[:T2part]
-        parts = @showtime(io,
+        parts = @showtime(
             "Running T2partSEcorr",
-            T2partSEcorr(io, dist, t2part_options(dist, opts)),
+            T2partSEcorr(dist, t2part_options(dist, opts)),
         )
 
         # Save T2-parts to .mat file
         savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2parts.mat")
         if !opts[:dry]
-            @showtime(io,
+            @showtime(
                 "Saving T2 parts maps to file: $savefile",
                 MAT.matwrite(savefile, parts),
             )
@@ -300,7 +304,7 @@ function main_(io::IO, file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
     end
 
     # Done message
-    printheader(io, "Finished ($(round(toc(t_start); digits = 2)) seconds)")
+    @info "Finished ($(round(toc(t_start); digits = 2)) seconds)"
 
     return nothing
 end

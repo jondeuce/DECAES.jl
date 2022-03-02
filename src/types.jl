@@ -21,7 +21,10 @@ See also:
     legacy::Bool = false
 
     "Perform T2-mapping using multiple threads."
-    threaded::Bool = Threads.nthreads() > 1
+    Threaded::Bool = Threads.nthreads() > 1
+
+    "Print progress updates during T2 distribution computation. Note that this may cause a slowdown."
+    Progress::Bool = false
 
     "Size of first 3 dimensions of input 4D image. This argument has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`."
     MatrixSize::NTuple{3,Int}
@@ -109,7 +112,7 @@ t2_times(o::T2mapOptions{T}) where {T} = logrange(o.T2Range..., o.nT2)
 flip_angles(o::T2mapOptions{T}) where {T} = o.SetFlipAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetFlipAngle]
 refcon_angles(o::T2mapOptions{T}) where {T} = o.RefConAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.RefConAngle]
 
-function _show_string(o::T2mapOptions)
+function show_string(o::T2mapOptions)
     io = IOBuffer()
     print(io, "T2-distribution analysis settings:")
     fields = fieldsof(typeof(o), Vector)
@@ -121,7 +124,7 @@ function _show_string(o::T2mapOptions)
     end
     return String(take!(io))
 end
-Base.show(io::IO, ::MIME"text/plain", o::T2mapOptions) = print(io, _show_string(o))
+Base.show(io::IO, ::MIME"text/plain", o::T2mapOptions) = print(io, show_string(o))
 
 """
     T2partOptions(; kwargs...)
@@ -142,7 +145,7 @@ See also:
     legacy::Bool = false
 
     "Perform T2-parts using multiple threads."
-    threaded::Bool = Threads.nthreads() > 1
+    Threaded::Bool = Threads.nthreads() > 1
 
     "Size of first 3 dimensions of input 4D T2 distribution. This argument is has no default, but is inferred automatically as `size(t2dist)[1:3]` when calling `T2partSEcorr(t2dist; kwargs...)`."
     MatrixSize::NTuple{3,Int}
@@ -177,7 +180,7 @@ T2partOptions(t2dist::Array{T,4}; kwargs...) where {T} = T2partOptions{T}(; kwar
 function T2partOptions(o::T2mapOptions{T}; kwargs...) where {T}
     T2partOptions{T}(;
         legacy = o.legacy,
-        threaded = o.threaded,
+        Threaded = o.Threaded,
         MatrixSize = o.MatrixSize,
         nT2 = o.nT2,
         T2Range = o.T2Range,
@@ -186,7 +189,7 @@ function T2partOptions(o::T2mapOptions{T}; kwargs...) where {T}
     )
 end
 
-function _show_string(o::T2partOptions)
+function show_string(o::T2partOptions)
     io = IOBuffer()
     print(io, "T2-parts analysis settings:")
     fields = fieldsof(typeof(o), Vector)
@@ -197,4 +200,4 @@ function _show_string(o::T2partOptions)
     end
     return String(take!(io))
 end
-Base.show(io::IO, ::MIME"text/plain", o::T2partOptions) = print(io, _show_string(o))
+Base.show(io::IO, ::MIME"text/plain", o::T2partOptions) = print(io, show_string(o))

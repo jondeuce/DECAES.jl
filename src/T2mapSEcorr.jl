@@ -1,6 +1,6 @@
 """
-    T2mapSEcorr([io = stderr,] image::Array{T,4}; <keyword arguments>)
-    T2mapSEcorr([io = stderr,] image::Array{T,4}, opts::T2mapOptions{T})
+    T2mapSEcorr(image::Array{T,4}; <keyword arguments>)
+    T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T})
 
 Uses nonnegative least squares (NNLS) to compute T2 distributions in the presence of stimulated echos by optimizing the refocusing pulse flip angle.
 Records parameter maps and T2 distributions for further partitioning.
@@ -58,18 +58,16 @@ See also:
 * [`lsqnonneg_lcurve`](@ref)
 * [`EPGdecaycurve`](@ref)
 """
-T2mapSEcorr(image::Array{T,4}; kwargs...) where {T} = T2mapSEcorr(stderr, image; kwargs...)
-T2mapSEcorr(io::IO, image::Array{T,4}; kwargs...) where {T} = T2mapSEcorr(io, image, T2mapOptions(image; kwargs...))
-T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T} = T2mapSEcorr(stderr, image, opts)
+T2mapSEcorr(image::Array{T,4}; kwargs...) where {T} = T2mapSEcorr(image, T2mapOptions(image; kwargs...))
 
-function T2mapSEcorr(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T}
+function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     # =========================================================================
     # Initialize output data structures and thread-local buffers
     # =========================================================================
     @assert size(image) == (opts.MatrixSize..., opts.nTE)
 
     # Print settings to terminal
-    !opts.Silent && printbody(io, _show_string(opts))
+    !opts.Silent && @info show_string(opts)
 
     # =========================================================================
     # Initialization
@@ -90,13 +88,18 @@ function T2mapSEcorr(io::IO, image::Array{T,4}, opts::T2mapOptions{T}) where {T}
 
     # Run analysis in parallel
     indices = filter(I -> image[I,1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
-    indices_blocks = split_indices(length(indices), default_blocksize())
-    progmeter = opts.Silent ? nothing : DECAESProgress(io, length(indices_blocks), "Computing T2-Distribution: "; dt = 5.0)
     signals = permutedims(image[indices, :]) # Permute image for cache locality
 
-    workerpool(with_thread_buffer, indices_blocks, progmeter; ntasks = opts.threaded ? Threads.nthreads() : 1) do inds, thread_buffer
+    ntasks = opts.Threaded ? Threads.nthreads() : 1
+    indices_blocks = split_indices(length(indices), default_blocksize())
+    progmeter = DECAESProgress(length(indices_blocks), "Computing T2-Distribution: "; dt = 5.0)
+
+    workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks) do inds, thread_buffer
         @inbounds for j in inds
             voxelwise_T2_distribution!(thread_buffer, maps, distributions, uview(signals, :, j), opts, indices[j])
+        end
+        if !opts.Silent && opts.Progress
+            ProgressMeter.next!(progmeter)
         end
     end
 

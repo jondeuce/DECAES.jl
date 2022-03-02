@@ -109,64 +109,56 @@ function pretty_time(t)
 end
 
 @with_kw struct DECAESProgress
-    progmeter::Progress
-    n::Int
-    io::IO
-    iobuf::IOBuffer
-    iolock::ReentrantLock = Threads.ReentrantLock()
+    progress_meter::Progress
+    io_buffer::IOBuffer
+    io_lock::ReentrantLock = Threads.ReentrantLock()
     last_msg::Ref{String} = Ref("")
-    ch::Channel{String} = Channel{String}(; spawn = true) do ch
-        for msg in ch
-            println(io, msg)
-            flush(io)
-        end
-    end
 end
 
-function DECAESProgress(io::IO, n::Int, desc::AbstractString; kwargs...)
-    iobuf = IOBuffer()
+function DECAESProgress(n::Int, desc::AbstractString; kwargs...)
+    io_buffer = IOBuffer()
     DECAESProgress(
-        progmeter = Progress(n; dt = 0.0, desc = desc, color = :cyan, output = iobuf, barglyphs = BarGlyphs("[=> ]"), kwargs...),
-        n = n,
-        io = io,
-        iobuf = iobuf,
+        progress_meter = Progress(n; dt = 0.0, desc = desc, color = :cyan, output = io_buffer, barglyphs = BarGlyphs("[=> ]"), kwargs...),
+        io_buffer = io_buffer,
     )
 end
-DECAESProgress(n::Int, desc::AbstractString; kwargs...) = DECAESProgress(stderr, n, desc; kwargs...)
 
-Base.length(p::DECAESProgress) = p.n
-ProgressMeter.next!(p::DECAESProgress) = (ProgressMeter.next!(p.progmeter); maybe_print!(p))
-ProgressMeter.finish!(p::DECAESProgress) = (ProgressMeter.finish!(p.progmeter); maybe_print!(p))
-ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.progmeter, counter); maybe_print!(p))
+ProgressMeter.next!(p::DECAESProgress) = (ProgressMeter.next!(p.progress_meter); maybe_print!(p))
+ProgressMeter.finish!(p::DECAESProgress) = (ProgressMeter.finish!(p.progress_meter); maybe_print!(p))
+ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.progress_meter, counter); maybe_print!(p))
 
 function maybe_print!(p::DECAESProgress)
-    # Inner progress meter prints to the internal IOBuffer `p.iobuf`.
-    # Here, we only print to `p.io` if there is a new message.
-    msg = String(take!(p.iobuf)) # Note: take!(::IOBuffer) is threadsafe
-    if !isempty(msg)
-        msg = replace(msg, "\r" => "")
-        msg = replace(msg, "\u1b[K" => "")
-        msg = replace(msg, "\u1b[A" => "")
-        if msg != p.last_msg[]
-            lock(p.iolock) do
-                p.last_msg[] = msg
-            end
-            put!(p.ch, msg)
+    # Internal `progress_meter` prints to the IOBuffer `p.io_buffer`; check this buffer for new messages.
+    #   Note: take!(::IOBuffer) is threadsafe
+    new_msg = String(take!(p.io_buffer))
+    if !isempty(new_msg)
+        # Format message
+        new_msg = replace(new_msg, "\r" => "")
+        new_msg = replace(new_msg, "\u1b[K" => "")
+        new_msg = replace(new_msg, "\u1b[A" => "")
+
+        # Update last message
+        last_msg = lock(p.io_lock) do
+            last_msg, p.last_msg[] = p.last_msg[], new_msg
+            return last_msg
+        end
+
+        if !isempty(last_msg)
+            # Don't print first message, as it usually gives a bad time estimate due to precompilation
+            @info new_msg
+            flush(stderr)
         end
     end
 end
 
-printheader(io, s) = (println(io, ""); printstyled(io, "* " * s * "\n"; color = :cyan))
-printbody(io, s) = println(io, s)
-
 # Macro for timing arbitrary code snippet and printing time
-macro showtime(io, msg, ex)
+macro showtime(msg, ex)
     quote
-        local io = $(esc(io))
-        printheader(io, $(esc(msg)) * " ...")
-        local val
-        local t = @elapsed val = $(esc(ex))
-        printheader(io, "Done ($(round(t; digits = 2)) seconds)")
+        @info $(esc(msg)) * " ..."
+        local t = time()
+        local val = $(esc(ex))
+        local t = time() - t
+        @info "Done ($(round(t; digits = 2)) seconds)"
         val
     end
 end
@@ -201,13 +193,6 @@ function tforeach(f, x::AbstractArray; blocksize::Integer = default_blocksize())
     return nothing
 end
 
-function split_indices(len::Integer, basesize::Integer)
-    len′ = Int64(len) # Avoid overflow on 32-bit machines
-    np = max(1, div(len′, basesize))
-    return (Int(1 + ((i - 1) * len′) ÷ np) : Int((i * len′) ÷ np) for i in 1:np)
-end
-split_indices(r, basesize::Integer) = isempty(r) ? (r for _ in 1:1) : (r[i[begin] + begin - 1 : i[end] + begin - 1] for i in split_indices(length(r), basesize))
-
 default_blocksize() = 64
 
 # Worker pool for allocating thread-local resources. This is a more robust alternative to
@@ -217,18 +202,12 @@ default_blocksize() = 64
 # argument at `@spawn`-time, obviating the need to tie the resource to the `threadid()`.
 # 
 #   See: https://juliafolds.github.io/data-parallelism/tutorials/concurrency-patterns/#worker_pool
-function workerpool(work!, allocate, inputs::Channel, progmeter::Union{DECAESProgress, Progress, Nothing} = nothing; ntasks = Threads.nthreads())
+
+function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads())
     @sync for _ in 1:ntasks
         Threads.@spawn allocate() do resource
             for input in inputs
-                if progmeter === nothing
-                    work!(input, resource)
-                else
-                    @sync begin
-                        Threads.@spawn work!(input, resource)
-                        ProgressMeter.next!(progmeter)
-                    end
-                end
+                work!(input, resource)
             end
         end
     end
@@ -243,37 +222,57 @@ function workerpool(work!, allocate, inputs, args...; kwargs...)
     workerpool(work!, allocate, ch, args...; kwargs...)
 end
 
+#=
+function workerpool(work!, allocate, inputs; ntasks = Threads.nthreads())
+    # Static batching schedule; tends to be slower than dynamic `Channel`-based approach above
+    input_batches = split_indexable(inputs; nbatches = ntasks, basesize = 1)
+    @sync for input_batch in input_batches
+        Threads.@spawn allocate() do resource
+            for input in input_batch
+                work!(input, resource)
+            end
+        end
+    end
+end
+=#
+
+function split_indices(len::Integer, basesize::Integer)
+    len′ = Int64(len) # Avoid overflow on 32-bit machines
+    np = max(1, div(len′, basesize))
+    return collect(Int(1 + ((i - 1) * len′) ÷ np) : Int((i * len′) ÷ np) for i in 1:np)
+end
+
+function split_indexable(r; basesize::Integer, nbatches::Integer)
+    if length(r) <= basesize
+        return [r]
+    elseif length(r) <= basesize * nbatches
+        indices = split_indices(length(r), basesize)
+        return [view(r, eachindex(r)[inds]) for inds in indices]
+    else
+        nodes = range(1, length(r); length = nbatches+1)
+        return [view(r, eachindex(r)[round(Int, nodes[i]) : round(Int, nodes[i+1])]) for i in 1:length(nodes)-1]
+    end
+end
+
 ####
 #### Logging
 ####
 
-# https://discourse.julialang.org/t/write-to-file-and-stdout/35042/3
-struct Tee{T <: Tuple} <: IO
-    streams::T
-end
-Tee(streams::IO...) = Tee(streams)
-Base.flush(t::Tee) = tee(t)
-Base.write(t::Tee, x::Array) = tee(Base.write, t, x) # needed to resolve method ambiguity
-Base.write(t::Tee, args...) = tee(Base.write, t, args...)
-Base.print(t::Tee, args...) = tee(Base.print, t, args...)
-Base.println(t::Tee, args...) = tee(Base.println, t, args...)
-Base.printstyled(t::Tee, args...; kwargs...) = tee(Base.printstyled, t, args...; kwargs...)
-
-function tee(f, t::Tee, args...; kwargs...)
-    for io in t.streams
-        f(io, args...; kwargs...)
-        flush(io)
+# https://github.com/JuliaLogging/LoggingExtras.jl/issues/15
+function TimestampLogger(logger, date_format = "yyyy-mm-dd HH:MM:SS")
+    return TransformerLogger(logger) do log
+        merge(log, (; message = "$(Dates.format(now(), date_format)) $(log.message)"))
     end
 end
-tee(t::Tee, args...; kwargs...) = tee(io -> nothing, t, args...; kwargs...)
 
 function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppress_logfile = false)
-    open(suppress_logfile ? tempname() : logfile, "w+") do io
-        io = Tee(suppress_terminal ? devnull : stderr, io)
-        logger = ConsoleLogger(io)
-        with_logger(logger) do
-            f(io)
-        end
+    logger =
+        suppress_terminal && suppress_logfile ? ConsoleLogger(devnull) :
+        suppress_logfile ? ConsoleLogger(stderr) :
+        suppress_terminal ? TimestampLogger(FileLogger(logfile)) :
+        TeeLogger(ConsoleLogger(stderr), TimestampLogger(FileLogger(logfile)))
+    with_logger(logger) do
+        f()
     end
 end
 

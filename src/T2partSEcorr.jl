@@ -1,6 +1,6 @@
 """
-    T2partSEcorr([io = stderr,] T2distributions::Array{T,4}; <keyword arguments>)
-    T2partSEcorr([io = stderr,] T2distributions::Array{T,4}, opts::T2partOptions{T})
+    T2partSEcorr(T2distributions::Array{T,4}; <keyword arguments>)
+    T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T})
 
 Analyzes T2 distributions produced by [`T2mapSEcorr`](@ref) to produce data maps of a series of parameters.
 
@@ -32,15 +32,13 @@ Dict{String, Any} with 4 entries:
 See also:
 * [`T2mapSEcorr`](@ref)
 """
-T2partSEcorr(T2distributions::Array{T,4}; kwargs...) where {T} = T2partSEcorr(stderr, T2distributions; kwargs...)
-T2partSEcorr(io::IO, T2distributions::Array{T,4}; kwargs...) where {T} = T2partSEcorr(io, T2distributions, T2partOptions(T2distributions; kwargs...))
-T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T} = T2partSEcorr(stderr, T2distributions, opts)
+T2partSEcorr(T2distributions::Array{T,4}; kwargs...) where {T} = T2partSEcorr(T2distributions, T2partOptions(T2distributions; kwargs...))
 
-function T2partSEcorr(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
+function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
     @assert size(T2distributions) == (opts.MatrixSize..., opts.nT2)
 
     # Print settings to terminal
-    !opts.Silent && printbody(io, _show_string(opts))
+    !opts.Silent && @info show_string(opts)
 
     # Initial output
     maps = init_output_t2parts(T2distributions, opts)
@@ -53,12 +51,15 @@ function T2partSEcorr(io::IO, T2distributions::Array{T,4}, opts::T2partOptions{T
 
     # Run T2-Part analysis
     LinearAlgebra.BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
-    indices_blocks = Iterators.partition(CartesianIndices(opts.MatrixSize), default_blocksize())
-    workerpool(with_thread_buffer, indices_blocks; ntasks = opts.threaded ? Threads.nthreads() : 1) do inds, thread_buffer
-        @inbounds for I in inds
-            voxelwise_T2_parts!(thread_buffer, maps, T2distributions, opts, I)
+
+    indices = CartesianIndices(opts.MatrixSize)
+    indices_blocks = split_indices(length(indices), default_blocksize())
+    workerpool(with_thread_buffer, indices_blocks; ntasks = opts.Threaded ? Threads.nthreads() : 1) do inds, thread_buffer
+        @inbounds for j in inds
+            voxelwise_T2_parts!(thread_buffer, maps, T2distributions, opts, indices[j])
         end
     end
+
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
 
     return maps
