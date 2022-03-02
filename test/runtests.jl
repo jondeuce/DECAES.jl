@@ -1,6 +1,5 @@
-using DECAES
 using Test
-using Logging
+using DECAES
 
 include("nnls.jl")
 include("epg.jl")

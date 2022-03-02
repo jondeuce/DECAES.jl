@@ -1,6 +1,5 @@
 using Test
 using DECAES
-using Logging
 
 function compare_epg(
         work₁::DECAES.AbstractEPGWorkspace{T,ETL},

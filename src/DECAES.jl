@@ -1,7 +1,7 @@
 module DECAES
 
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
-import ArgParse, BangBang, Dierckx, DocStringExtensions, ForwardDiff, Logging, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, ProgressMeter, SIMD, StaticArrays, TupleTools, UnPack, UnsafeArrays
+import ArgParse, BangBang, Dierckx, DocStringExtensions, ForwardDiff, Logging, LoggingExtras, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, ProgressMeter, SIMD, StaticArrays, TupleTools, UnPack, UnsafeArrays
 using ArgParse: @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
 using BangBang: setindex!!, setproperty!!, setproperties!!
 using Base.MathConstants: φ
@@ -11,8 +11,8 @@ using Logging: ConsoleLogger, with_logger
 using LoggingExtras: FileLogger, TeeLogger, TransformerLogger
 using Parameters: @with_kw, @with_kw_noshow
 using ProgressMeter: Progress, BarGlyphs
-using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
 using SIMD: FloatingTypes, Vec, shufflevector
+using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
 using UnPack: @unpack, @pack!
 using UnsafeArrays: @uviews, uviews, uview
 

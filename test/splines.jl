@@ -1,9 +1,6 @@
 using Test
-using DECAES
-using DECAES.NormalHermiteSplines
-using StaticArrays
-using Random
-using LinearAlgebra
+using DECAES.LinearAlgebra, DECAES.Random
+using DECAES.StaticArrays
 
 function test_mock_surrogate_search_problem(
         opts::T2mapOptions = DECAES.mock_t2map_opts(;

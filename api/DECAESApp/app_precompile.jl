@@ -1,4 +1,5 @@
-using DECAES
+using DECAESApp
+using DECAESApp.DECAES
 
 # Silence console output
 DECAES.redirect_to_devnull() do

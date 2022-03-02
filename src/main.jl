@@ -327,22 +327,17 @@ function main_(file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
 end
 
 """
-Entrypoint function for compiling DECAES into an executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
+Build DECAES into a relocatable executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
 """
-function julia_main()::Cint
-    try
-        main(ARGS)
-    catch
-        Base.invokelatest(Base.display_error, Base.catch_stack())
-        return 1
-    end
-    return 0
-end
-
 function compile_decaes_app()
-    compile_script = joinpath(pkgdir(DECAES), "api", "compile", "decaes_builder.jl")
-    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(compile_script)`
-    run(cmd)
+    mktempdir() do temp_dir
+        app_dir = joinpath(pkgdir(DECAES), "api", "DECAESApp")
+        temp_app_dir = joinpath(temp_dir, "DECAESApp")
+        temp_build_script = joinpath(temp_app_dir, "app_builder.jl")
+        cp(app_dir, temp_app_dir)
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(temp_app_dir) $(temp_build_script)`
+        run(cmd)
+    end
 end
 
 ####

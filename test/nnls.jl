@@ -1,7 +1,7 @@
 using Test
 using DECAES
+using DECAES.LinearAlgebra
 using DECAES.NNLS
-using LinearAlgebra
 
 function verify_solution(m, n)
     A = randn(m, n)
