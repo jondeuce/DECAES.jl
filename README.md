@@ -53,13 +53,13 @@ main() # call CLI entrypoint function
 This script can then be invoked from the command line as follows:
 
 ```bash
-$ julia --threads 4 decaes.jl -- <COMMAND LINE ARGS> # `--threads N` enables parallel processing with `N` threads
+$ julia --threads=auto decaes.jl -- <COMMAND LINE ARGS> # `--threads=auto` enables parallel processing
 ```
 
 **2. Julia `-e` flag:** The contents of the above script can be written directly at the command line using the `-e` (for "evaluate") flag:
 
 ```bash
-$ julia --threads 4 -e 'using DECAES; main()' -- <COMMAND LINE ARGS> # `--threads N` enables parallel processing with `N` threads
+$ julia --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS> # `--threads=auto` enables parallel processing
 ```
 
 ## Documentation
