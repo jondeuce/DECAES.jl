@@ -14,7 +14,7 @@ Post-processing of these T2-distributions allows for the computation of measures
 
 DECAES is written in the open-source [Julia programming language](https://julialang.org/).
 Julia and command line interfaces are available through this package.
-The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the MATLAB function `decaes.m`.
+The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the MATLAB function [`decaes.m`](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.m).
 If you use DECAES in your research, please [cite](CITATION.bib) our work.
 
 ## Installation

@@ -38,16 +38,16 @@ julia> maps, dist = T2mapSEcorr(image; TE = 10e-3, nT2 = 40, T2Range = (10e-3, 2
 
 julia> maps
 Dict{String, Any} with 10 entries:
-  "echotimes"     => [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1  …  0.23, …
-  "t2times"       => [0.01, 0.0114551, 0.013122, 0.0150315, 0.0172188, 0.0197244, 0.022594…
-  "refangleset"   => [50.0, 54.1935, 58.3871, 62.5806, 66.7742, 70.9677, 75.1613, 79.3548,…
-  "gdn"           => [185326.0 1.26487e5 … 1.85322e5 1.025e5; 1.48254e5 1.91871e5 … 1.5159…
-  "fnr"           => [460.929 398.485 … 415.599 428.055; 316.05 340.206 … 372.7 410.487; ……
-  "alpha"         => [165.348 164.657 … 163.031 166.735; 165.212 164.994 … 165.6 165.094; …
-  "gva"           => [0.438218 0.330969 … 0.367929 0.350691; 0.287478 0.307593 … 0.3892 0.…
-  "ggm"           => [0.0501681 0.0518976 … 0.0509003 0.0519268; 0.0535984 0.0528403 … 0.0…
-  "snr"           => [357.763 317.439 … 322.451 340.88; 250.674 275.185 … 294.411 324.464;…
-  "decaybasisset" => [0.0 0.0 … 0.0 0.0; 0.0 0.0 … 0.0 0.0; … ; 0.0 0.0 … 0.0 0.0; 0.0 0.0…
+  "echotimes"     => [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09,…
+  "t2times"       => [0.01, 0.0114551, 0.013122, 0.0150315, 0.0172188, 0.01…
+  "refangleset"   => [50.0, 54.1935, 58.3871, 62.5806, 66.7742, 70.9677, 75…
+  "gdn"           => [1.3787e5 177386.0 … 1.95195e5 1.3515e5; 1.8281e5 1.54…
+  "fnr"           => [188.642 204.698 … 216.84 242.163; 183.262 199.053 … 2…
+  "alpha"         => [180.0 180.0 … 180.0 180.0; 180.0 180.0 … 180.0 180.0;…
+  "gva"           => [0.48029 0.554944 … 0.65303 0.595152; 0.510848 0.54559…
+  "ggm"           => [0.0521713 0.0510269 … 0.0494394 0.0503616; 0.052195 0…
+  "snr"           => [152.536 164.471 … 171.872 192.296; 147.898 161.285 … …
+  "decaybasisset" => [0.0277684 0.0315296 … 0.0750511 0.0751058; 0.0469882 …
 ```
 
 See also:
@@ -120,13 +120,13 @@ function init_output_t2maps(opts::T2mapOptions{T}) where {T}
 end
 
 function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {T}
-    @unpack T2_times, flip_angles, refcon_angles, decay_basis = thread_buffer
-
     # Misc. processing parameters
     maps["echotimes"]      = convert(Array{T}, copy(opts.TE .* (1:opts.nTE)))
-    maps["t2times"]        = convert(Array{T}, copy(T2_times))
-    maps["refangleset"]    = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(flip_angles)) : T(opts.SetFlipAngle)
-    # maps["decaybasisset"]  = convert(Array{T}, copy(decay_basis_set)) #TODO
+    maps["t2times"]        = convert(Array{T}, copy(thread_buffer.T2_times))
+    maps["refangleset"]    = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(thread_buffer.flip_angles)) : T(opts.SetFlipAngle)
+    maps["decaybasisset"]  = opts.SetFlipAngle === nothing ?
+        convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis_set_ensemble.decay_basis_set)) :
+        convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis))
 
     # Default output maps
     maps["gdn"]   = fill(T(NaN), opts.MatrixSize...)
@@ -154,7 +154,7 @@ function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {
         if opts.SetFlipAngle === nothing
             maps["decaybasis"] = fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) # unique decay basis set for each voxel
         else
-            maps["decaybasis"] = convert(Array{T}, copy(decay_basis)) # single decay basis set used for all voxels
+            maps["decaybasis"] = convert(Array{T}, copy(thread_buffer.decay_basis)) # single decay basis set used for all voxels
         end
     end
 
@@ -306,32 +306,32 @@ end
 struct FlipAngleOptimizationWorkspace{T, ETL, A1<:AbstractMatrix{T}, A2<:AbstractVector{T}, B <: EPGBasisSetFunctor{T,ETL}, E <: Union{Nothing, <:EPGBasisSetEnsemble{1, T, ETL}}, S <: Union{Nothing, AbstractSurrogate{1, T}}}
     decay_basis::A1
     decay_data::A2
+    decay_basis_set::B
+    decay_basis_set_ensemble::E
     α::Base.RefValue{T}
-    α_basis_set::B
-    α_basis_set_ensemble::E
     α_surrogate::S
 end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
     α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
     θ = EPGOptions((; α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle), Val(o.nTE))
-    α_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
+    decay_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
 
     if o.SetFlipAngle !== nothing
         # Compute basis for fixed `SetFlipAngle`
-        epg_decay_basis!(α_basis_set, decay_basis, SA{T}[α[]])
-        α_basis_set_ensemble = nothing
+        epg_decay_basis!(decay_basis_set, decay_basis, SA{T}[α[]])
+        decay_basis_set_ensemble = nothing
         α_surrogate = nothing
     else
         # Compute basis for each angle
-        α_basis_set_ensemble = EPGBasisSetEnsemble(o, θ, Val((:α,)), decay_data)
-        ∇epg_decay_basis!(α_basis_set_ensemble, θ)
+        decay_basis_set_ensemble = EPGBasisSetEnsemble(o, θ, Val((:α,)), decay_data)
+        ∇epg_decay_basis!(decay_basis_set_ensemble, θ)
         α_surrogate = o.legacy ?
-            CubicSplineSurrogate(α_basis_set_ensemble.nnls_search_prob; legacy = true) :
-            HermiteSplineSurrogate(α_basis_set_ensemble.nnls_search_prob)
+            CubicSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob; legacy = true) :
+            HermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
     end
 
-    FlipAngleOptimizationWorkspace(decay_basis, decay_data, α, α_basis_set, α_basis_set_ensemble, α_surrogate)
+    FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate)
 end
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
@@ -344,7 +344,7 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
         work.α[] = α_opt[1]
 
         # Compute basis using optimized flip angles
-        epg_decay_basis!(work.α_basis_set, work.decay_basis, SA[work.α[]])
+        epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA[work.α[]])
     end
 
     return nothing

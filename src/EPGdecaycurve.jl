@@ -197,7 +197,7 @@ EPGFunctor(f!::EPGFunctor{T,ETL,Fs}, θ::EPGParameterization{T,ETL}) where {T,ET
 
 function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D,ETL}, x::AbstractVector{D}) where {D,ETL}
     θ = restructure(parameters(f!), x, optfields(f!))
-    DECAES.EPGdecaycurve!(y, epg_work, θ)
+    EPGdecaycurve!(y, epg_work, θ)
 end
 (f!::EPGFunctor)(x::AbstractVector{D}) where {D} = f!(decaycurve(f!.caches[D]), f!.caches[D], x)
 (f!::EPGFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D} = f!(y, f!.caches[D], x)

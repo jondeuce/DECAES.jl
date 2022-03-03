@@ -24,7 +24,7 @@ const CLI_SETTINGS = ArgParseSettings(
     "--output", "-o"
         nargs = '+' # If --output is passed, at least one input is required
         arg_type = String
-        help = "one or more output directories. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). If one folder is passed, all output files from all processed images will be stored in the same folder, otherwise the number of output folders must equal the number of input files. Outputs are stored with the same basename as the input files with additional suffixes; see --T2map and --T2part"
+        help = "one or more output directories. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). If one folder is passed, all output files from all processed images will be stored in the same folder. Otherwise, the number of output folders must equal the number of input files. Outputs are stored with the same basename as the input files with additional suffixes; see --T2map and --T2part"
     "--T2map"
         action = :store_true
         help = "call T2mapSEcorr to compute T2 distributions from 4D multi spin-echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat"
@@ -39,11 +39,11 @@ const CLI_SETTINGS = ArgParseSettings(
         help = "execute dry run of processing without saving any results"
     "--legacy"
         action = :store_true
-        help = "use legacy settings and algorithms from the original MATLAB pipeline. This ensures that the same T2-distributions and T2-parts will be produced as those from MATLAB. Note that execution time will be much slower, and less robust algorithms will be used."
+        help = "use legacy settings and algorithms from the original MATLAB pipeline. This ensures that the same T2-distributions and T2-parts will be produced as those from MATLAB. Note that execution time will be much slower, and less robust algorithms will be used"
 end
 
 add_arg_group!(CLI_SETTINGS,
-    "T2mapSEcorr/T2partSEcorr arguments",
+    "T2map/T2part required parameters",
     :t2_map_part,
 )
 
@@ -51,58 +51,66 @@ add_arg_group!(CLI_SETTINGS,
     "--MatrixSize"
         nargs = 3
         arg_type = Int
-        help = "first three dimensions of input 4D image. Inferred automatically"
+        help = "matrix size of the magnitude image. Inferred automatically as the first three dimensions of the input 4D image"
         group = :t2_map_part
     "--nTE"
         arg_type = Int
-        help = "number of echoes in input signal. Inferred automatically when --T2map is passed"
+        help = "number of echoes of the magnitude image. Inferred automatically as the last dimension of the input 4D image"
         group = :t2_map_part
     "--TE"
         arg_type = Float64
-        help = "inter-echo spacing (Units: seconds). Required when --T2map is passed"
+        help = "inter-echo spacing. Required when --T2map is passed. (units: seconds)"
         group = :t2_map_part
     "--nT2"
         arg_type = Int
-        help = "number of T2 components used in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension of input image if only --T2part is passed"
+        help = "number of T2 components used in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension of input image if only --T2part and not --T2map is passed"
         group = :t2_map_part
     "--T2Range"
         nargs = 2
         arg_type = Float64
-        help = "minimum and maximum T2 values (Units: seconds). T2 components are logarithmically spaced between these bounds. Required parameter."
+        help = "minimum and maximum T2 values. T2 components are logarithmically spaced between these bounds. Required parameter. (units: seconds)"
         group = :t2_map_part
     "--SPWin"
         nargs = 2
         arg_type = Float64
-        help = "minimum and maximum T2 values of the short peak window (Units: seconds). Required parameter when --T2part is passed"
+        help = "minimum and maximum T2 values of the short peak window. Required parameter when --T2part is passed. (units: seconds)"
         group = :t2_map_part
     "--MPWin"
         nargs = 2
         arg_type = Float64
-        help = "minimum and maximum T2 values of the middle peak window (Units: seconds). Required parameter when --T2part is passed"
-        group = :t2_map_part
-    "--T1"
-        arg_type = Float64
-        help = "assumed value of longitudinal T1 relaxation (Units: seconds)."
+        help = "minimum and maximum T2 values of the middle peak window. Required parameter when --T2part is passed. (units: seconds)"
         group = :t2_map_part
     "--Reg"
         arg_type = String
-        help = "routine used for choosing regularization parameter. One of \"none\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, --Chi2Factor based Tikhonov regularization, generalized cross-validation based regularization, and L-curve based regularization, respectively."
+        help = "routine used for choosing regularization parameter. One of \"lcurve\", \"gcv\", \"chi2\", or \"none\", representing L-curve based regularization, generalized cross-validation based regularization, --Chi2Factor based Tikhonov regularization, and no regularization, respectively. Required parameter"
         group = :t2_map_part
     "--Chi2Factor"
         arg_type = Float64
-        help = "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution"
+        help = "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution. Required parameter when --Reg=\"chi2\""
+        group = :t2_map_part
+end
+
+add_arg_group!(CLI_SETTINGS,
+    "T2map/T2part optional parameters",
+    :t2_map_part,
+)
+
+@add_arg_table! CLI_SETTINGS begin
+    "--T1"
+        arg_type = Float64
+        help = "assumed value of longitudinal T1 relaxation. (default: 1.0) (units: seconds)"
         group = :t2_map_part
     "--Sigmoid"
         arg_type = Float64
-        help = "replace the hard upper limit cutoff time of the short peak window, --SPWin[2], with a smoothed sigmoidal cutoff function, f, scaled and shifted such that f(--SPWin[2] +/- --Sigmoid) = 0.5 -/+ 0.4. --Sigmoid is the time scale of the smoothing (Units: seconds)"
+        help = "replace the hard upper limit cutoff time of the short peak window, SPWin[2], with a smoothed sigmoidal cutoff function 'σ' scaled and shifted such that σ(SPWin[2] +/- Sigmoid) = 0.5 -/+ 0.4. Sigmoid is the time scale of the smoothing. (units: seconds)"
         group = :t2_map_part
     "--Threshold"
         arg_type = Float64
-        help = "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold"
+        help = "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold. (default: 0.0) (units: signal magnitude)"
         group = :t2_map_part
     "--Progress"
         action = :store_true
-        help = "Print progress updates during T2 distribution computation. Note that this may cause a slowdown."
+        help = "Print progress updates during T2 distribution computation. Note: this may cause a slowdown"
         group = :t2_map_part
 end
 
@@ -114,23 +122,23 @@ add_arg_group!(CLI_SETTINGS,
 @add_arg_table! CLI_SETTINGS begin
     "--nRefAngles"
         arg_type = Int
-        help = "in estimating the local refocusing flip angle to correct for B1 inhomogeneities, up to --nRefAngles angles in the range [--MinRefAngle, 180] are explicitly checked. The optimal angle is then determined through interpolation from these --nRefAngles observations."
+        help = "in estimating the local refocusing flip angle to correct for B1 inhomogeneities, up to --nRefAngles angles in the range [--MinRefAngle, 180] are explicitly checked. The optimal angle is then estimated by interpolating between these observations. (default: 32)"
         group = :B1_SE_corr
     "--nRefAnglesMin"
         arg_type = Int
-        help = "initial number of angles to check during flip angle estimation before refinement near likely optima. Setting --nRefAnglesMin equal to --nRefAngles forces all angles to be checked."
+        help = "initial number of angles in the range [--MinRefAngle, 180] to check during flip angle estimation before refinement near likely optima. Setting --nRefAnglesMin equal to --nRefAngles forces all candidate angles to be checked before interpolation. (default: 5)"
         group = :B1_SE_corr
     "--MinRefAngle"
         arg_type = Float64
-        help = "minimum refocusing angle for flip angle estimation (Units: degrees)."
+        help = "minimum refocusing angle for flip angle estimation. (default: 50.0) (units: degrees)"
         group = :B1_SE_corr
     "--SetFlipAngle"
         arg_type = Float64
-        help = "to skip B1 inhomogeneity correction, use --SetFlipAngle to assume a fixed refocusing flip angle for all voxels (Units: degrees)."
+        help = "to skip B1 inhomogeneity correction, use --SetFlipAngle to assume a fixed refocusing flip angle for all voxels. (units: degrees)"
         group = :B1_SE_corr
     "--RefConAngle"
         arg_type = Float64
-        help = "refocusing pulse control angle (default: 180 degrees). The sequence of flip angles used within the extended phase graph algorithm to perform stimulated echo correction is (90, 180, β, β, ..., β), where β is the refocusing pulse control angle. For typical multi spin-echo sequences this parameter should not be changed (Units: degrees)."
+        help = "refocusing pulse control angle. The sequence of flip angles used within the extended phase graph algorithm to perform stimulated echo correction is (90, 180, β, β, ..., β), where β is the refocusing pulse control angle. For typical multi spin-echo sequences this parameter should not be changed. (default: 180.0) (units: degrees)"
         group = :B1_SE_corr
 end
 
@@ -146,11 +154,11 @@ add_arg_group!(CLI_SETTINGS,
         group = :save_opts
     "--SaveNNLSBasis"
         action = :store_true
-        help = "include a 5D (or 2D if --SetFlipAngle is used) array of NNLS basis matrices in the output maps dictionary. Note: this 5D array is extremely large for typical image sizes; in most cases, this flag should only be set when debugging small datasets"
+        help = "include a 5D (or 2D if --SetFlipAngle is used) array of NNLS basis matrices in the output maps dictionary. Note: this 5D array is extremely large for typical image sizes; in most cases, this flag should only be set when debugging small images"
         group = :save_opts
     "--SaveRegParam"
         action = :store_true
-        help = "include 3D arrays of the regularization parameters and resulting chi^2-factors in the output maps dictionary"
+        help = "include 3D arrays of resulting regularization parameters and χ² factors in the output maps dictionary"
         group = :save_opts
     "--SaveResidualNorm"
         action = :store_true
@@ -171,12 +179,12 @@ add_arg_group!(CLI_SETTINGS,
     "--betargs"
         arg_type = String
         default = "-m -n -f 0.25 -R"
-        help = "BET command line interface arguments. Must be passed as a single string with arguments separated by spaces, e.g. '-m -n'. The flag '-m' indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided"
+        help = "BET command line interface arguments. Must be passed as a single string with arguments separated by spaces, e.g. \"-m -n\". The flag \"-m\" indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided"
         group = :bet_args
     "--betpath"
         arg_type = String
         default = "bet"
-        help = "path to BET executable."
+        help = "path to BET executable"
         group = :bet_args
 end
 
@@ -188,7 +196,7 @@ add_arg_group!(CLI_SETTINGS,
 @add_arg_table! CLI_SETTINGS begin
     "--compile"
         action = :store_true
-        help = "compile DECAES into a relocatable executable app and exit. A folder 'decaes_app' is generated in the working directory. The app can be run from the command line using the syntax './decaes_app/bin/decaes <DECAES arguments> --julia-args <Julia arguments>'. Note: PackageCompiler.jl will be automatically downloaded and installed on first use."
+        help = "compile DECAES into a relocatable executable app and exit. A folder 'decaes_app' is generated in the working directory. The app can be run from the command line using the syntax './decaes_app/bin/decaes <DECAES arguments> --julia-args <Julia arguments>'. Note: PackageCompiler.jl will be automatically downloaded and installed upon first use of the --compile flag"
         group = :compilation
 end
 
@@ -238,7 +246,7 @@ function main(command_line_args::Vector{String} = ARGS)
             suppress_logfile = opts[:dry],
         ) do
             try
-                main_(file_info, opts)
+                main(file_info, opts)
             catch e
                 @warn "Error during processing of file: $(file_info[:inputfile])"
                 @warn sprint(showerror, e, catch_backtrace())
@@ -249,7 +257,7 @@ function main(command_line_args::Vector{String} = ARGS)
     return nothing
 end
 
-function main_(file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
+function main(file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
 
     # Starting message/starting time
     t_start = tic()
@@ -331,11 +339,15 @@ Build DECAES into a relocatable executable [app](https://julialang.github.io/Pac
 """
 function compile_decaes_app()
     mktempdir() do temp_dir
+        # Copy DECAES app into a temporary directory
         app_dir = joinpath(pkgdir(DECAES), "api", "DECAESApp")
         temp_app_dir = joinpath(temp_dir, "DECAESApp")
-        temp_build_script = joinpath(temp_app_dir, "app_builder.jl")
         cp(app_dir, temp_app_dir)
-        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(temp_app_dir) $(temp_build_script)`
+
+        # Run build script in a new julia instance. This will instantiate the `DECAESApp` build dependencies
+        # and build the relocatable executable app into a folder "decaes_app" in the current working directory
+        temp_build_script = joinpath(temp_app_dir, "app_builder.jl")
+        cmd = `$(Base.julia_cmd()) --startup-file=no --threads=auto --project=$(temp_app_dir) $(temp_build_script)`
         run(cmd)
     end
 end
@@ -397,7 +409,7 @@ function get_file_infos(opts::Dict{Symbol,Any})
     if isempty(inputfiles)
         msg = if !isempty(input) && isfile(input[1])
             "No valid file types were found for processing, but a file name was passed.\n" *
-            "Perhaps you meant to prepend an '@' character to a settings file, e.g. @$(input[1])?\n" *
+            "Perhaps you meant to prepend an '@' character to a settings file, e.g. '@$(input[1])'?\n" *
             "If not, note that only $ALLOWED_FILE_SUFFIXES_STRING file types are supported"
         else
             "No valid files were found for processing. Note that currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported"

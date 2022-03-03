@@ -18,7 +18,7 @@ function build(
         build_path = joinpath(pwd(), "decaes_app");
         kwargs...,
     )
-    @assert !ispath(build_path) "The following path already exists and will not be overwritten: $(build_path)"
+    @assert !ispath(build_path) "The following build path already exists and will not be overwritten: $(build_path)"
     create_app(
         pkgdir(DECAESApp),
         build_path;

@@ -1143,17 +1143,25 @@ function lsqnonneg_gcv(C, d)
 end
 lsqnonneg_gcv_work(C, d) = NNLSGCVRegProblem(C, d)
 
-function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T,N}) where {T,N}
+function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T,N}; method = :brent) where {T,N}
     # Find μ by minimizing the function G(μ) (GCV method)
     reset_cache!(work.nnls_work_smooth_cache)
 
-    # opt = NLopt.Opt(:LN_COBYLA, 1) # local, gradient-free, linear approximation of objective
-    opt = NLopt.Opt(:LN_BOBYQA, 1) # local, gradient-free, quadratic approximation of objective
-    opt.lower_bounds  = -8.0
-    opt.upper_bounds  = 2.0
-    opt.xtol_rel      = 0.05
-    opt.min_objective = (logμ, ∇logμ) -> Float64(gcv!(work, logμ[1]))
-    minf, minx, ret   = NLopt.optimize(opt, [-4.0])
+    if method === :nlopt
+        # opt = NLopt.Opt(:LN_COBYLA, 1) # local, gradient-free, linear approximation of objective
+        opt = NLopt.Opt(:LN_BOBYQA, 1) # local, gradient-free, quadratic approximation of objective
+        opt.lower_bounds  = -8.0
+        opt.upper_bounds  = 2.0
+        opt.xtol_rel      = 0.05
+        opt.min_objective = (logμ, ∇logμ) -> log(Float64(gcv!(work, logμ[1])))
+        minf, minx, ret   = NLopt.optimize(opt, [-4.0])
+    elseif method === :brent
+        minx, minf = brent(-8.0, 2.0; xrtol = T(0.05), xtol = T(1e-4), maxiters = 10) do logμ
+            log(gcv!(work, logμ))
+        end
+    else
+        error("Method must be one of :nlopt or :brent; got :$(method)")
+    end
 
     # Return the final regularized solution
     mu_final = exp(T(minx[1]))
