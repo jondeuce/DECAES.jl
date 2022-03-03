@@ -1,3 +1,24 @@
+"""
+Load the DECAES.jl Julia package from python.
+DECAES.jl will be installed automatically, if necessary.
+
+This module requires the julia Python package to be installed.
+See the following documentation for instructions:
+
+    https://github.com/JuliaPy/pyjulia#quick-usage
+
+Quick usage:
+
+    import decaes
+    decaes.initialize()
+    from decaes import DECAES
+
+    # Call methods from the DECAES module as usual, e.g.
+    DECAES.T2mapSEcorr(image; kwargs...)
+
+This version of decaes.py was written for DECAES v0.4.3.
+"""
+
 import julia
 import os
 import subprocess
@@ -39,13 +60,13 @@ def install(
     # Install DECAES.jl
     decaes_install_script = """try
             @info "Trying to import DECAES..."
-            import DECAES
+            @eval import DECAES
         catch e
             @error "`import DECAES` failed" exception=(e, catch_backtrace())
             @info "Installing DECAES..."
             import Pkg
             Pkg.add("DECAES")
-            import DECAES
+            @eval import DECAES
         end
         """.replace("        ", "")
 

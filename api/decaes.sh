@@ -16,10 +16,12 @@ parser = argparse.ArgumentParser(
 
     Example:
 
-        Start Julia with 8 threads and run DECAES using parameters specified by the
+        Start Julia with multiple threads and run DECAES using parameters specified by the
         settings file 'decaes_settings_file.txt':
 
-            python decaes.py --threads=8 @/path/to/decaes_settings_file.txt
+            python decaes.py @/path/to/decaes_settings_file.txt
+
+    This version of decaes.sh was written for DECAES v0.4.3.
     """,
     formatter_class = argparse.RawDescriptionHelpFormatter,
 )
