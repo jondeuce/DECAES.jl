@@ -92,6 +92,7 @@ function status = decaes(varargin)
 % 
 %   Note the separation of the Matlab-specific flags from the DECAES settings file.
 % 
+% This version of decaes.m was written for DECAES v0.4.2.
 % DECAES was written by Jonathan Doucette (jdoucette@physics.ubc.ca).
 % Original MATLAB implementation is by Thomas Prasloski (tprasloski@gmail.com).
 
@@ -132,7 +133,7 @@ function jl_instantiate_project(opts)
         end
 
         % Install DECAES into project
-        install_script = jl_make_script('DECAES');
+        install_script = jl_make_script('DECAES', {}, true);
         cleanup_install_script = onCleanup(@() delete([install_script, '*']));
         cmd = [jl_build_cmd(opts), ' ', install_script];
         system(cmd, '-echo');
@@ -233,9 +234,9 @@ function succ = jl_server_ping(opts)
 
 end
 
-function jl_script = jl_make_script(pkgs, body, dev)
+function jl_script = jl_make_script(pkgs, body, install)
 
-    if nargin < 3; dev = false; end
+    if nargin < 3; install = false; end
     if nargin < 2; body = {}; end
     if nargin < 1; pkgs = {}; end
 
@@ -248,7 +249,7 @@ function jl_script = jl_make_script(pkgs, body, dev)
     cleanup_fid = onCleanup(@() fclose(fid));
 
     for ii = 1:length(pkgs)
-        fprintf(fid, jl_using_package_str(pkgs{ii}, dev));
+        fprintf(fid, jl_using_package_str(pkgs{ii}, install));
     end
     for ii = 1:length(body)
         fprintf(fid, [body{ii}, '\n']);
@@ -256,25 +257,28 @@ function jl_script = jl_make_script(pkgs, body, dev)
 
 end
 
-function jl_str = jl_using_package_str(pkg, dev)
+function jl_str = jl_using_package_str(pkg, install)
 
-    if nargin < 2; dev = false; end
+    if nargin < 2; install = false; end
 
     jl_str = {
         'import Pkg'
+        'if __INSTALL__ != 0'
+        '    println("* Installing __PACKAGE__")'
+        '    Pkg.add("__PACKAGE__"; io = devnull)'
+        '    @eval using __PACKAGE__'
+        'end'
         'try'
-        '    @eval using $PACKAGE$'
+        '    @eval using __PACKAGE__'
         'catch e'
-        '    println("* Installing $PACKAGE$")'
-        '    Pkg.add("$PACKAGE$"; io = devnull)'
-        '    @eval using $PACKAGE$'
+        '    println("* Installing __PACKAGE__")'
+        '    Pkg.add("__PACKAGE__"; io = devnull)'
+        '    @eval using __PACKAGE__'
         'end'
     };
     jl_str = sprintf('%s\n', jl_str{:});
-    jl_str = strrep(jl_str, '$PACKAGE$', pkg);
-    if dev
-        jl_str = strrep(jl_str, 'Pkg.add', 'Pkg.develop');
-    end
+    jl_str = strrep(jl_str, '__PACKAGE__', pkg);
+    jl_str = strrep(jl_str, '__INSTALL__', num2str(install));
 
 end
 
