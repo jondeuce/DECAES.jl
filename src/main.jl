@@ -10,6 +10,7 @@ const CLI_SETTINGS = ArgParseSettings(
     fromfile_prefix_chars = "@",
     error_on_conflict = false,
     exit_after_help = false,
+    exc_handler = ArgParse.debug_handler,
 )
 
 @add_arg_table! CLI_SETTINGS begin
@@ -214,8 +215,8 @@ function main(command_line_args::Vector{String} = ARGS)
 
     # Parse command line arguments
     opts = parse_args(command_line_args, CLI_SETTINGS; as_symbols = true)
-    opts === nothing && return # Help message was triggered. Return nothing instead of exit(0)
-    opts = handle_cli_deprecations!(opts)
+    opts === nothing && return nothing # Help message was triggered. Return nothing instead of exit(0)
+    opts = handle_cli_deprecations!(opts) # Handle deprecated options
 
     if opts[:compile]
         # Compile DECAES into a relocatable app

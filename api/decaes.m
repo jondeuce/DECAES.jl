@@ -1,8 +1,6 @@
 function status = decaes(varargin)
 %DECAES (DE)composition and (C)omponent (A)nalysis of (E)xponential (S)ignals
-% Call out to the DECAES command line tool. The Julia executable 'julia'
-% is assumed to be on your system path; if not, modify the 'jl_binary_path'
-% variable within this file as appropriate. The DECAES.jl Julia package will
+% Call out to the DECAES command line tool. The DECAES.jl Julia package will
 % be installed automatically, if necessary.
 % 
 % See the online documentation for more information on DECAES:
@@ -22,8 +20,11 @@ function status = decaes(varargin)
 %   All arguments will be forwarded to DECAES, with the exception of the
 %   following Matlab-specific flags:
 % 
+%   --runtime:  Path to Julia binary runtime. Defaults to 'julia'.
 %   --threads:  Number of computational threads for DECAES to use.
-%               By default, uses the output of maxNumCompThreads.
+%               Defaults to 'auto', deferring to Julia to choose the optimal value.
+%   --project:  Julia project into which DECAES is installed. By default, a
+%               folder '.decaes' is created in the directory containing this file.
 %   --server:   (Experimental) start a local Julia server for running DECAES.
 %               The first time DECAES is called with the --server flag, a background
 %               Julia process will be instantiated with DECAES loaded. Subsequent
@@ -37,7 +38,7 @@ function status = decaes(varargin)
 %   status:     (optional) System call status; see SYSTEM for details
 % 
 % EXAMPLES:
-%   Run DECAES with 4 threads on 'image.nii.gz' using command syntax:
+%   Run DECAES multithreaded on 'image.nii.gz' using command syntax:
 %     * We specify an output folder named 'results' using the '--output'
 %       flag; this folder will be created if it does not exist
 %     * We pass a binary mask file 'image_mask.mat' using the --mask flag;
@@ -52,11 +53,11 @@ function status = decaes(varargin)
 %     * Lastly, we indicate that the regularization parameters should be
 %       saved using the --SaveRegParam flag
 % 
-%       decaes image.nii.gz --threads 4 --output results --mask image_mask.mat --T2map --T2part --TE 7e-3 --nT2 60 --T2Range 10e-3 2.0 --SPWin 10e-3 25e-3 --MPWin 25e-3 200.0e-3 --Reg lcurve --SaveRegParam
+%       decaes image.nii.gz --output results --mask image_mask.mat --T2map --T2part --TE 7e-3 --nT2 60 --T2Range 10e-3 2.0 --SPWin 10e-3 25e-3 --MPWin 25e-3 200.0e-3 --Reg lcurve --SaveRegParam
 % 
 %   Run the same command using function syntax:
 % 
-%       decaes('image.nii.gz', '--threads', 4, '--output', 'results', '--mask', 'image_mask.mat', '--T2map', '--T2part', '--TE', 7e-3, '--nT2', 60, '--T2Range', [10e-3, 2.0], '--SPWin', [10e-3, 25e-3], '--MPWin', [25e-3, 200.0e-3], '--Reg', 'lcurve', '--SaveRegParam')
+%       decaes('image.nii.gz', '--output', 'results', '--mask', 'image_mask.mat', '--T2map', '--T2part', '--TE', 7e-3, '--nT2', 60, '--T2Range', [10e-3, 2.0], '--SPWin', [10e-3, 25e-3], '--MPWin', [25e-3, 200.0e-3], '--Reg', 'lcurve', '--SaveRegParam')
 % 
 %   Create a settings file called 'settings.txt' containing the settings
 %   from the above example (note: only one value or flag per line):
@@ -87,15 +88,19 @@ function status = decaes(varargin)
 % 
 %   Run the example using the above settings file 'settings.txt' on a local Julia server:
 % 
-%       decaes --threads 4 --server @settings.txt
+%       decaes --server @settings.txt
 % 
 %   Note the separation of the Matlab-specific flags from the DECAES settings file.
 % 
-% DECAES was written by Jonathan Doucette (jdoucette@phas.ubc.ca).
+% DECAES was written by Jonathan Doucette (jdoucette@physics.ubc.ca).
 % Original MATLAB implementation is by Thomas Prasloski (tprasloski@gmail.com).
 
     [opts, decaes_args] = parse_args(varargin{:});
 
+    % Instantiate the default project, if necessary
+    jl_instantiate_project(opts);
+
+    % Call DECAES command line interface
     if opts.server
         st = jl_call_decaes_server(opts, decaes_args);
     else
@@ -109,6 +114,32 @@ function status = decaes(varargin)
 
 end
 
+function jl_instantiate_project(opts)
+
+    if strcmpi(opts.project, default_project)
+        % Check if project folder exists with a Project.toml file
+        proj_folder_exists = exist(opts.project, 'dir');
+        proj_file_exists = exist(fullfile(opts.project, 'Project.toml'), 'file');
+
+        if proj_folder_exists && proj_file_exists
+            return
+        end
+        if ~proj_folder_exists
+            mkdir(opts.project); % make new default project folder
+        end
+        if ~proj_file_exists
+            fclose(fopen(fullfile(opts.project, 'Project.toml'), 'w')); % make Project.toml file
+        end
+
+        % Install DECAES into project
+        install_script = jl_make_script('DECAES');
+        cleanup_install_script = onCleanup(@() delete([install_script, '*']));
+        cmd = [jl_build_cmd(opts), ' ', install_script];
+        system(cmd, '-echo');
+    end
+
+end
+
 function cmd = jl_build_cmd(opts)
 
     % Set Julia binary path and flags
@@ -116,7 +147,7 @@ function cmd = jl_build_cmd(opts)
         opts.runtime
         '--startup-file=no'
         '--optimize=3'
-        sprintf('--threads=%d', opts.threads)
+        sprintf('--threads=%s', opts.threads)
     };
     if ~isempty(opts.project)
         jl_cmd_args{end+1} = sprintf('--project=%s', opts.project); %#ok
@@ -261,6 +292,27 @@ function x = check_positive_int(x)
 
 end
 
+function x = threads_string(x)
+
+    % Allow char inputs
+    if ischar(x) && strcmpi(x, 'auto')
+        x = 'auto';
+    else
+        x = check_positive_int(x);
+        if ~isnan(x)
+            x = num2str(x);
+        end
+    end
+
+end
+
+function proj = default_project()
+
+    [decaes_dir, ~, ~] = fileparts(mfilename('fullpath'));
+    proj = fullfile(decaes_dir, '.decaes');
+
+end
+
 function [opts, decaes_args] = parse_args(varargin)
 
     % Check for deprecated syntax for setting number of Julia threads
@@ -290,7 +342,7 @@ function [opts, decaes_args] = parse_args(varargin)
                     mat_args = {mat_args{:}, 'runtime', varargin{ii+1}}; %#ok
                     ii = ii + 2;
                 case '--threads'
-                    mat_args = {mat_args{:}, 'threads', check_positive_int(varargin{ii+1})}; %#ok
+                    mat_args = {mat_args{:}, 'threads', threads_string(varargin{ii+1})}; %#ok
                     ii = ii + 2;
                 case '--project'
                     mat_args = {mat_args{:}, 'project', varargin{ii+1}}; %#ok
@@ -316,8 +368,8 @@ function [opts, decaes_args] = parse_args(varargin)
     % Parse Matlab inputs
     p = inputParser;
     addParameter(p, 'runtime', 'julia', @ischar);
-    addParameter(p, 'threads', maxNumCompThreads, @(x) ~isnan(check_positive_int(x)));
-    addParameter(p, 'project', '', @ischar);
+    addParameter(p, 'threads', 'auto', @(x) strcmpi(x, 'auto') || ~isnan(check_positive_int(x)));
+    addParameter(p, 'project', default_project, @ischar);
     addParameter(p, 'server', false, @islogical);
     parse(p, mat_args{:});
     opts = p.Results;

@@ -118,8 +118,8 @@ decaes_script = @mktempscript begin
         @eval using DECAES
     catch e
         println("* Installing DECAES")
-        # Pkg.add("DECAES"; io = devnull)
-        Pkg.develop("DECAES"; io = devnull) #TODO
+        Pkg.add("DECAES"; io = devnull)
+        # Pkg.develop("DECAES"; io = devnull)
         @eval using DECAES
     end
 
