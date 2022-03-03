@@ -45,7 +45,7 @@ end
 
 add_arg_group!(CLI_SETTINGS,
     "T2map/T2part required parameters",
-    :t2_map_part,
+    :t2_map_part_required,
 )
 
 @add_arg_table! CLI_SETTINGS begin
@@ -53,66 +53,66 @@ add_arg_group!(CLI_SETTINGS,
         nargs = 3
         arg_type = Int
         help = "matrix size of the magnitude image. Inferred automatically as the first three dimensions of the input 4D image"
-        group = :t2_map_part
+        group = :t2_map_part_required
     "--nTE"
         arg_type = Int
         help = "number of echoes of the magnitude image. Inferred automatically as the last dimension of the input 4D image"
-        group = :t2_map_part
+        group = :t2_map_part_required
     "--TE"
         arg_type = Float64
         help = "inter-echo spacing. Required when --T2map is passed. (units: seconds)"
-        group = :t2_map_part
+        group = :t2_map_part_required
     "--nT2"
         arg_type = Int
         help = "number of T2 components used in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension of input image if only --T2part and not --T2map is passed"
-        group = :t2_map_part
+        group = :t2_map_part_required
     "--T2Range"
         nargs = 2
         arg_type = Float64
         help = "minimum and maximum T2 values. T2 components are logarithmically spaced between these bounds. Required parameter. (units: seconds)"
-        group = :t2_map_part
+        group = :t2_map_part_required
     "--SPWin"
         nargs = 2
         arg_type = Float64
         help = "minimum and maximum T2 values of the short peak window. Required parameter when --T2part is passed. (units: seconds)"
-        group = :t2_map_part
+        group = :t2_map_part_required
     "--MPWin"
         nargs = 2
         arg_type = Float64
         help = "minimum and maximum T2 values of the middle peak window. Required parameter when --T2part is passed. (units: seconds)"
-        group = :t2_map_part
+        group = :t2_map_part_required
     "--Reg"
         arg_type = String
         help = "routine used for choosing regularization parameter. One of \"lcurve\", \"gcv\", \"chi2\", or \"none\", representing L-curve based regularization, generalized cross-validation based regularization, --Chi2Factor based Tikhonov regularization, and no regularization, respectively. Required parameter"
-        group = :t2_map_part
+        group = :t2_map_part_required
     "--Chi2Factor"
         arg_type = Float64
         help = "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution. Required parameter when --Reg=\"chi2\""
-        group = :t2_map_part
+        group = :t2_map_part_required
 end
 
 add_arg_group!(CLI_SETTINGS,
     "T2map/T2part optional parameters",
-    :t2_map_part,
+    :t2_map_part_optional,
 )
 
 @add_arg_table! CLI_SETTINGS begin
     "--T1"
         arg_type = Float64
         help = "assumed value of longitudinal T1 relaxation. (default: 1.0) (units: seconds)"
-        group = :t2_map_part
+        group = :t2_map_part_optional
     "--Sigmoid"
         arg_type = Float64
         help = "replace the hard upper limit cutoff time of the short peak window, SPWin[2], with a smoothed sigmoidal cutoff function 'σ' scaled and shifted such that σ(SPWin[2] +/- Sigmoid) = 0.5 -/+ 0.4. Sigmoid is the time scale of the smoothing. (units: seconds)"
-        group = :t2_map_part
+        group = :t2_map_part_optional
     "--Threshold"
         arg_type = Float64
         help = "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold. (default: 0.0) (units: signal magnitude)"
-        group = :t2_map_part
+        group = :t2_map_part_optional
     "--Progress"
         action = :store_true
         help = "Print progress updates during T2 distribution computation. Note: this may cause a slowdown"
-        group = :t2_map_part
+        group = :t2_map_part_optional
 end
 
 add_arg_group!(CLI_SETTINGS,
