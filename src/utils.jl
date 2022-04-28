@@ -85,13 +85,19 @@ end
 mapfindmax(f, xs) = mapfind(f, findmax, xs)
 mapfindmin(f, xs) = mapfind(f, findmin, xs)
 
-struct GrowableCache{K,V}
-    keys::K
-    values::V
+struct GrowableCache{K,V,C}
+    keys::Vector{K}
+    values::Vector{V}
     length::Base.RefValue{Int}
+    cmp::C
+    function GrowableCache{K,V}(bufsize::Int = 0, cmp = ==) where {K,V}
+        keys = Vector{K}(undef, bufsize)
+        values = Vector{V}(undef, bufsize)
+        new{K,V,typeof(cmp)}(keys, values, Ref(0), cmp)
+    end
 end
-@inline Base.keys(c::GrowableCache) = c.keys
-@inline Base.values(c::GrowableCache) = c.values
+@inline Base.keys(c::GrowableCache) = view(c.keys, 1:c.length[])
+@inline Base.values(c::GrowableCache) = view(c.values, 1:c.length[])
 @inline Base.length(c::GrowableCache) = c.length[]
 @inline Base.empty!(c::GrowableCache) = (c.length[] = 0; c)
 @inline Base.isempty(c::GrowableCache) = c.length[] == 0
@@ -111,7 +117,7 @@ end
 function Base.findfirst(c::GrowableCache, x)
     ind = 0
     @inbounds for i in 1:c.length[]
-        if x == c.keys[i]
+        if c.cmp(x, c.keys[i])
             ind = i
             break
         end
@@ -151,9 +157,9 @@ function Base.pushfirst!(c::GrowableCache, (x, v))
     return push!(c, (x, v))
 end
 
-struct CachedFunction{F,K,V}
+struct CachedFunction{K, V, C <: GrowableCache{K,V}, F}
     f::F
-    cache::GrowableCache{K,V}
+    cache::C
 end
 
 @inline (f::CachedFunction)(x) = get!(f.f, f.cache, x)
@@ -234,7 +240,7 @@ default_blocksize() = 64
 # 
 #   See: https://juliafolds.github.io/data-parallelism/tutorials/concurrency-patterns/#worker_pool
 
-function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads(), verbose = true, ninputs = nothing)
+function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads(), verbose = false, ninputs = nothing)
     function consumer(callback = () -> nothing)
         allocate() do resource
             for input in inputs
@@ -244,14 +250,13 @@ function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads(
         end
     end
 
-    if ntasks == 1
-        consumer()
-        return
-    end
-
     if !verbose
-        @sync for _ in 1:ntasks
-            Threads.@spawn consumer()
+        if ntasks == 1
+            consumer()
+        else
+            @sync for _ in 1:ntasks
+                Threads.@spawn consumer()
+            end
         end
     else
         count = Threads.Atomic{Int}(0)
@@ -316,10 +321,10 @@ end
 
 function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppress_logfile = false)
     logger =
-        suppress_terminal && suppress_logfile ? TerminalLogger(devnull) :    # ConsoleLogger
-        suppress_logfile ? TerminalLogger(stderr) :    # ConsoleLogger
+        suppress_terminal && suppress_logfile ? TerminalLogger(devnull) :
+        suppress_logfile ? TerminalLogger(stderr) :
         suppress_terminal ? TimestampLogger(FileLogger(logfile)) :
-        TeeLogger(TerminalLogger(stderr), TimestampLogger(FileLogger(logfile)))    # ConsoleLogger
+        TeeLogger(TerminalLogger(stderr), TimestampLogger(FileLogger(logfile)))
     with_logger(logger) do
         f()
     end

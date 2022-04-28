@@ -1,7 +1,3 @@
-using Test
-using DECAES.LinearAlgebra, DECAES.Random
-using DECAES.StaticArrays
-
 function test_mock_surrogate_search_problem(
         opts::T2mapOptions = DECAES.mock_t2map_opts(;
             MatrixSize = (1, 1, 1),

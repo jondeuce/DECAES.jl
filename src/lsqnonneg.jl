@@ -706,10 +706,10 @@ function NNLSLCurveRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where 
     m, n = size(C)
     nnls_work = NNLSProblem(C, d)
     nnls_work_smooth_cache = NNLSTikhonovRegProblemCache(C, d)
-    lsqnonneg_lcurve_fun_cache = GrowableCache(T[], SVector{2,T}[], Ref(0))
+    lsqnonneg_lcurve_fun_cache = GrowableCache{T, SVector{2,T}}(64, isapprox)
     lcurve_corner_caches = (
-        GrowableCache(T[], NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}[], Ref(0)),
-        GrowableCache(T[], LCurveCornerState{T}[], Ref(0)),
+        GrowableCache{T, LCurveCornerPoint{T}}(64, isapprox),
+        GrowableCache{T, LCurveCornerState{T}}(64, isapprox),
     )
     NNLSLCurveRegProblem(C, d, m, n, nnls_work, nnls_work_smooth_cache, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches)
 end
@@ -751,8 +751,8 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
     empty!(work.lsqnonneg_lcurve_fun_cache)
     empty!.(work.lcurve_corner_caches)
 
-    f = CachedFunction(work.lsqnonneg_lcurve_fun_cache) do μ
-        solve!(work.nnls_work_smooth_cache, μ)
+    f = CachedFunction(work.lsqnonneg_lcurve_fun_cache) do logμ
+        solve!(work.nnls_work_smooth_cache, exp(logμ))
         ξ = log(resnorm(get_cache(work.nnls_work_smooth_cache)))
         η = log(seminorm(get_cache(work.nnls_work_smooth_cache)))
         return SA{T}[ξ, η]
@@ -771,35 +771,34 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
     return (x = x_final, mu = mu_final, chi2factor = chi2factor_final)
 end
 
-struct LCurveCornerCachedFunction{F,C1,C2}
-    f::F
-    cache::C1
-    state_cache::C2
-end
-
-@inline Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.cache); empty!(f.state_cache); f)
-
-function (f::LCurveCornerCachedFunction)(x::T) where {T}
-    for (_x, (_P, _)) in f.cache
-        x ≈ _x && return _P
-    end
-    P = f.f(exp(x)) # only recalculate if not cached
-    f.cache[x] = (P = P, C = T(-Inf))
-    return P
-end
-
 struct LCurveCornerState{T}
     x⃗::SVector{4,T} # grid of regularization parameters
     P⃗::SVector{4,SVector{2,T}} # points (residual norm, solution seminorm) evaluated at x⃗
 end
+@inline Base.iterate(s::LCurveCornerState, args...) = iterate((s.x⃗, s.P⃗), args...)
 
-function LCurveCornerState(f::LCurveCornerCachedFunction, x₁::T, x₄::T) where {T}
+struct LCurveCornerPoint{T}
+    P::SVector{2,T} # grid point
+    C::T # curvature
+end
+LCurveCornerPoint(P::SVector{2,T}) where {T} = LCurveCornerPoint(P, T(-Inf))
+@inline Base.iterate(p::LCurveCornerPoint, args...) = iterate((p.P, p.C), args...)
+
+struct LCurveCornerCachedFunction{T, F <: CachedFunction{T, SVector{2,T}}, C1 <: GrowableCache{T, LCurveCornerPoint{T}}, C2 <: GrowableCache{T, LCurveCornerState{T}}}
+    f::F
+    cache::C1
+    state_cache::C2
+end
+@inline Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.cache); empty!(f.state_cache); f)
+@inline (f::LCurveCornerCachedFunction{T})(x::T) where {T} = f.f(x)
+
+function LCurveCornerState(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
     x₂   = (T(φ) * x₁ + x₄) / (T(φ) + 1)
     x₃   = x₁ + (x₄ - x₂)
     x⃗    = SA[x₁, x₂, x₃, x₄]
-    P⃗    = f.f.(exp.(x⃗))
-    for i in 1:4
-        push!(f.cache, (x⃗[i], (P = P⃗[i], C = T(-Inf))))
+    P⃗    = SA[f(x₁), f(x₂), f(x₃), f(x₄)]
+    Base.Cartesian.@nexprs 4 i -> begin
+        push!(f.cache, (x⃗[i], LCurveCornerPoint(P⃗[i])))
     end
     return LCurveCornerState(x⃗, P⃗)
 end
@@ -812,7 +811,7 @@ Find the corner of the L-curve via curvature maximization using Algorithm 1 from
 A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”.
 IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
-function lcurve_corner(f::LCurveCornerCachedFunction, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, refine = false, backtracking = true, verbose = false) where {T}
+function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, refine = false, backtracking = true, verbose = false) where {T}
     # Initialize state
     state = LCurveCornerState(f, T(xlow), T(xhigh))
 
@@ -878,21 +877,21 @@ end
 
 is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x⃗[1]) < xtol || norm(state.P⃗[1] - state.P⃗[4]) < Ptol
 
-function move_left(f::LCurveCornerCachedFunction, state::LCurveCornerState{T}) where {T}
+function move_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
     @unpack x⃗, P⃗ = state
     x⃗ = SA[x⃗[1], (T(φ) * x⃗[1] + x⃗[3]) / (T(φ) + 1), x⃗[2], x⃗[3]]
     P⃗ = SA[P⃗[1], f(x⃗[2]), P⃗[2], P⃗[3]] # only P⃗[2] is recalculated
     return LCurveCornerState{T}(x⃗, P⃗)
 end
 
-function move_right(f::LCurveCornerCachedFunction, state::LCurveCornerState{T}) where {T}
+function move_right(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
     @unpack x⃗, P⃗ = state
     x⃗ = SA[x⃗[2], x⃗[3], x⃗[2] + (x⃗[4] - x⃗[3]), x⃗[4]]
     P⃗ = SA[P⃗[2], P⃗[3], f(x⃗[3]), P⃗[4]] # only P⃗[3] is recalculated
     return LCurveCornerState(x⃗, P⃗)
 end
 
-function update_curvature!(f::LCurveCornerCachedFunction, state::LCurveCornerState{T}, Pfilter = nothing; global_search = false) where {T}
+function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing; global_search = false) where {T}
     @unpack x⃗, P⃗ = state
     for i in 1:4
         x, P, C = x⃗[i], P⃗[i], T(-Inf)
@@ -913,12 +912,12 @@ function update_curvature!(f::LCurveCornerCachedFunction, state::LCurveCornerSta
                 C = menger(P₋, P, P₊)
             end
         end
-        f.cache[x] = (; P, C)
+        f.cache[x] = LCurveCornerPoint(P, C)
     end
     return state
 end
 
-function refine!(f::LCurveCornerCachedFunction, state::LCurveCornerState{T}, Pfilter = nothing; analytical = false) where {T}
+function refine!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing; analytical = false) where {T}
     # Fit spline to (negative) curvature estimates on grid and minimize over the spline
     if analytical
         x_opt, _, _ = maximize_curvature(state)

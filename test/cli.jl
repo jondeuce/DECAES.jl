@@ -1,6 +1,3 @@
-using Test
-using DECAES
-
 # Arbitrary default required parameters used during testing
 default_paramdict = Dict{Symbol,Any}(
     :TE => 8e-3,

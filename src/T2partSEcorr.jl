@@ -41,7 +41,7 @@ function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where
     !opts.Silent && @info show_string(opts)
 
     # Initial output
-    maps = init_output_t2parts(T2distributions, opts)
+    maps = T2Parts(opts)
 
     # For each worker in the worker pool, allocate a separete thread-local buffer, then run the work function `work!`
     function with_thread_buffer(work!)
@@ -52,9 +52,12 @@ function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where
     # Run T2-Part analysis
     LinearAlgebra.BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
 
+    ntasks = opts.Threaded ? Threads.nthreads() : 1
     indices = CartesianIndices(opts.MatrixSize)
-    indices_blocks = split_indices(length(indices), default_blocksize())
-    workerpool(with_thread_buffer, indices_blocks; ntasks = opts.Threaded ? Threads.nthreads() : 1) do inds, thread_buffer
+    blocksize = ceil(Int, length(indices) / ntasks)
+    indices_blocks = split_indices(length(indices), blocksize)
+
+    workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
         @inbounds for j in inds
             voxelwise_T2_parts!(thread_buffer, maps, T2distributions, opts, indices[j])
         end
@@ -62,16 +65,26 @@ function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where
 
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
 
-    return maps
+    return convert(Dict{String, Any}, maps)
 end
 
-function init_output_t2parts(T2distributions::Array{T,4}, opts::T2partOptions{T}) where {T}
-    maps = Dict{String,Any}()
-    maps["sfr"] = fill(T(NaN), opts.MatrixSize...)
-    maps["sgm"] = fill(T(NaN), opts.MatrixSize...)
-    maps["mfr"] = fill(T(NaN), opts.MatrixSize...)
-    maps["mgm"] = fill(T(NaN), opts.MatrixSize...)
-    return maps
+@with_kw_noshow struct T2Parts{T}
+    sfr::Array{T,3}
+    sgm::Array{T,3}
+    mfr::Array{T,3}
+    mgm::Array{T,3}
+end
+
+Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Parts) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Parts) if getfield(maps, f) !== nothing])
+Base.convert(::Type{Dict{String, Any}}, maps::T2Parts) = Dict{String, Any}(string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps))
+
+function T2Parts(opts::T2partOptions{T}) where {T}
+    T2Parts(;
+        sfr = fill(T(NaN), opts.MatrixSize...),
+        sgm = fill(T(NaN), opts.MatrixSize...),
+        mfr = fill(T(NaN), opts.MatrixSize...),
+        mgm = fill(T(NaN), opts.MatrixSize...),
+    )
 end
 
 # =========================================================
@@ -109,14 +122,14 @@ function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOpti
 
     # Compute T2 distribution parts
     if Σ_dist > 0
-        @inbounds maps["sfr"][I] = o.Sigmoid !== nothing ? dot(dist, weights) / Σ_dist : Σ_dist_sp / Σ_dist
-        @inbounds maps["mfr"][I] = Σ_dist_mp / Σ_dist
+        @inbounds maps.sfr[I] = o.Sigmoid !== nothing ? dot(dist, weights) / Σ_dist : Σ_dist_sp / Σ_dist
+        @inbounds maps.mfr[I] = Σ_dist_mp / Σ_dist
     end
     if Σ_dist_sp > 0
-        @inbounds maps["sgm"][I] = exp(dot_sp / Σ_dist_sp)
+        @inbounds maps.sgm[I] = exp(dot_sp / Σ_dist_sp)
     end
     if Σ_dist_mp > 0
-        @inbounds maps["mgm"][I] = exp(dot_mp / Σ_dist_mp)
+        @inbounds maps.mgm[I] = exp(dot_mp / Σ_dist_mp)
     end
 
     return nothing

@@ -1,6 +1,3 @@
-using Test
-using DECAES
-
 function compare_epg(
         work₁::DECAES.AbstractEPGWorkspace{T,ETL},
         work₂::DECAES.AbstractEPGWorkspace{T,ETL},

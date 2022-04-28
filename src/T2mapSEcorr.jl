@@ -72,8 +72,8 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     # =========================================================================
     # Initialization
     # =========================================================================
-    maps = init_output_t2maps(opts)
-    distributions = init_output_t2distributions(opts)
+    maps = T2Maps(opts)
+    distributions = fill(T(NaN), opts.MatrixSize..., opts.nT2)
 
     # =========================================================================
     # Process all pixels
@@ -104,14 +104,6 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
     return convert(Dict{String, Any}, maps), distributions
 end
 
-function init_output_t2distributions(opts::T2mapOptions{T}) where {T}
-    return fill(T(NaN), opts.MatrixSize..., opts.nT2)
-end
-
-function init_output_t2maps(opts::T2mapOptions{T}) where {T}
-    return T2Maps(opts)
-end
-
 @with_kw_noshow struct T2Maps{
         T,
         A1 <: Union{T, Vector{T}},
@@ -138,6 +130,9 @@ end
     chi2factor::A6
     decaybasis::A7
 end
+
+Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Maps) if getfield(maps, f) !== nothing])
+Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps))
 
 function T2Maps(opts::T2mapOptions{T}) where {T}
     thread_buffer = thread_buffer_maker(opts)
@@ -169,9 +164,6 @@ function T2Maps(opts::T2mapOptions{T}) where {T}
                 convert(Array{T}, copy(thread_buffer.decay_basis)), # single decay basis set used for all voxels
     )
 end
-
-Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Maps) if getfield(maps, f) !== nothing])
-Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps))
 
 # =========================================================
 # Main loop function
