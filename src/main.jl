@@ -111,7 +111,7 @@ add_arg_group!(CLI_SETTINGS,
         group = :t2_map_part_optional
     "--Progress"
         action = :store_true
-        help = "Print progress updates during T2 distribution computation. Note: this may cause a slowdown"
+        help = "Print progress updates during T2 distribution computation. Note: this flag is now deprecated; progress updates are always printed unless the --quiet flag is passed"
         group = :t2_map_part_optional
 end
 
@@ -358,18 +358,23 @@ end
 ####
 
 function handle_cli_deprecations!(opts)
+    handle_renamed_cli_flag!(opts, :Progress => nothing)
     return opts
 end
 
-function handle_renamed_cli_flag!(opts, oldnew::Pair{Symbol, Symbol})
+function handle_renamed_cli_flag!(opts, oldnew::Pair)
     oldflag, newflag = oldnew
     if opts[oldflag] !== nothing
-        if opts[newflag] !== nothing
+        if newflag === nothing
+            @warn "The flag --$oldflag is deprecated and will be removed in future releases."
+        elseif opts[newflag] !== nothing
             error("The flag --$newflag and the deprecated flag --$oldflag were both passed; use --$newflag only.")
         else
             @warn "The flag --$oldflag is deprecated and will be removed in future releases; use --$newflag instead."
         end
-        opts[newflag] = opts[oldflag]
+        if newflag !== nothing
+            opts[newflag] = opts[oldflag]
+        end
         delete!(opts, oldflag)
     end
     return opts

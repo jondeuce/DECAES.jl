@@ -23,9 +23,6 @@ See also:
     "Perform T2-mapping using multiple threads."
     Threaded::Bool = Threads.nthreads() > 1
 
-    "Print progress updates during T2 distribution computation. Note that this may cause a slowdown."
-    Progress::Bool = false
-
     "Size of first 3 dimensions of input 4D image. This argument has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`."
     MatrixSize::NTuple{3,Int}
     @assert all(MatrixSize .>= 1)

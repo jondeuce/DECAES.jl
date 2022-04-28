@@ -101,66 +101,82 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
 
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
 
-    return maps, distributions
+    return convert(Dict{String, Any}, maps), distributions
 end
 
 function init_output_t2distributions(opts::T2mapOptions{T}) where {T}
-    distributions = fill(T(NaN), opts.MatrixSize..., opts.nT2)
-    return distributions
+    return fill(T(NaN), opts.MatrixSize..., opts.nT2)
 end
 
 function init_output_t2maps(opts::T2mapOptions{T}) where {T}
-    maps = Dict{String,Any}()
-    init_output_t2maps!(thread_buffer_maker(opts), maps, opts)
-    return maps
+    return T2Maps(opts)
 end
 
-function init_output_t2maps!(thread_buffer, maps, opts::T2mapOptions{T}) where {T}
-    # Misc. processing parameters
-    maps["echotimes"]      = convert(Array{T}, copy(opts.TE .* (1:opts.nTE)))
-    maps["t2times"]        = convert(Array{T}, copy(thread_buffer.T2_times))
-    maps["refangleset"]    = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(thread_buffer.flip_angles)) : T(opts.SetFlipAngle)
-    maps["decaybasisset"]  = opts.SetFlipAngle === nothing ?
-        convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis_set_ensemble.decay_basis_set)) :
-        convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis))
-
-    # Default output maps
-    maps["gdn"]   = fill(T(NaN), opts.MatrixSize...)
-    maps["ggm"]   = fill(T(NaN), opts.MatrixSize...)
-    maps["gva"]   = fill(T(NaN), opts.MatrixSize...)
-    maps["fnr"]   = fill(T(NaN), opts.MatrixSize...)
-    maps["snr"]   = fill(T(NaN), opts.MatrixSize...)
-    maps["alpha"] = fill(T(NaN), opts.MatrixSize...)
-
-    # Optional output maps
-    if opts.SaveResidualNorm
-        maps["resnorm"] = fill(T(NaN), opts.MatrixSize...)
-    end
-
-    if opts.SaveDecayCurve
-        maps["decaycurve"] = fill(T(NaN), opts.MatrixSize..., opts.nTE)
-    end
-
-    if opts.SaveRegParam
-        maps["mu"] = fill(T(NaN), opts.MatrixSize...)
-        maps["chi2factor"] = fill(T(NaN), opts.MatrixSize...)
-    end
-
-    if opts.SaveNNLSBasis
-        if opts.SetFlipAngle === nothing
-            maps["decaybasis"] = fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) # unique decay basis set for each voxel
-        else
-            maps["decaybasis"] = convert(Array{T}, copy(thread_buffer.decay_basis)) # single decay basis set used for all voxels
-        end
-    end
-
-    return nothing
+@with_kw_noshow struct T2Maps{
+        T,
+        A1 <: Union{T, Vector{T}},
+        A2 <: Union{Matrix{T}, Array{T,3}},
+        A3 <: Union{Nothing, Array{T,3}},
+        A4 <: Union{Nothing, Array{T,4}},
+        A5 <: Union{Nothing, Array{T,3}},
+        A6 <: Union{Nothing, Array{T,3}},
+        A7 <: Union{Nothing, Matrix{T}, Array{T,5}},
+    }
+    echotimes::Vector{T}
+    t2times::Vector{T}
+    refangleset::A1
+    decaybasisset::A2
+    gdn::Array{T,3}
+    ggm::Array{T,3}
+    gva::Array{T,3}
+    fnr::Array{T,3}
+    snr::Array{T,3}
+    alpha::Array{T,3}
+    resnorm::A3
+    decaycurve::A4
+    mu::A5
+    chi2factor::A6
+    decaybasis::A7
 end
+
+function T2Maps(opts::T2mapOptions{T}) where {T}
+    thread_buffer = thread_buffer_maker(opts)
+    T2Maps(;
+        # Misc. processing parameters
+        echotimes      = convert(Array{T}, copy(opts.TE .* (1:opts.nTE))),
+        t2times        = convert(Array{T}, copy(thread_buffer.T2_times)),
+        refangleset    = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(thread_buffer.flip_angles)) : T(opts.SetFlipAngle),
+        decaybasisset  = opts.SetFlipAngle === nothing ?
+            convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis_set_ensemble.decay_basis_set)) :
+            convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis)),
+
+        # Default output maps
+        gdn   = fill(T(NaN), opts.MatrixSize...),
+        ggm   = fill(T(NaN), opts.MatrixSize...),
+        gva   = fill(T(NaN), opts.MatrixSize...),
+        fnr   = fill(T(NaN), opts.MatrixSize...),
+        snr   = fill(T(NaN), opts.MatrixSize...),
+        alpha = fill(T(NaN), opts.MatrixSize...),
+
+        # Optional output maps
+        resnorm    = !opts.SaveResidualNorm ? nothing : fill(T(NaN), opts.MatrixSize...),
+        decaycurve = !opts.SaveDecayCurve   ? nothing : fill(T(NaN), opts.MatrixSize..., opts.nTE),
+        mu         = !opts.SaveRegParam     ? nothing : fill(T(NaN), opts.MatrixSize...),
+        chi2factor = !opts.SaveRegParam     ? nothing : fill(T(NaN), opts.MatrixSize...),
+        decaybasis = !opts.SaveNNLSBasis    ? nothing :
+            opts.SetFlipAngle === nothing ?
+                fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) : # unique decay basis set for each voxel
+                convert(Array{T}, copy(thread_buffer.decay_basis)), # single decay basis set used for all voxels
+    )
+end
+
+Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Maps) if getfield(maps, f) !== nothing])
+Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps))
 
 # =========================================================
 # Main loop function
 # =========================================================
-function voxelwise_T2_distribution!(thread_buffer, maps, distributions, signal, opts::T2mapOptions, I::CartesianIndex)
+function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps, distributions, signal, opts::T2mapOptions, I::CartesianIndex)
     # Copy decay curve into the thread buffer
     @inbounds @simd for j in 1:opts.nTE
         thread_buffer.decay_data[j] = signal[j]
@@ -400,7 +416,7 @@ solution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
 # =========================================================
 # Save thread local results to output maps
 # =========================================================
-function save_results!(thread_buffer, maps, distributions, o::T2mapOptions, I::CartesianIndex)
+function save_results!(thread_buffer, maps::T2Maps, distributions, o::T2mapOptions, I::CartesianIndex)
     @unpack T2_dist_work, flip_angle_work, logT2_times, decay_data, decay_basis, decay_calc, residuals, gva_buf = thread_buffer
     T2_dist = solution(T2_dist_work)
 

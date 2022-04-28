@@ -85,6 +85,80 @@ end
 mapfindmax(f, xs) = mapfind(f, findmax, xs)
 mapfindmin(f, xs) = mapfind(f, findmin, xs)
 
+struct GrowableCache{K,V}
+    keys::K
+    values::V
+    length::Base.RefValue{Int}
+end
+@inline Base.keys(c::GrowableCache) = c.keys
+@inline Base.values(c::GrowableCache) = c.values
+@inline Base.length(c::GrowableCache) = c.length[]
+@inline Base.empty!(c::GrowableCache) = (c.length[] = 0; c)
+@inline Base.isempty(c::GrowableCache) = c.length[] == 0
+@inline Base.iterate(c::GrowableCache, i = 0) = length(c) <= i ? nothing : @inbounds(((c.keys[i+1], c.values[i+1]), i+1))
+@inline Base.getindex(c::GrowableCache, x) = @inbounds c.values[findfirst(c, x)]
+
+@inline function Base.setindex!(c::GrowableCache, v, x)
+    ind = findfirst(c, x)
+    if ind == 0
+        push!(c, (x, v))
+    else
+        @inbounds c.values[ind] = v
+    end
+    return v
+end
+
+function Base.findfirst(c::GrowableCache, x)
+    ind = 0
+    @inbounds for i in 1:c.length[]
+        if x == c.keys[i]
+            ind = i
+            break
+        end
+    end
+    return ind
+end
+
+function Base.push!(c::GrowableCache, (x, v))
+    ind = c.length[] += 1
+    @inbounds if ind <= length(c.keys)
+        c.keys[ind] = x
+        c.values[ind] = v
+    else
+        push!(c.keys, x)
+        push!(c.values, v)
+    end
+    return c
+end
+
+function Base.get!(f, c::GrowableCache, x)
+    ind = findfirst(c, x)
+    @inbounds if ind > 0
+        v = c.values[ind]
+    else
+        v = f(x)
+        push!(c, (x, v))
+    end
+    return v
+end
+
+function Base.pushfirst!(c::GrowableCache, (x, v))
+    isempty(c) && return push!(c, (x, v))
+    @inbounds for i in 1:c.length[]
+        c.keys[i], x = x, c.keys[i]
+        c.values[i], v = v, c.values[i]
+    end
+    return push!(c, (x, v))
+end
+
+struct CachedFunction{F,K,V}
+    f::F
+    cache::GrowableCache{K,V}
+end
+
+@inline (f::CachedFunction)(x) = get!(f.f, f.cache, x)
+@inline Base.empty!(f::CachedFunction) = empty!(f.cache)
+
 ####
 #### Timing utilities
 ####

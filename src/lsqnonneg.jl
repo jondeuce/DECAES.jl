@@ -692,19 +692,26 @@ end
 #### L-curve method for choosing Tikhonov regularization parameter
 ####
 
-struct NNLSLCurveRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W1, W2}
+struct NNLSLCurveRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W1, W2, C1, C2}
     C::MC
     d::Vd
     m::Int
     n::Int
     nnls_work::W1
     nnls_work_smooth_cache::W2
+    lsqnonneg_lcurve_fun_cache::C1
+    lcurve_corner_caches::C2
 end
 function NNLSLCurveRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
     nnls_work = NNLSProblem(C, d)
     nnls_work_smooth_cache = NNLSTikhonovRegProblemCache(C, d)
-    NNLSLCurveRegProblem(C, d, m, n, nnls_work, nnls_work_smooth_cache)
+    lsqnonneg_lcurve_fun_cache = GrowableCache(T[], SVector{2,T}[], Ref(0))
+    lcurve_corner_caches = (
+        GrowableCache(T[], NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}[], Ref(0)),
+        GrowableCache(T[], LCurveCornerState{T}[], Ref(0)),
+    )
+    NNLSLCurveRegProblem(C, d, m, n, nnls_work, nnls_work_smooth_cache, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches)
 end
 
 solution(work::NNLSLCurveRegProblem) = solution(get_cache(work.nnls_work_smooth_cache))
@@ -741,13 +748,19 @@ lsqnonneg_lcurve_work(C, d) = NNLSLCurveRegProblem(C, d)
 function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_work_smooth_cache)
-    logmu_bounds = (T(-8), T(2))
-    logmu_final = lcurve_corner(logmu_bounds...) do μ
+    empty!(work.lsqnonneg_lcurve_fun_cache)
+    empty!.(work.lcurve_corner_caches)
+
+    f = CachedFunction(work.lsqnonneg_lcurve_fun_cache) do μ
         solve!(work.nnls_work_smooth_cache, μ)
         ξ = log(resnorm(get_cache(work.nnls_work_smooth_cache)))
         η = log(seminorm(get_cache(work.nnls_work_smooth_cache)))
         return SA{T}[ξ, η]
     end
+    f = LCurveCornerCachedFunction(f, work.lcurve_corner_caches...)
+
+    logmu_bounds = (T(-8), T(2))
+    logmu_final = lcurve_corner(f, logmu_bounds...)
 
     # Return the final regularized solution
     mu_final = exp(logmu_final)
@@ -758,6 +771,39 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
     return (x = x_final, mu = mu_final, chi2factor = chi2factor_final)
 end
 
+struct LCurveCornerCachedFunction{F,C1,C2}
+    f::F
+    cache::C1
+    state_cache::C2
+end
+
+@inline Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.cache); empty!(f.state_cache); f)
+
+function (f::LCurveCornerCachedFunction)(x::T) where {T}
+    for (_x, (_P, _)) in f.cache
+        x ≈ _x && return _P
+    end
+    P = f.f(exp(x)) # only recalculate if not cached
+    f.cache[x] = (P = P, C = T(-Inf))
+    return P
+end
+
+struct LCurveCornerState{T}
+    x⃗::SVector{4,T} # grid of regularization parameters
+    P⃗::SVector{4,SVector{2,T}} # points (residual norm, solution seminorm) evaluated at x⃗
+end
+
+function LCurveCornerState(f::LCurveCornerCachedFunction, x₁::T, x₄::T) where {T}
+    x₂   = (T(φ) * x₁ + x₄) / (T(φ) + 1)
+    x₃   = x₁ + (x₄ - x₂)
+    x⃗    = SA[x₁, x₂, x₃, x₄]
+    P⃗    = f.f.(exp.(x⃗))
+    for i in 1:4
+        push!(f.cache, (x⃗[i], (P = P⃗[i], C = T(-Inf))))
+    end
+    return LCurveCornerState(x⃗, P⃗)
+end
+
 """
     lcurve_corner(f, xlow, xhigh)
 
@@ -766,12 +812,9 @@ Find the corner of the L-curve via curvature maximization using Algorithm 1 from
 A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”.
 IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
-function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, cache = nothing, refine = false, backtracking = true, verbose = false, kwargs...) where {T}
+function lcurve_corner(f::LCurveCornerCachedFunction, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, refine = false, backtracking = true, verbose = false) where {T}
     # Initialize state
-    msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [cache[x].C for x in state.x⃗])))
-    cache === nothing && (cache = Dict{T, NamedTuple{(:P, :C), Tuple{SVector{2,T}, T}}}())
-    state = LCurveCornerState(f, T(xlow), T(xhigh), cache; kwargs...)
-    state_cache = backtracking ? [state] : nothing
+    state = LCurveCornerState(f, T(xlow), T(xhigh))
 
     # Tolerances are relative to initial curve size
     Ptopleft, Pbottomright = state.P⃗[1], state.P⃗[4]
@@ -784,14 +827,24 @@ function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.
     # extremely close for large regularization. Points which don't satisfy `Pfilter`
     # are assigned curvature -Inf.
     Pfilter = P -> min(norm(P - Ptopleft), norm(P - Pbottomright)) > T(Ctol)
-    update_curvature!(state, cache; Pfilter)
+    update_curvature!(f, state, Pfilter)
+
+    msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [f.cache[x].C for x in state.x⃗])))
     msg("Starting", state)
 
+    iter = 0
     while true
+        iter += 1
         if backtracking
             # Find state with minimum diameter which contains the current best estimate maximum curvature point
-            (x, (P, C)), _, _ = mapfindmax(((x, (P, C)),) -> C, collect(cache))
-            for s in state_cache
+            local x, P, C
+            C = T(-Inf)
+            for (_x, (_P, _C)) in f.cache
+                if _C > C
+                    x, P, C = _x, _P, _C
+                end
+            end
+            for (_, s) in f.state_cache
                 if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
                     state = s
                 end
@@ -799,110 +852,83 @@ function lcurve_corner(f, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.
         end
 
         # Move state toward region of lower curvature
-        if cache[state.x⃗[2]].C > cache[state.x⃗[3]].C
-            state = move_left(f, state, cache)
-            update_curvature!(state, cache; Pfilter)
+        if f.cache[state.x⃗[2]].C > f.cache[state.x⃗[3]].C
+            state = move_left(f, state)
+            update_curvature!(f, state, Pfilter)
             msg("C₂ > C₃; moved left", state)
         else
-            state = move_right(f, state, cache)
-            update_curvature!(state, cache; Pfilter)
+            state = move_right(f, state)
+            update_curvature!(f, state, Pfilter)
             msg("C₃ ≥ C₂; moved right", state)
         end
-        backtracking && push!(state_cache, state)
+        backtracking && push!(f.state_cache, (iter, state))
         is_converged(state; xtol = T(xtol), Ptol = T(Ptol)) && break
     end
 
     if refine
-        x = refine!(f, state, cache; Pfilter)
+        x = refine!(f, state, Pfilter)
         msg("Converged; refined solution", state)
     else
-        x = cache[state.x⃗[2]].C > cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
+        x = f.cache[state.x⃗[2]].C > f.cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
         msg("Converged", state)
     end
 
     return x
 end
 
-struct LCurveCornerState{T, V <: SVector{2,T}}
-    x⃗::SVector{4,T} # grid of regularization parameters
-    P⃗::SVector{4,V} # points (residual norm, solution seminorm) evaluated at x⃗
-end
-function LCurveCornerState(f, x₁::T, x₄::T, cache = nothing) where {T}
-    x₂   = (T(φ) * x₁ + x₄) / (T(φ) + 1)
-    x₃   = x₁ + (x₄ - x₂)
-    x⃗    = SA{T}[x₁, x₂, x₃, x₄]
-    P⃗    = f.(exp.(x⃗))
-    foreach(1:4) do i
-        cache!(cache, x⃗[i], (P = P⃗[i], C = T(-Inf)))
-    end
-    return LCurveCornerState(x⃗, P⃗)
-end
-
 is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x⃗[1]) < xtol || norm(state.P⃗[1] - state.P⃗[4]) < Ptol
 
-function maybecall!(f, x::T, state::LCurveCornerState{T}, cache) where {T}
-    for (_x, (_P, _C)) in cache
-        x ≈ _x && return _P
-    end
-    P = f(exp(x)) # only recalculate if not cached
-    cache!(cache, x, (P = P, C = T(-Inf)))
-    return P
-end
-
-function move_left(f, state::LCurveCornerState{T}, cache) where {T}
+function move_left(f::LCurveCornerCachedFunction, state::LCurveCornerState{T}) where {T}
     @unpack x⃗, P⃗ = state
     x⃗ = SA[x⃗[1], (T(φ) * x⃗[1] + x⃗[3]) / (T(φ) + 1), x⃗[2], x⃗[3]]
-    P⃗ = SA[P⃗[1], maybecall!(f, x⃗[2], state, cache), P⃗[2], P⃗[3]] # only P⃗[2] is recalculated
-    return LCurveCornerState(x⃗, P⃗)
+    P⃗ = SA[P⃗[1], f(x⃗[2]), P⃗[2], P⃗[3]] # only P⃗[2] is recalculated
+    return LCurveCornerState{T}(x⃗, P⃗)
 end
 
-function move_right(f, state::LCurveCornerState{T}, cache) where {T}
+function move_right(f::LCurveCornerCachedFunction, state::LCurveCornerState{T}) where {T}
     @unpack x⃗, P⃗ = state
     x⃗ = SA[x⃗[2], x⃗[3], x⃗[2] + (x⃗[4] - x⃗[3]), x⃗[4]]
-    P⃗ = SA[P⃗[2], P⃗[3], maybecall!(f, x⃗[3], state, cache), P⃗[4]] # only P⃗[3] is recalculated
+    P⃗ = SA[P⃗[2], P⃗[3], f(x⃗[3]), P⃗[4]] # only P⃗[3] is recalculated
     return LCurveCornerState(x⃗, P⃗)
 end
 
-function update_curvature!(state::LCurveCornerState{T}, cache; Pfilter = nothing, menger_curvature = true, global_search = false) where {T}
+function update_curvature!(f::LCurveCornerCachedFunction, state::LCurveCornerState{T}, Pfilter = nothing; global_search = false) where {T}
     @unpack x⃗, P⃗ = state
-    Cfun(P₋, P, P₊) = menger_curvature ?
-        menger(P₋, P, P₊) :
-        360 - rad2deg(kahan_angle(P₋, P, P₊))
     for i in 1:4
         x, P, C = x⃗[i], P⃗[i], T(-Inf)
         if Pfilter === nothing || Pfilter(P)
             if global_search
                 # Search for maximum curvature over all neighbours
-                for (x₋, (P₋, _)) in cache, (x₊, (P₊, _)) in cache
-                    (x₋ < x⃗[i] < x₊) && (C = max(C, Cfun(P₋, P, P₊)))
+                for (x₋, (P₋, _)) in f.cache, (x₊, (P₊, _)) in f.cache
+                    (x₋ < x⃗[i] < x₊) && (C = max(C, menger(P₋, P, P₊)))
                 end
             else
                 # Compute curvature from nearest neighbours
                 x₋, x₊ = T(-Inf), T(+Inf)
                 P₋, P₊ = P, P
-                for (_x, (_P, _)) in cache
+                for (_x, (_P, _)) in f.cache
                     (x₋ < _x < x ) && ((x₋, P₋) = (_x, _P))
                     (x  < _x < x₊) && ((x₊, P₊) = (_x, _P))
                 end
-                C = Cfun(P₋, P, P₊)
+                C = menger(P₋, P, P₊)
             end
         end
-        cache[x] = (; P, C)
+        f.cache[x] = (; P, C)
     end
     return state
 end
 
-function refine!(f, state::LCurveCornerState{T}, cache; Pfilter = nothing, analytical = false) where {T}
+function refine!(f::LCurveCornerCachedFunction, state::LCurveCornerState{T}, Pfilter = nothing; analytical = false) where {T}
     # Fit spline to (negative) curvature estimates on grid and minimize over the spline
     if analytical
         x_opt, _, _ = maximize_curvature(state)
     else
-        C_spl = make_spline(state.x⃗, [-cache[x].C for x in state.x⃗])
+        C_spl = make_spline(state.x⃗, [-f.cache[x].C for x in state.x⃗])
         x_opt, _ = spline_opt(C_spl)
     end
-    maybecall!(f, x_opt, state, cache)
-    update_curvature!(state, cache; Pfilter)
-    (x_opt, (_, _)), _, _ = mapfindmax(((x, (P, C)),) -> C, collect(cache))
+    _ = f(x_opt)
+    update_curvature!(f, state, Pfilter)
+    (x_opt, (_, _)), _, _ = mapfindmax(((x, (P, C)),) -> C, f.cache)
     return x_opt
 end
 
@@ -910,6 +936,7 @@ function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}
     Δⱼₖ, Δₖₗ, Δₗⱼ = Pⱼ - Pₖ, Pₖ - Pₗ, Pₗ - Pⱼ
     P̄ⱼP̄ₖ, P̄ₖP̄ₗ, P̄ₗP̄ⱼ = Δⱼₖ ⋅ Δⱼₖ, Δₖₗ ⋅ Δₖₗ, Δₗⱼ ⋅ Δₗⱼ
     Cₖ = 2 * (Δⱼₖ × Δₖₗ) / √(P̄ⱼP̄ₖ * P̄ₖP̄ₗ * P̄ₗP̄ⱼ)
+    return Cₖ
 end
 
 function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2,T}}
