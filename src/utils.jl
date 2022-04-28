@@ -108,49 +108,6 @@ function pretty_time(t)
     end
 end
 
-@with_kw struct DECAESProgress
-    progress_meter::Progress
-    io_buffer::IOBuffer
-    io_lock::ReentrantLock = Threads.ReentrantLock()
-    last_msg::Ref{String} = Ref("")
-end
-
-function DECAESProgress(n::Int, desc::AbstractString; kwargs...)
-    io_buffer = IOBuffer()
-    DECAESProgress(
-        progress_meter = Progress(n; dt = 0.0, desc = desc, color = :cyan, output = io_buffer, barglyphs = BarGlyphs("[=> ]"), kwargs...),
-        io_buffer = io_buffer,
-    )
-end
-
-ProgressMeter.next!(p::DECAESProgress) = (ProgressMeter.next!(p.progress_meter); maybe_print!(p))
-ProgressMeter.finish!(p::DECAESProgress) = (ProgressMeter.finish!(p.progress_meter); maybe_print!(p))
-ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.progress_meter, counter); maybe_print!(p))
-
-function maybe_print!(p::DECAESProgress)
-    # Internal `progress_meter` prints to the IOBuffer `p.io_buffer`; check this buffer for new messages.
-    #   Note: take!(::IOBuffer) is threadsafe
-    new_msg = String(take!(p.io_buffer))
-    if !isempty(new_msg)
-        # Format message
-        new_msg = replace(new_msg, "\r" => "")
-        new_msg = replace(new_msg, "\u1b[K" => "")
-        new_msg = replace(new_msg, "\u1b[A" => "")
-
-        # Update last message
-        last_msg = lock(p.io_lock) do
-            last_msg, p.last_msg[] = p.last_msg[], new_msg
-            return last_msg
-        end
-
-        if !isempty(last_msg)
-            # Don't print first message, as it usually gives a bad time estimate due to precompilation
-            @info new_msg
-            flush(stderr)
-        end
-    end
-end
-
 # Macro for timing arbitrary code snippet and printing time
 macro showtime(msg, ex)
     quote
@@ -203,11 +160,43 @@ default_blocksize() = 64
 # 
 #   See: https://juliafolds.github.io/data-parallelism/tutorials/concurrency-patterns/#worker_pool
 
-function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads())
-    @sync for _ in 1:ntasks
-        Threads.@spawn allocate() do resource
+function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads(), verbose = true, ninputs = nothing)
+    function consumer(callback = () -> nothing)
+        allocate() do resource
             for input in inputs
                 work!(input, resource)
+                callback()
+            end
+        end
+    end
+
+    if ntasks == 1
+        consumer()
+        return
+    end
+
+    if !verbose
+        @sync for _ in 1:ntasks
+            Threads.@spawn consumer()
+        end
+    else
+        count = Threads.Atomic{Int}(0)
+        @withprogress @sync begin
+            for _ in 1:ntasks-1
+                Threads.@spawn consumer() do
+                    count[] += 1
+                end
+            end
+
+            dt = 1.0
+            last_time = time()
+            consumer() do
+                count[] += 1
+                new_time = time()
+                if new_time > last_time + dt
+                    last_time = new_time
+                    @logprogress count[] / ninputs
+                end
             end
         end
     end
@@ -219,22 +208,8 @@ function workerpool(work!, allocate, inputs, args...; kwargs...)
         put!(ch, inds)
     end
     close(ch)
-    workerpool(work!, allocate, ch, args...; kwargs...)
+    workerpool(work!, allocate, ch, args...; ninputs = length(inputs), kwargs...)
 end
-
-#=
-function workerpool(work!, allocate, inputs; ntasks = Threads.nthreads())
-    # Static batching schedule; tends to be slower than dynamic `Channel`-based approach above
-    input_batches = split_indexable(inputs; nbatches = ntasks, basesize = 1)
-    @sync for input_batch in input_batches
-        Threads.@spawn allocate() do resource
-            for input in input_batch
-                work!(input, resource)
-            end
-        end
-    end
-end
-=#
 
 function split_indices(len::Integer, basesize::Integer)
     len′ = Int64(len) # Avoid overflow on 32-bit machines
@@ -267,10 +242,10 @@ end
 
 function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppress_logfile = false)
     logger =
-        suppress_terminal && suppress_logfile ? ConsoleLogger(devnull) :
-        suppress_logfile ? ConsoleLogger(stderr) :
+        suppress_terminal && suppress_logfile ? TerminalLogger(devnull) :    # ConsoleLogger
+        suppress_logfile ? TerminalLogger(stderr) :    # ConsoleLogger
         suppress_terminal ? TimestampLogger(FileLogger(logfile)) :
-        TeeLogger(ConsoleLogger(stderr), TimestampLogger(FileLogger(logfile)))
+        TeeLogger(TerminalLogger(stderr), TimestampLogger(FileLogger(logfile)))    # ConsoleLogger
     with_logger(logger) do
         f()
     end
@@ -384,18 +359,16 @@ function mock_t2parts_opts(::Type{T} = Float64; kwargs...) where {T}
 end
 
 # Mock CPMG image
-function mock_image(o::T2mapOptions{T} = mock_t2map_opts(Float64); kwargs...) where {T}
+function mock_image(o::T2mapOptions{T} = mock_t2map_opts(Float64); SNR = 50, kwargs...) where {T}
     oldseed = Random.seed!(0)
 
     @unpack MatrixSize, TE, nTE = T2mapOptions(o; kwargs...)
-    SNR = T(50)
-    eps = T(10^(-SNR/20))
-
+    σ = exp10(-T(SNR)/20)
     α = o.SetFlipAngle === nothing ? T(165.0) : o.SetFlipAngle
     β = o.RefConAngle === nothing ? T(150.0) : o.RefConAngle
     mag() = T(0.85) .* EPGdecaycurve(nTE, α, TE, T(65e-3), T(1), β) .+
             T(0.15) .* EPGdecaycurve(nTE, α, TE, T(15e-3), T(1), β) # bi-exponential signal with EPG correction
-    noise(m) = abs(m[1]) .* eps .* randn(T, size(m)) # gaussian noise of size SNR relative to signal amplitude
+    noise(m) = abs(m[1]) .* σ .* randn(T, size(m)) # gaussian noise of size SNR relative to signal amplitude
     noiseysignal() = (m = mag(); sqrt.((m .+ noise(m)).^2 .+ noise(m).^2)) # bi-exponential signal with rician noise
 
     M = zeros(T, (MatrixSize..., nTE))

@@ -92,14 +92,10 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
 
     ntasks = opts.Threaded ? Threads.nthreads() : 1
     indices_blocks = split_indices(length(indices), default_blocksize())
-    progmeter = DECAESProgress(length(indices_blocks), "Computing T2-Distribution: "; dt = 5.0)
 
-    workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks) do inds, thread_buffer
+    workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
         @inbounds for j in inds
             voxelwise_T2_distribution!(thread_buffer, maps, distributions, uview(signals, :, j), opts, indices[j])
-        end
-        if !opts.Silent && opts.Progress
-            ProgressMeter.next!(progmeter)
         end
     end
 

@@ -175,7 +175,7 @@ add_arg_group!(CLI_SETTINGS,
 @add_arg_table! CLI_SETTINGS begin
     "--bet"
         action = :store_true
-        help = "use the BET brain extraction tool from the FSL library of analyis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and the --bet flag will be ignored"
+        help = "use the BET brain extraction tool from the FSL library of analysis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and the --bet flag will be ignored"
         group = :bet_args
     "--betargs"
         arg_type = String
