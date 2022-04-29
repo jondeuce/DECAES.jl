@@ -77,14 +77,6 @@ function local_gridsearch(f, xs, i0)
     return (; x, y, i)
 end
 
-function mapfind(f, finder, xs)
-    ys = map(f, xs)
-    y, i = finder(ys)
-    xs[i], y, i
-end
-mapfindmax(f, xs) = mapfind(f, findmax, xs)
-mapfindmin(f, xs) = mapfind(f, findmin, xs)
-
 struct GrowableCache{K,V,C}
     keys::Vector{K}
     values::Vector{V}
@@ -101,6 +93,7 @@ end
 @inline Base.length(c::GrowableCache) = c.length[]
 @inline Base.empty!(c::GrowableCache) = (c.length[] = 0; c)
 @inline Base.isempty(c::GrowableCache) = c.length[] == 0
+@inline Base.pairs(c::GrowableCache) = GrowableCachePairs(c)
 @inline Base.iterate(c::GrowableCache, i = 0) = length(c) <= i ? nothing : @inbounds(((c.keys[i+1], c.values[i+1]), i+1))
 @inline Base.getindex(c::GrowableCache, x) = @inbounds c.values[findfirst(c, x)]
 
@@ -157,13 +150,45 @@ function Base.pushfirst!(c::GrowableCache, (x, v))
     return push!(c, (x, v))
 end
 
+struct GrowableCachePairs{K,V,C} <: AbstractVector{Tuple{K,V}}
+    cache::GrowableCache{K,V,C}
+end
+@inline Base.IndexStyle(::GrowableCachePairs) = IndexLinear()
+@inline Base.size(c::GrowableCachePairs) = (length(c.cache),)
+@inline Base.length(c::GrowableCachePairs) = length(c.cache)
+@inline Base.push!(c::GrowableCachePairs, xv) = push!(c.cache, xv)
+@inline Base.pushfirst!(c::GrowableCachePairs, xv) = pushfirst!(c.cache, xv)
+Base.@propagate_inbounds Base.getindex(c::GrowableCachePairs, i::Int) = (c.cache.keys[i], c.cache.values[i])
+Base.@propagate_inbounds Base.setindex!(c::GrowableCachePairs, (x, v), i::Int) = (c.cache.keys[i] = x; c.cache.values[i] = v; (x, v))
+
 struct CachedFunction{K, V, C <: GrowableCache{K,V}, F}
     f::F
     cache::C
 end
-
+CachedFunction{K,V}(f, args...) where {K,V} = CachedFunction(f, GrowableCache{K,V}(args...))
 @inline (f::CachedFunction)(x) = get!(f.f, f.cache, x)
 @inline Base.empty!(f::CachedFunction) = empty!(f.cache)
+
+struct MappedArray{K,V,N,A<:AbstractArray{K,N},F} <: AbstractArray{V,N}
+    f::F
+    x::A
+    MappedArray(f, x::AbstractArray) = MappedArray{eltype(x)}(f, x)
+    MappedArray{V}(f::F, x::A) where {K,V,N,A<:AbstractArray{K,N},F} = new{K,V,N,A,F}(f, x)
+end
+@inline Base.IndexStyle(::MappedArray) = IndexLinear()
+@inline Base.size(m::MappedArray) = size(m.x)
+@inline Base.setindex!(::MappedArray, v, i...) = error("MappedArray's are read only")
+Base.@propagate_inbounds Base.getindex(m::MappedArray, i::Int) = m.f(m.x[i])
+
+function mapfind(f, finder, ::Type{V}, xs::AbstractArray) where {V}
+    ys = MappedArray{V}(f, xs)
+    y, i = finder(ys)
+    @inbounds(xs[i]), y, i
+end
+mapfind(f, finder, xs::AbstractArray) = mapfind(f, finder, eltype(xs), xs)
+
+mapfindmax(f, args...) = mapfind(f, findmax, args...)
+mapfindmin(f, args...) = mapfind(f, findmin, args...)
 
 ####
 #### Timing utilities

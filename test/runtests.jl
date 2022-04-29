@@ -5,7 +5,7 @@ using DECAES.LinearAlgebra
 using DECAES.NNLS
 using DECAES.Random
 using DECAES.StaticArrays
-using DECAES: GrowableCache, CachedFunction
+using DECAES: GrowableCache, GrowableCachePairs, CachedFunction, MappedArray
 using DECAES: LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction
 using DECAES: lcurve_corner
 

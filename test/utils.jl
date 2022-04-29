@@ -25,6 +25,22 @@
     @test c[1.5] == 3.0
 end
 
+@testset "GrowableCachePairs" begin
+    c = GrowableCache{Float64,Float64}()
+    p = pairs(c)
+    @test p isa GrowableCachePairs
+
+    x, v = rand(5), rand(5)
+    for i in 1:length(x)
+        push!(p, (x[i], v[i]))
+        @test p[i] == (x[i], v[i])
+    end
+    @test c.keys == x && c.values == v
+
+    sort!(p; by = ((x, v),) -> x)
+    @test c.keys == sort(x)
+end
+
 @testset "CachedFunction" begin
     count = Ref(0)
     f_inner(x) = (count[] += 1; x^2)
@@ -49,4 +65,18 @@ end
     @test count[] == 3
     @test length(c.keys) == length(c.values) == 2
     @test c.keys[1] == 2.0 && v == c.values[2] == 4.0
+end
+
+@testset "MappedArray" begin
+    x = [-1, 0, 1, 2]
+    y = [1.0, 0.0, 1.0, 4.0]
+
+    count = Ref(0)
+    f = x -> (count[] += 1; abs2(Float64(x)))
+    m = MappedArray{Float64}(f, x)
+
+    @test count[] == 0 && m == y && count[] == 4 # && is guaranteed to evaluate left-to-right
+    @test m[1] == m[3] == 1.0 && count[] == 6
+    @test DECAES.mapfindmin(f, Float64, x) == (0, 0.0, 2) && count[] == 10
+    @test DECAES.mapfindmax(f, Float64, x) == (2, 4.0, 4) && count[] == 14
 end

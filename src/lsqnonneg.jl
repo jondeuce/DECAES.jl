@@ -93,9 +93,6 @@ function Base.copyto!(B::AbstractMatrix{T}, A::TikhonovPaddedMatrix{T}) where {T
     return B
 end
 
-cache!(cache::AbstractArray, x, f) = cache !== nothing && push!(cache, (; x, f))
-cache!(cache::Dict, x, f) = cache !== nothing && (cache[x] = f)
-
 lin_interp(x, x₁, x₂, y₁, y₂) = y₁ + (y₂ - y₁) * (x - x₁)  / (x₂ - x₁)
 exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x₁)  / (x₂ - x₁))
 
@@ -302,22 +299,20 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
 
     elseif bisection
         # Find bracketing interval containing root, then perform bisection search
-        f = function (logμ)
+        f = CachedFunction{T,T}(0, isapprox) do logμ
             increment_cache_index!(work.nnls_work_smooth_cache)
             return chi2factor_relerr!(get_cache(work.nnls_work_smooth_cache), logμ; χ²target)
         end
-        cache = NamedTuple{(:x, :f), NTuple{2,T}}[]
-        a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6, cache)
-        bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor-1)/100, cache)
+        a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6)
+        bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor-1)/100)
 
         # Spline rootfinding on evaluated points to improve accuracy
-        sort!(cache; by = d -> d.x)
-        logmu_root = spline_root([d.x for d in cache], [d.f for d in cache]; deg_spline = 1)
-        logmu_root !== nothing && !any(d -> d.x ≈ logmu_root, cache) && cache!(cache, logmu_root, f(logmu_root))
+        sort!(pairs(f.cache); by = ((x,f),) -> x)
+        logmu_root = spline_root(keys(f.cache), values(f.cache); deg_spline = 1)
+        logmu_root !== nothing && f(logmu_root)
 
         # Return regularization which minimizes relerr
-        _, i = findmin([abs(d.f) for d in cache])
-        logmu_final, relerr_final = cache[i]
+        (logmu_final, relerr_final), _, _ = mapfindmin(((x,f),) -> abs(f), T, pairs(f.cache))
         mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
         x_final = solve!(work.nnls_work_smooth_cache, mu_final)
 
@@ -445,7 +440,7 @@ end
 #### The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 #### THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8*eps(one(float(real(first(xs))))), maxiters = 1000, cache = nothing)
+function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8*eps(one(float(real(first(xs))))), maxiters = 1000)
     if length(xs) == 1 # secant needs a, b; only a given
         a  = float(xs[1])
         h  = eps(one(real(a)))^(1/3)
@@ -454,13 +449,10 @@ function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8*eps
     else
         a, b = promote(float(xs[1]), float(xs[2]))
     end
-    fa, fb = f(a), f(b)
-    cache!(cache, a, fa)
-    cache!(cache, b, fb)
-    secant(f, a, b, fa, fb; xtol, xrtol, maxiters, cache)
+    secant(f, a, b, f(a), f(b); xtol, xrtol, maxiters)
 end
 
-function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), maxiters = 1000, cache = nothing) where {T}
+function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), maxiters = 1000) where {T}
     # No function change; return arbitrary endpoint
     if fb == fa
         return (a, fa)
@@ -475,7 +467,6 @@ function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), ma
     while cnt < maxiters
         m = b - (b - a) * fb / (fb - fa)
         fm = f(m)
-        cache!(cache, m, fm)
 
         abs(fm) < abs(fbest) && ((mbest, fbest) = (m, fm))
         iszero(fm) && return (m, fm)
@@ -490,21 +481,19 @@ function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), ma
     return (mbest, fbest) # maxiters reached
 end
 
-function bisection_method(f, a::Number, b::Number; xtol = nothing, xrtol = nothing, ftol = nothing, cache = nothing, maxiters = 1000)
+function bisection_method(f, a::Number, b::Number; xtol = nothing, xrtol = nothing, ftol = nothing, maxiters = 1000)
     x₁, x₂ = float.((a,b))
     y₁, y₂ = f(x₁), f(x₂)
-    cache!(cache, x₁, y₁)
-    cache!(cache, x₂, y₂)
 
     T = eltype(x₁)
     xtol = xtol === nothing ? zero(T) : abs(xtol)
     xrtol = xrtol === nothing ? zero(one(T)) : abs(xrtol)
     ftol = ftol === nothing ? zero(T) : abs(ftol)
 
-    bisect(f, x₁, x₂, y₁, y₂; xtol, xrtol, ftol, cache, maxiters)
+    bisect(f, x₁, x₂, y₁, y₂; xtol, xrtol, ftol, maxiters)
 end
 
-function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = zero(one(T)), ftol = zero(T), cache = nothing, maxiters = 1000) where {T}
+function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = zero(one(T)), ftol = zero(T), maxiters = 1000) where {T}
     # No sign change; return arbitrary endpoint
     if y₁ * y₂ >= 0
         return (x₁, y₁)
@@ -516,7 +505,6 @@ function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = z
 
     xₘ = (x₁ + x₂)/2
     yₘ = f(xₘ)
-    cache!(cache, xₘ, yₘ)
 
     cnt = 1
     while cnt < maxiters
@@ -532,7 +520,6 @@ function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = z
 
         xₘ = (x₁ + x₂)/2
         yₘ = f(xₘ)
-        cache!(cache, xₘ, yₘ)
 
         cnt += 1
     end
@@ -540,34 +527,28 @@ function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = z
     return (xₘ, yₘ)
 end
 
-function bracketing_interval(f, a, δ, dilate = 1; maxiters = 1000, cache = nothing)
-    # Initialize cache
+function bracketing_interval(f, a, δ, dilate = 1; maxiters = 1000)
     fa = f(a)
-    cache!(cache, a, fa)
     cnt = 0
     if fa > 0
         b = a - δ
         fb = f(b)
-        cache!(cache, b, fb)
         δ *= dilate
         while fb > 0 && cnt < maxiters
             a, fa = b, fb
             b = a - δ
             fb = f(b)
-            cache!(cache, b, fb)
             δ *= dilate
             cnt += 1
         end
     else
         b = a + δ
         fb = f(b)
-        cache!(cache, b, fb)
         δ *= dilate
         while fb < 0 && cnt < maxiters
             a, fa = b, fb
             b = a + δ
             fb = f(b)
-            cache!(cache, b, fb)
             δ *= dilate
             cnt += 1
         end
@@ -786,10 +767,10 @@ LCurveCornerPoint(P::SVector{2,T}) where {T} = LCurveCornerPoint(P, T(-Inf))
 
 struct LCurveCornerCachedFunction{T, F <: CachedFunction{T, SVector{2,T}}, C1 <: GrowableCache{T, LCurveCornerPoint{T}}, C2 <: GrowableCache{T, LCurveCornerState{T}}}
     f::F
-    cache::C1
+    point_cache::C1
     state_cache::C2
 end
-@inline Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.cache); empty!(f.state_cache); f)
+@inline Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.point_cache); empty!(f.state_cache); f)
 @inline (f::LCurveCornerCachedFunction{T})(x::T) where {T} = f.f(x)
 
 function LCurveCornerState(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
@@ -797,9 +778,7 @@ function LCurveCornerState(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) w
     x₃   = x₁ + (x₄ - x₂)
     x⃗    = SA[x₁, x₂, x₃, x₄]
     P⃗    = SA[f(x₁), f(x₂), f(x₃), f(x₄)]
-    Base.Cartesian.@nexprs 4 i -> begin
-        push!(f.cache, (x⃗[i], LCurveCornerPoint(P⃗[i])))
-    end
+    Base.Cartesian.@nexprs 4 i -> push!(f.point_cache, (x⃗[i], LCurveCornerPoint(P⃗[i])))
     return LCurveCornerState(x⃗, P⃗)
 end
 
@@ -828,7 +807,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
     Pfilter = P -> min(norm(P - Ptopleft), norm(P - Pbottomright)) > T(Ctol)
     update_curvature!(f, state, Pfilter)
 
-    msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [f.cache[x].C for x in state.x⃗])))
+    msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [f.point_cache[x].C for x in state.x⃗])))
     msg("Starting", state)
 
     iter = 0
@@ -836,13 +815,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         iter += 1
         if backtracking
             # Find state with minimum diameter which contains the current best estimate maximum curvature point
-            local x, P, C
-            C = T(-Inf)
-            for (_x, (_P, _C)) in f.cache
-                if _C > C
-                    x, P, C = _x, _P, _C
-                end
-            end
+            (x, (P, C)), _, _ = mapfindmax(((x, (P, C),),) -> C, T, pairs(f.point_cache))
             for (_, s) in f.state_cache
                 if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
                     state = s
@@ -851,7 +824,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         end
 
         # Move state toward region of lower curvature
-        if f.cache[state.x⃗[2]].C > f.cache[state.x⃗[3]].C
+        if f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C
             state = move_left(f, state)
             update_curvature!(f, state, Pfilter)
             msg("C₂ > C₃; moved left", state)
@@ -868,7 +841,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         x = refine!(f, state, Pfilter)
         msg("Converged; refined solution", state)
     else
-        x = f.cache[state.x⃗[2]].C > f.cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
+        x = f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
         msg("Converged", state)
     end
 
@@ -898,21 +871,21 @@ function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCorner
         if Pfilter === nothing || Pfilter(P)
             if global_search
                 # Search for maximum curvature over all neighbours
-                for (x₋, (P₋, _)) in f.cache, (x₊, (P₊, _)) in f.cache
+                for (x₋, (P₋, _)) in f.point_cache, (x₊, (P₊, _)) in f.point_cache
                     (x₋ < x⃗[i] < x₊) && (C = max(C, menger(P₋, P, P₊)))
                 end
             else
                 # Compute curvature from nearest neighbours
                 x₋, x₊ = T(-Inf), T(+Inf)
                 P₋, P₊ = P, P
-                for (_x, (_P, _)) in f.cache
+                for (_x, (_P, _)) in pairs(f.point_cache)
                     (x₋ < _x < x ) && ((x₋, P₋) = (_x, _P))
                     (x  < _x < x₊) && ((x₊, P₊) = (_x, _P))
                 end
                 C = menger(P₋, P, P₊)
             end
         end
-        f.cache[x] = LCurveCornerPoint(P, C)
+        f.point_cache[x] = LCurveCornerPoint(P, C)
     end
     return state
 end
@@ -922,12 +895,12 @@ function refine!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, 
     if analytical
         x_opt, _, _ = maximize_curvature(state)
     else
-        C_spl = make_spline(state.x⃗, [-f.cache[x].C for x in state.x⃗])
+        C_spl = make_spline(state.x⃗, [-f.point_cache[x].C for x in state.x⃗])
         x_opt, _ = spline_opt(C_spl)
     end
     _ = f(x_opt)
     update_curvature!(f, state, Pfilter)
-    (x_opt, (_, _)), _, _ = mapfindmax(((x, (P, C)),) -> C, f.cache)
+    (x_opt, (_, _)), _, _ = mapfindmax(((x, (P, C)),) -> C, T, pairs(f.point_cache))
     return x_opt
 end
 
