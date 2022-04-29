@@ -188,10 +188,53 @@ function pretty_time(t)
     end
 end
 
+@with_kw struct DECAESProgress
+    progress_meter::Progress
+    io_buffer::IOBuffer
+    io_lock::ReentrantLock = Threads.ReentrantLock()
+    last_msg::Ref{String} = Ref("")
+end
+
+function DECAESProgress(n::Int, desc::AbstractString = ""; kwargs...)
+    io_buffer = IOBuffer()
+    DECAESProgress(
+        progress_meter = Progress(n; dt = 0.0, desc = desc, color = :cyan, output = io_buffer, barglyphs = BarGlyphs("[=> ]"), kwargs...),
+        io_buffer = io_buffer,
+    )
+end
+
+ProgressMeter.next!(p::DECAESProgress) = (ProgressMeter.next!(p.progress_meter); maybe_print!(p))
+ProgressMeter.finish!(p::DECAESProgress) = (ProgressMeter.finish!(p.progress_meter); maybe_print!(p))
+ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.progress_meter, counter); maybe_print!(p))
+
+function maybe_print!(p::DECAESProgress)
+    # Internal `progress_meter` prints to the IOBuffer `p.io_buffer`; check this buffer for new messages.
+    #   Note: take!(::IOBuffer) is threadsafe
+    new_msg = String(take!(p.io_buffer))
+    if !isempty(new_msg)
+        # Format message
+        new_msg = replace(new_msg, "\r" => "")
+        new_msg = replace(new_msg, "\u1b[K" => "")
+        new_msg = replace(new_msg, "\u1b[A" => "")
+
+        # Update last message
+        last_msg = lock(p.io_lock) do
+            last_msg, p.last_msg[] = p.last_msg[], new_msg
+            return last_msg
+        end
+
+        if !isempty(last_msg)
+            # Don't print first message, as it usually gives a bad time estimate due to precompilation
+            @info new_msg
+            flush(stderr)
+        end
+    end
+end
+
 # Macro for timing arbitrary code snippet and printing time
 macro showtime(msg, ex)
     quote
-        @info $(esc(msg)) * " ..."
+        @info $(esc(msg))
         local t = time()
         local val = $(esc(ex))
         local t = time() - t
@@ -259,25 +302,25 @@ function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads(
             end
         end
     else
+        progmeter = DECAESProgress(ninputs)
         count = Threads.Atomic{Int}(0)
-        @withprogress @sync begin
+
+        @sync begin
             for _ in 1:ntasks-1
-                Threads.@spawn consumer() do
-                    count[] += 1
-                end
+                Threads.@spawn consumer(() -> count[] += 1)
             end
 
             dt = 1.0
-            last_time = time()
+            last_time = Ref(time())
             consumer() do
                 count[] += 1
-                new_time = time()
-                if new_time > last_time + dt
-                    last_time = new_time
-                    @logprogress count[] / ninputs
+                if (new_time = time()) > last_time[] + dt
+                    ProgressMeter.update!(progmeter, count[])
+                    last_time[] = new_time
                 end
             end
         end
+        ProgressMeter.finish!(progmeter)
     end
 end
 
@@ -321,10 +364,10 @@ end
 
 function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppress_logfile = false)
     logger =
-        suppress_terminal && suppress_logfile ? TerminalLogger(devnull) :
-        suppress_logfile ? TerminalLogger(stderr) :
+        suppress_terminal && suppress_logfile ? ConsoleLogger(devnull) :
+        suppress_logfile ? ConsoleLogger(stderr) :
         suppress_terminal ? TimestampLogger(FileLogger(logfile)) :
-        TeeLogger(TerminalLogger(stderr), TimestampLogger(FileLogger(logfile)))
+        TeeLogger(ConsoleLogger(stderr), TimestampLogger(FileLogger(logfile)))
     with_logger(logger) do
         f()
     end

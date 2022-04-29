@@ -76,7 +76,7 @@ end
 end
 
 Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Parts) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Parts) if getfield(maps, f) !== nothing])
-Base.convert(::Type{Dict{String, Any}}, maps::T2Parts) = Dict{String, Any}(string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps))
+Base.convert(::Type{Dict{String, Any}}, maps::T2Parts) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
 
 function T2Parts(opts::T2partOptions{T}) where {T}
     T2Parts(;

@@ -132,7 +132,7 @@ end
 end
 
 Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Maps) if getfield(maps, f) !== nothing])
-Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps))
+Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
 
 function T2Maps(opts::T2mapOptions{T}) where {T}
     thread_buffer = thread_buffer_maker(opts)
