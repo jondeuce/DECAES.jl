@@ -321,10 +321,10 @@ end
 function runtime = try_find_julia_runtime()
 
     % Cached julia runtime location
-    persistent JULIA_BINDIR
+    persistent JULIA_RUNTIME
 
-    if ~isempty(JULIA_BINDIR)
-        runtime = JULIA_BINDIR;
+    if ~isempty(JULIA_RUNTIME)
+        runtime = JULIA_RUNTIME;
         return
     end
 
@@ -341,16 +341,19 @@ function runtime = try_find_julia_runtime()
         runtime = 'julia'; % default value
     end
 
-    % Try calling Julia to cache Sys.BINDIR
+    % Try calling Julia
     jl_sys_bindir = tempname;
     cleanup_fid = onCleanup(@() delete([jl_sys_bindir, '*']));
+
     cmd = sprintf('%s --startup-file=no --quiet -e ''open(raw"%s"; write = true) do io; print(io, joinpath(Base.Sys.BINDIR, Base.julia_exename())); end''', runtime, jl_sys_bindir);
     [st, ~] = system(cmd);
 
     if st == 0
         runtime = strtrim(fileread(jl_sys_bindir));
     end
-    JULIA_BINDIR = runtime;
+
+    % Cache julia runtime path
+    JULIA_RUNTIME = runtime;
 
 end
 
@@ -408,11 +411,15 @@ function [opts, decaes_args] = parse_args(varargin)
 
     % Parse Matlab inputs
     p = inputParser;
-    addParameter(p, 'runtime', try_find_julia_runtime, @ischar);
+    addParameter(p, 'runtime', '', @ischar);
     addParameter(p, 'threads', 'auto', @(x) strcmpi(x, 'auto') || ~isnan(check_positive_int(x)));
     addParameter(p, 'project', default_project, @ischar);
     addParameter(p, 'server', false, @islogical);
     parse(p, mat_args{:});
     opts = p.Results;
+
+    if isempty(opts.runtime)
+        opts.runtime = try_find_julia_runtime;
+    end
 
 end
