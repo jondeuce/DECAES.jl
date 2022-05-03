@@ -839,6 +839,15 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
     return x
 end
 
+function intial_state(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
+    x₂   = (T(φ) * x₁ + x₄) / (T(φ) + 1)
+    x₃   = x₁ + (x₄ - x₂)
+    x⃗    = SA[x₁, x₂, x₃, x₄]
+    P⃗    = SA[f(x₁), f(x₂), f(x₃), f(x₄)]
+    Base.Cartesian.@nexprs 4 i -> push!(f.point_cache, (x⃗[i], LCurveCornerPoint(P⃗[i])))
+    return LCurveCornerState(x⃗, P⃗)
+end
+
 is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x⃗[1]) < xtol || norm(state.P⃗[1] - state.P⃗[4]) < Ptol
 
 function move_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
