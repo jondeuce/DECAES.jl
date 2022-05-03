@@ -729,16 +729,17 @@ lsqnonneg_lcurve_work(C, d) = NNLSLCurveRegProblem(C, d)
 function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_work_smooth_cache)
-    empty!(work.lsqnonneg_lcurve_fun_cache)
-    empty!.(work.lcurve_corner_caches)
 
-    f = CachedFunction(work.lsqnonneg_lcurve_fun_cache) do logμ
+    function f_lcurve(logμ)
         solve!(work.nnls_work_smooth_cache, exp(logμ))
         ξ = log(resnorm(get_cache(work.nnls_work_smooth_cache)))
         η = log(seminorm(get_cache(work.nnls_work_smooth_cache)))
         return SA{T}[ξ, η]
     end
-    f = LCurveCornerCachedFunction(f, work.lcurve_corner_caches...)
+
+    # Build cached function and solve
+    f_lcurve_cached = CachedFunction(f_lcurve, empty!(work.lsqnonneg_lcurve_fun_cache))
+    f = LCurveCornerCachedFunction(f_lcurve_cached, empty!.(work.lcurve_corner_caches)...)
 
     logmu_bounds = (T(-8), T(2))
     logmu_final = lcurve_corner(f, logmu_bounds...)
@@ -773,15 +774,6 @@ end
 @inline Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.point_cache); empty!(f.state_cache); f)
 @inline (f::LCurveCornerCachedFunction{T})(x::T) where {T} = f.f(x)
 
-function LCurveCornerState(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
-    x₂   = (T(φ) * x₁ + x₄) / (T(φ) + 1)
-    x₃   = x₁ + (x₄ - x₂)
-    x⃗    = SA[x₁, x₂, x₃, x₄]
-    P⃗    = SA[f(x₁), f(x₂), f(x₃), f(x₄)]
-    Base.Cartesian.@nexprs 4 i -> push!(f.point_cache, (x⃗[i], LCurveCornerPoint(P⃗[i])))
-    return LCurveCornerState(x⃗, P⃗)
-end
-
 """
     lcurve_corner(f, xlow, xhigh)
 
@@ -792,7 +784,7 @@ IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
 function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, refine = false, backtracking = true, verbose = false) where {T}
     # Initialize state
-    state = LCurveCornerState(f, T(xlow), T(xhigh))
+    state = intial_state(f, T(xlow), T(xhigh))
 
     # Tolerances are relative to initial curve size
     Ptopleft, Pbottomright = state.P⃗[1], state.P⃗[4]
@@ -871,7 +863,7 @@ function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCorner
         if Pfilter === nothing || Pfilter(P)
             if global_search
                 # Search for maximum curvature over all neighbours
-                for (x₋, (P₋, _)) in f.point_cache, (x₊, (P₊, _)) in f.point_cache
+                for (x₋, (P₋, _)) in pairs(f.point_cache), (x₊, (P₊, _)) in pairs(f.point_cache)
                     (x₋ < x⃗[i] < x₊) && (C = max(C, menger(P₋, P, P₊)))
                 end
             else

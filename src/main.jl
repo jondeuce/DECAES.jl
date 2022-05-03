@@ -110,7 +110,9 @@ add_arg_group!(CLI_SETTINGS,
         help = "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold. (default: 0.0) (units: signal magnitude)"
         group = :t2_map_part_optional
     "--Progress"
-        action = :store_true
+        action = :store_const # deprecated flags use :store_const with default value nothing (instead of :store_true with default value false)
+        constant = true
+        default = nothing
         help = "Print progress updates during T2 distribution computation. Note: this flag is now deprecated; progress updates are always printed unless the --quiet flag is passed"
         group = :t2_map_part_optional
 end

@@ -156,6 +156,8 @@ end
 @inline Base.IndexStyle(::GrowableCachePairs) = IndexLinear()
 @inline Base.size(c::GrowableCachePairs) = (length(c.cache),)
 @inline Base.length(c::GrowableCachePairs) = length(c.cache)
+@inline Base.empty!(c::GrowableCachePairs) = (empty!(c.cache); c)
+@inline Base.isempty(c::GrowableCachePairs) = isempty(c.cache)
 @inline Base.push!(c::GrowableCachePairs, xv) = push!(c.cache, xv)
 @inline Base.pushfirst!(c::GrowableCachePairs, xv) = pushfirst!(c.cache, xv)
 Base.@propagate_inbounds Base.getindex(c::GrowableCachePairs, i::Int) = (c.cache.keys[i], c.cache.values[i])
@@ -167,7 +169,7 @@ struct CachedFunction{K, V, C <: GrowableCache{K,V}, F}
 end
 CachedFunction{K,V}(f, args...) where {K,V} = CachedFunction(f, GrowableCache{K,V}(args...))
 @inline (f::CachedFunction)(x) = get!(f.f, f.cache, x)
-@inline Base.empty!(f::CachedFunction) = empty!(f.cache)
+@inline Base.empty!(f::CachedFunction) = (empty!(f.cache); f)
 
 struct MappedArray{K,V,N,A<:AbstractArray{K,N},F} <: AbstractArray{V,N}
     f::F
@@ -177,8 +179,9 @@ struct MappedArray{K,V,N,A<:AbstractArray{K,N},F} <: AbstractArray{V,N}
 end
 @inline Base.IndexStyle(::MappedArray) = IndexLinear()
 @inline Base.size(m::MappedArray) = size(m.x)
-@inline Base.setindex!(::MappedArray, v, i...) = error("MappedArray's are read only")
+
 Base.@propagate_inbounds Base.getindex(m::MappedArray, i::Int) = m.f(m.x[i])
+Base.setindex!(::MappedArray, v, i...) = error("MappedArray's are read only")
 
 function mapfind(f, finder, ::Type{V}, xs::AbstractArray) where {V}
     ys = MappedArray{V}(f, xs)
@@ -308,7 +311,7 @@ default_blocksize() = 64
 # 
 #   See: https://juliafolds.github.io/data-parallelism/tutorials/concurrency-patterns/#worker_pool
 
-function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads(), verbose = false, ninputs = nothing)
+function workerpool(work!, allocate, inputs::Channel; ninputs::Int, ntasks::Int = Threads.nthreads(), verbose::Bool = false)
     function consumer(callback = () -> nothing)
         allocate() do resource
             for input in inputs
@@ -335,7 +338,7 @@ function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads(
                 Threads.@spawn consumer(() -> count[] += 1)
             end
 
-            dt = 1.0
+            dt = 5.0
             last_time = Ref(time())
             consumer() do
                 count[] += 1
@@ -345,6 +348,7 @@ function workerpool(work!, allocate, inputs::Channel; ntasks = Threads.nthreads(
                 end
             end
         end
+
         ProgressMeter.finish!(progmeter)
     end
 end

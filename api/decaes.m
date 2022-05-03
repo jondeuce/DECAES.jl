@@ -344,7 +344,7 @@ function runtime = try_find_julia_runtime()
     % Try calling Julia to cache Sys.BINDIR
     jl_sys_bindir = tempname;
     cleanup_fid = onCleanup(@() delete([jl_sys_bindir, '*']));
-    cmd = sprintf('%s --startup-file=no --quiet -e ''open(raw"%s"; write = true) do io; print(io, joinpath(Base.Sys.BINDIR, "julia")); end''', runtime, jl_sys_bindir);
+    cmd = sprintf('%s --startup-file=no --quiet -e ''open(raw"%s"; write = true) do io; print(io, joinpath(Base.Sys.BINDIR, Base.julia_exename())); end''', runtime, jl_sys_bindir);
     [st, ~] = system(cmd);
 
     if st == 0
