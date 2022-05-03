@@ -77,6 +77,6 @@ end
 
     @test count[] == 0 && m == y && count[] == 4 # && is guaranteed to evaluate left-to-right
     @test m[1] == m[3] == 1.0 && count[] == 6
-    @test DECAES.mapfindmin(f, Float64, x) == (0, 0.0, 2) && count[] == 10
-    @test DECAES.mapfindmax(f, Float64, x) == (2, 4.0, 4) && count[] == 14
+    @test DECAES.mapfindmin(Float64, f, x) == (0, 0.0, 2) && count[] == 10
+    @test DECAES.mapfindmax(Float64, f, x) == (2, 4.0, 4) && count[] == 14
 end

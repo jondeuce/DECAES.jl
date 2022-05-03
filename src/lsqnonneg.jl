@@ -312,7 +312,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
         logmu_root !== nothing && f(logmu_root)
 
         # Return regularization which minimizes relerr
-        (logmu_final, relerr_final), _, _ = mapfindmin(((x, f),) -> abs(f), T, pairs(f.cache))
+        (logmu_final, relerr_final), _, _ = mapfindmin(T, ((x, f),) -> abs(f), pairs(f.cache))
         mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
         x_final = solve!(work.nnls_work_smooth_cache, mu_final)
 
@@ -783,7 +783,7 @@ IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
 function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, refine = false, backtracking = true, verbose = false) where {T}
     # Initialize state
-    state = intial_state(f, T(xlow), T(xhigh))
+    state = initial_state(f, T(xlow), T(xhigh))
 
     # Tolerances are relative to initial curve size
     Ptopleft, Pbottomright = state.P⃗[1], state.P⃗[4]
@@ -806,7 +806,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         iter += 1
         if backtracking
             # Find state with minimum diameter which contains the current best estimate maximum curvature point
-            (x, (P, C)), _, _ = mapfindmax(((x, (P, C),),) -> C, T, pairs(f.point_cache))
+            (x, (P, C)), _, _ = mapfindmax(T, ((x, (P, C),),) -> C, pairs(f.point_cache))
             for (_, s) in f.state_cache
                 if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
                     state = s
@@ -839,7 +839,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
     return x
 end
 
-function intial_state(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
+function initial_state(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
     x₂   = (T(φ) * x₁ + x₄) / (T(φ) + 1)
     x₃   = x₁ + (x₄ - x₂)
     x⃗    = SA[x₁, x₂, x₃, x₄]
@@ -900,7 +900,7 @@ function refine!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, 
     end
     _ = f(x_opt)
     update_curvature!(f, state, Pfilter)
-    (x_opt, (_, _)), _, _ = mapfindmax(((x, (P, C)),) -> C, T, pairs(f.point_cache))
+    (x_opt, (_, _)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
     return x_opt
 end
 

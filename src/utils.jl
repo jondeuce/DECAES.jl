@@ -183,15 +183,14 @@ end
 Base.@propagate_inbounds Base.getindex(m::MappedArray, i::Int) = m.f(m.x[i])
 Base.setindex!(::MappedArray, v, i...) = error("MappedArray's are read only")
 
-function mapfind(f, finder, ::Type{V}, xs::AbstractArray) where {V}
-    ys = MappedArray{V}(f, xs)
-    y, i = finder(ys)
-    @inbounds(xs[i]), y, i
+function mapfind(finder, m::MappedArray)
+    y, i = finder(m)
+    @inbounds(m.x[i]), y, i
 end
-mapfind(f, finder, xs::AbstractArray) = mapfind(f, finder, eltype(xs), xs)
-
-mapfindmax(f, args...) = mapfind(f, findmax, args...)
-mapfindmin(f, args...) = mapfind(f, findmin, args...)
+@inline mapfindmax(m::MappedArray) = mapfind(findmax, m)
+@inline mapfindmin(m::MappedArray) = mapfind(findmin, m)
+@inline mapfindmax(::Type{V}, f, xs::AbstractArray) where {V} = mapfindmax(MappedArray{V}(f, xs))
+@inline mapfindmin(::Type{V}, f, xs::AbstractArray) where {V} = mapfindmin(MappedArray{V}(f, xs))
 
 ####
 #### Timing utilities
