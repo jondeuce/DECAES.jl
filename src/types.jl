@@ -117,7 +117,7 @@ function show_string(o::T2mapOptions)
     padlen = 1 + maximum(f -> length(string(f)), fields)
     for f in fields
         (f == :vTEparam) && continue # skip
-        print(io, "\n* $(lpad(rpad(f, padlen), padlen)): $(getfield(o,f))")
+        print(io, "\n* $(lpad(rpad(f, padlen), padlen)): $(getfield(o, f))")
     end
     return String(take!(io))
 end
@@ -193,7 +193,7 @@ function show_string(o::T2partOptions)
     fields = fields[sortperm(uppercase.(string.(fields)))] # sort alphabetically
     padlen = 1 + maximum(f -> length(string(f)), fields)
     for f in fields
-        print(io, "\n* $(lpad(rpad(f, padlen), padlen)): $(getfield(o,f))")
+        print(io, "\n* $(lpad(rpad(f, padlen), padlen)): $(getfield(o, f))")
     end
     return String(take!(io))
 end

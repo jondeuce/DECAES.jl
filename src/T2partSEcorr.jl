@@ -17,7 +17,7 @@ Analyzes T2 distributions produced by [`T2mapSEcorr`](@ref) to produce data maps
 
 # Examples
 ```julia-repl
-julia> dist = DECAES.mock_T2_dist(MatrixSize = (100,100,1), nT2 = 40); # mock distribution with size 100x100x1x40
+julia> dist = DECAES.mock_T2_dist(MatrixSize = (100, 100, 1), nT2 = 40); # mock distribution with size 100x100x1x40
 
 julia> maps = T2partSEcorr(dist; T2Range = (10e-3, 2.0), SPWin = (10e-3, 25e-3), MPWin = (25e-3, 200e-3), Silent = true); # compute T2-parts maps
 

@@ -128,7 +128,7 @@ pulse sequence.
 # Outputs
 - `decay_curve::AbstractVector`: normalized echo decay curve with length `ETL`
 """
-@inline EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions{floattype((α,TE,T2,T1,β)),ETL}((α,TE,T2,T1,β)))
+@inline EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions{floattype((α, TE, T2, T1, β)), ETL}((α, TE, T2, T1, β)))
 @inline EPGdecaycurve(θ::EPGParameterization{T,ETL}) where {T,ETL} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
 @inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, args::Real...) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, EPGParameterization{T,ETL}(args...))
 @inline EPGdecaycurve!(work::AbstractEPGWorkspace{T,ETL}, θ::EPGParameterization{T,ETL}) where {T,ETL} = EPGdecaycurve!(decaycurve(work), work, θ)
@@ -972,23 +972,23 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, θ::E
         ###########################
         # Unroll first flipmat/relaxmat iteration
         Vx, Vy  = MPSV[1], MPSV[2]
-        c1z     = shufflevector(c1F * Mz3, Val((1,0)))
+        c1z     = shufflevector(c1F * Mz3, Val((1, 0)))
         Mz2     = muladd(c3, Vx, muladd(c4, Vy, -c1z)) # flipmat: 2 -> dc
         Mz4     = muladd(b4, Vx, muladd(b3, Vy, E2_half * c1z)) # relaxmat: 1 -> 4, save in buffer
         dc[i]   = sqrt(sum(Mz2 * Mz2)) # decay curve coefficient
         MPSV[1] = E2_half * Mz2 # relaxmat: 2 -> 1
-        b5xy    = shufflevector(b5F * (Vx - Vy), Val((1,0)))
+        b5xy    = shufflevector(b5F * (Vx - Vy), Val((1, 0)))
         Mz3     = muladd(b2, Mz3, b5xy) # relaxmat: 3 -> 3, save in buffer
 
         ###########################
         # flipmat + relaxmat loop
         @inbounds for j in 4:3:3*min(i-1, ETL)
             Vx, Vy, Vz = MPSV[j], MPSV[j+1], MPSV[j+2]
-            b1z        = shufflevector(b1F * Vz, Val((1,0)))
+            b1z        = shufflevector(b1F * Vz, Val((1, 0)))
             MPSV[j  ]  = Mz4 # relaxmat: assign forward, j -> j+3
             Mz4        = muladd(b4, Vx, muladd(b3, Vy,  b1z))
             MPSV[j-2]  = muladd(b3, Vx, muladd(b4, Vy, -b1z)) # relaxmat: assign backwards, j+1 -> j+1-3
-            b5xy       = shufflevector(b5F * (Vx - Vy), Val((1,0)))
+            b5xy       = shufflevector(b5F * (Vx - Vy), Val((1, 0)))
             MPSV[j+2]  = muladd(b2, Vz, b5xy) # relaxmat: j+2 -> j+2
         end
 
@@ -998,7 +998,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, θ::E
         Vx        = MPSV[j]
         MPSV[j  ] = Mz4 # relaxmat: assign forward, j -> j+3
         MPSV[j-2] = b3 * Vx # relaxmat: assign backwards, j+1 -> j+1-3
-        MPSV[j+2] = shufflevector(b5F * Vx, Val((1,0))) # relaxmat: j+2 -> j+2
+        MPSV[j+2] = shufflevector(b5F * Vx, Val((1, 0))) # relaxmat: j+2 -> j+2
         MPSV[j+3] = b4 * Vx # relaxmat: assign forward, j -> j+3
         MPSV[j+1] = Vec((zero(T), zero(T))) # relaxmat: assign backwards, j+1 -> j+1-3
         MPSV[j+5] = Vec((zero(T), zero(T))) # relaxmat: j+2 -> j+2
@@ -1007,7 +1007,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, θ::E
     ###########################
     # decay curve coefficient
     @inbounds begin
-        c1z     = shufflevector(c1F * Mz3, Val((1,0)))
+        c1z     = shufflevector(c1F * Mz3, Val((1, 0)))
         Mz2     = muladd(c3, MPSV[1], muladd(c4, MPSV[2], -c1z)) # last iteration of flipmat unrolled
         dc[end] = sqrt(sum(Mz2 * Mz2))
     end

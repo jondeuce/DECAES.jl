@@ -76,7 +76,7 @@ function construct_args(paramdict;
 
     if legacy
         # Add legacy default options to paramdict
-        for (k,v) in legacy_default_paramdict
+        for (k, v) in legacy_default_paramdict
             if k ∉ keys(paramdict)
                 paramdict[k] = v
             end
@@ -175,7 +175,7 @@ field_error_string(x, y) = "max val = $(maximum(abs, y)), max diff = $(maximum(a
 function test_field!(allpassed, x, y, prefix = "failed:"; kwargs...)
     passed = isapprox(x, y; kwargs..., nans = true)
     allpassed[] &= passed
-    !passed && println(prefix * " (" * field_error_string(x,y) * ")")
+    !passed && println(prefix * " (" * field_error_string(x, y) * ")")
     @test passed
 end
 
@@ -312,7 +312,7 @@ matlabify(x::AbstractArray) = Float64.(x)
 matlabify(x::Tuple) = [Float64.(x)...]
 matlabify(x::Bool) = x
 matlabify(x) = map(Float64, x)
-matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k,v) in kwargs if v !== nothing])
+matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k, v) in kwargs if v !== nothing])
 
 mfile_exists(fname) = MATLAB.mxcall(:exist, 1, fname) == 2
 

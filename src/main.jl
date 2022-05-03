@@ -385,7 +385,7 @@ end
 function t2map_options(image::Array, opts::Dict{Symbol,Any})
     fields = fieldsof(T2mapOptions, Set)
     kwargs = Dict{Symbol,Any}()
-    for (k,v) in opts
+    for (k, v) in opts
         (v === nothing) && continue # filter unset cli args
         (v isa AbstractVector && isempty(v)) && continue # filter unset cli args (empty vectors are unset cli varargs)
         (k ∉ fields) && continue # filter T2mapOptions fields
@@ -397,7 +397,7 @@ end
 function t2part_options(dist::Array, opts::Dict{Symbol,Any})
     fields = fieldsof(T2partOptions, Set)
     kwargs = Dict{Symbol,Any}()
-    for (k,v) in opts
+    for (k, v) in opts
         (v === nothing) && continue # filter unset cli args
         (v isa AbstractVector && isempty(v)) && continue # filter unset cli args (empty vectors are unset cli varargs)
         (k === :nT2 && !opts[:T2map]) && continue # nT2 must be explicitly passed, unless not performing T2-mapping, in which case it is inferred from `dist`

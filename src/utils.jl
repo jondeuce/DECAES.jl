@@ -220,7 +220,7 @@ end
     progress_meter::Progress
     io_buffer::IOBuffer
     io_lock::ReentrantLock = Threads.ReentrantLock()
-    last_msg::Ref{String} = Ref("")
+    last_msg::Base.RefValue{String} = Ref("")
 end
 
 function DECAESProgress(n::Int, desc::AbstractString = ""; kwargs...)
@@ -282,7 +282,7 @@ end
 # Updated according to suggestions from the folks at DataFrames.jl:
 # 
 #   https://github.com/jondeuce/DECAES.jl/issues/37
-function tforeach(f, x::AbstractArray; blocksize::Integer = default_blocksize())
+function tforeach(f, x::AbstractArray; blocksize::Int = default_blocksize())
     nt = Threads.nthreads()
     len = length(x)
     if nt > 1 && len > blocksize
@@ -362,13 +362,13 @@ function workerpool(work!, allocate, inputs, args...; kwargs...)
     workerpool(work!, allocate, ch, args...; ninputs = length(inputs), kwargs...)
 end
 
-function split_indices(len::Integer, basesize::Integer)
+function split_indices(len::Int, basesize::Int)
     len′ = Int64(len) # Avoid overflow on 32-bit machines
     np = max(1, div(len′, basesize))
     return collect(Int(1 + ((i - 1) * len′) ÷ np) : Int((i * len′) ÷ np) for i in 1:np)
 end
 
-function split_indexable(r; basesize::Integer, nbatches::Integer)
+function split_indexable(r; basesize::Int, nbatches::Int)
     if length(r) <= basesize
         return [r]
     elseif length(r) <= basesize * nbatches
@@ -486,7 +486,7 @@ end
 
 function mock_t2map_opts(::Type{T} = Float64; kwargs...) where {T}
     T2mapOptions{T}(;
-        MatrixSize = (2,2,2),
+        MatrixSize = (2, 2, 2),
         TE = 10e-3,
         nTE = 32,
         T2Range = (10e-3, 2.0),
@@ -500,7 +500,7 @@ end
 
 function mock_t2parts_opts(::Type{T} = Float64; kwargs...) where {T}
     T2partOptions{T}(;
-        MatrixSize = (2,2,2),
+        MatrixSize = (2, 2, 2),
         nT2 = 40,
         T2Range = (10e-3, 2.0),
         SPWin = (10e-3, 40e-3),
@@ -538,7 +538,7 @@ end
 
 # Simple benchmark
 function mock_t2map_benchmark(; plot = false, kwargs...)
-    t2map_opts = mock_t2map_opts(; MatrixSize = (64,64,64), SetFlipAngle = 165.0, RefConAngle = 180.0, SaveResidualNorm = true, kwargs...)
+    t2map_opts = mock_t2map_opts(; MatrixSize = (64, 64, 64), SetFlipAngle = 165.0, RefConAngle = 180.0, SaveResidualNorm = true, kwargs...)
     t2part_opts = T2partOptions(t2map_opts; SPWin = (t2map_opts.T2Range[1], 40e-3), MPWin = (40e-3, t2map_opts.T2Range[2]))
 
     image = mock_image(t2map_opts)

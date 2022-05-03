@@ -32,7 +32,7 @@ Records parameter maps and T2 distributions for further partitioning.
 
 # Examples
 ```julia-repl
-julia> image = DECAES.mock_image(MatrixSize = (100,100,1), nTE = 32); # mock image with size 100x100x1x32
+julia> image = DECAES.mock_image(MatrixSize = (100, 100, 1), nTE = 32); # mock image with size 100x100x1x32
 
 julia> maps, dist = T2mapSEcorr(image; TE = 10e-3, nT2 = 40, T2Range = (10e-3, 2.0), Reg = "lcurve", Silent = true); # compute the T2-maps and T2-distribution
 

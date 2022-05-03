@@ -76,7 +76,7 @@ struct TikhonovPaddedMatrix{T, MC <: AbstractMatrix{T}} <: AbstractMatrix{T}
     μ::Base.RefValue{T}
 end
 TikhonovPaddedMatrix(C::AbstractMatrix, μ) = TikhonovPaddedMatrix(C, Ref(μ))
-Base.size(A::TikhonovPaddedMatrix) = ((m,n) = size(A.C); return (m+n,n))
+Base.size(A::TikhonovPaddedMatrix) = ((m, n) = size(A.C); return (m+n, n))
 
 function Base.copyto!(B::AbstractMatrix{T}, A::TikhonovPaddedMatrix{T}) where {T}
     @assert size(A) == size(B)
@@ -307,12 +307,12 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
         bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor-1)/100)
 
         # Spline rootfinding on evaluated points to improve accuracy
-        sort!(pairs(f.cache); by = ((x,f),) -> x)
+        sort!(pairs(f.cache); by = ((x, f),) -> x)
         logmu_root = spline_root(keys(f.cache), values(f.cache); deg_spline = 1)
         logmu_root !== nothing && f(logmu_root)
 
         # Return regularization which minimizes relerr
-        (logmu_final, relerr_final), _, _ = mapfindmin(((x,f),) -> abs(f), T, pairs(f.cache))
+        (logmu_final, relerr_final), _, _ = mapfindmin(((x, f),) -> abs(f), T, pairs(f.cache))
         mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
         x_final = solve!(work.nnls_work_smooth_cache, mu_final)
 
@@ -482,13 +482,13 @@ function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), ma
 end
 
 function bisection_method(f, a::Number, b::Number; xtol = nothing, xrtol = nothing, ftol = nothing, maxiters = 1000)
-    x₁, x₂ = float.((a,b))
+    T = promote_type(typeof(float(a)), typeof(float(b)))
+    x₁, x₂ = T(a), T(b)
     y₁, y₂ = f(x₁), f(x₂)
 
-    T = eltype(x₁)
-    xtol = xtol === nothing ? zero(T) : abs(xtol)
-    xrtol = xrtol === nothing ? zero(one(T)) : abs(xrtol)
-    ftol = ftol === nothing ? zero(T) : abs(ftol)
+    xtol = xtol === nothing ? zero(T) : T(xtol)
+    xrtol = xrtol === nothing ? zero(one(T)) : T(xrtol)
+    ftol = ftol === nothing ? zero(T) : T(ftol)
 
     bisect(f, x₁, x₂, y₁, y₂; xtol, xrtol, ftol, maxiters)
 end
@@ -595,7 +595,6 @@ function brent(
 
         Δx_tol = xrtol * abs(xᵒᵖᵗ) + xtol
         if abs(xᵒᵖᵗ - xₘ) + (x₂ - x₁)/2 <= 2*Δx_tol
-        # if abs(xᵒᵖᵗ - xᵒᵖᵗ_old) <= Δx_tol
             converged = true
             break
         end
@@ -1067,7 +1066,7 @@ function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2,T}}
     # Kahan's method for computing the angle between v₁ and v₂.
     #   see: https://scicomp.stackexchange.com/a/27694
     a, b, c = norm(v₁), norm(v₂), norm(v₁ - v₂)
-    a, b = max(a,b), min(a,b)
+    a, b = max(a, b), min(a, b)
     μ = b ≥ c ? c - (a - b) : (b - (a - c))
     num = ((a - b) + c) * max(μ, zero(μ))
     den = (a + (b + c)) * ((a - c) + b)
@@ -1183,7 +1182,7 @@ function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
         # Extract equivalent unconstrained least squares subproblem from NNLS problem
         # by extracting columns of C which correspond to nonzero components of x
         n′ = 0
-        for (j,xⱼ) in enumerate(x)
+        for (j, xⱼ) in enumerate(x)
             xⱼ ≈ 0 && continue
             n′ += 1
             @inbounds @simd ivdep for i in 1:m
@@ -1203,7 +1202,7 @@ function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
     # Efficient compution of
     #   Aμ = C * (C'C + μ^2*I)^-1 * C'
     # where the matrices have sizes
-    #   C: (m,n), Aμ: (m,m), Ct: (n,m), CtC: (n,n)
+    #   C: (m, n), Aμ: (m, m), Ct: (n, m), CtC: (n, n)
     mul!(CtC′, C′', C′) # C'C
     @inbounds @simd ivdep for i in 1:n
         CtC′[i,i] += μ^2 # C'C + μ^2*I
@@ -1226,7 +1225,7 @@ end
 #   tr(I_m - A * (A'A + λ^2 * L'L)^-1 * A') = m - n + sum_i λ^2 / (γ_i^2 + λ^2)
 # 
 # where γ_i are the generalized singular values, which are equivalent to ordinary
-# singular values when L = identity, and size(A) = (m,n).
+# singular values when L = identity, and size(A) = (m, n).
 function gcv_tr!(A, λ)
     m, n = size(A)
     γ  = svdvals!(A)

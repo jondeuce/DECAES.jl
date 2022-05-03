@@ -119,7 +119,7 @@ function spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     knots = Dierckx.get_knots(spl)
     xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
     x, y = xs[1], spl(xs[1])
-    for (i,xᵢ) in enumerate(xs)
+    for (i, xᵢ) in enumerate(xs)
         (i == 1) && continue
         yᵢ = spl(xᵢ)
         (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
@@ -155,7 +155,7 @@ function spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     knots = Dierckx.get_knots(spl)
     xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
     x, y = xs[1], abs(spl(xs[1]) - value)
-    for (i,xᵢ) in enumerate(xs)
+    for (i, xᵢ) in enumerate(xs)
         (i == 1) && continue
         yᵢ = abs(spl(xᵢ) - value)
         (yᵢ < y) && ((x, y) = (xᵢ, yᵢ))
@@ -753,7 +753,7 @@ function mock_surrogate_search_problem(
 
     return NNLSDiscreteSurrogateSearch(As, ∇As, opt_ranges, b)
 end
-function mock_surrogate_search_problem(::Val{D}, ::Val{ETL}, opts = mock_t2map_opts(; MatrixSize = (1,1,1), nTE = ETL); kwargs...) where {D,ETL}
+function mock_surrogate_search_problem(::Val{D}, ::Val{ETL}, opts = mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = ETL); kwargs...) where {D,ETL}
     b = vec(mock_image(opts))
     mock_surrogate_search_problem(b, opts, Val(D), Val(ETL); kwargs...)
 end
