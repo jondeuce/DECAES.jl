@@ -5,9 +5,11 @@ using DECAES.LinearAlgebra
 using DECAES.NNLS
 using DECAES.Random
 using DECAES.StaticArrays
-using DECAES: GrowableCache, GrowableCachePairs, CachedFunction, MappedArray
-using DECAES: LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction
-using DECAES: lcurve_corner
+using DECAES:
+    GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
+    LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,
+    NNLSProblem, NNLSTikhonovRegProblem,
+    lcurve_corner
 
 @testset "nnls.jl"    verbose = true begin; include("nnls.jl"); end
 @testset "utils.jl"   verbose = true begin; include("utils.jl"); end

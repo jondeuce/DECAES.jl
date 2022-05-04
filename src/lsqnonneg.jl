@@ -147,17 +147,16 @@ function subproblem(work::NNLSTikhonovRegProblem{T}) where {T}
     return TikhonovPaddedMatrix(C[:,Jnz], μ), PaddedVector(d, nnz), x[Jnz]
 end
 
-function ∇reg(work::NNLSTikhonovRegProblem)
+function ∇chi2(work::NNLSTikhonovRegProblem)
     @unpack C, d = work
     μ = mu(work)
-    x = solution(work)
     C′, d′, x′ = subproblem(work)
-    b′ = PaddedVector(C′.C' \ x′, d′.pad)
-    ∇nnls_work = NNLSProblem(C′, b′)
-    solve!(∇nnls_work)
-    ∇x′ = -solution(∇nnls_work)
-    ∇μ² = 2 * ((C′.C * x′ - d′.d) ⋅ (C′.C * ∇x′)) #+ (x′ ⋅ x′) + 2 * μ^2 * (x′ ⋅ ∇x′)
-    ∇μ = 2 * μ * ∇μ²
+    A, b = C′.C, d′.d
+
+    B = cholesky!(A'A + μ^2 * LinearAlgebra.I)
+    ∇x′ = -2 * μ * (B\(B\(A'b)))
+    ∇μ = 2 * ((A*x′-b)' * (A*∇x′))
+
     return ∇μ
 end
 
@@ -167,8 +166,8 @@ function chi2factor_relerr!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = noth
     χ² = chi2(work)
     relerr = log(χ² / χ²target) # better behaved than χ² / χ²target - 1 for large χ²
     if ∇logμ !== nothing && length(∇logμ) > 0
-        ∂χ²_∂logμ = ∇reg(work)
-        ∂relerr_∂logμ = μ * ∂χ²_∂logμ / χ²
+        ∂χ²_∂μ = ∇chi2(work)
+        ∂relerr_∂logμ = μ * ∂χ²_∂μ / χ²
         @inbounds ∇logμ[1] = ∂relerr_∂logμ
     end
     return relerr
@@ -216,7 +215,6 @@ function solve!(work::NNLSTikhonovRegProblemCache, μ)
     end
     return solution(get_cache(work))
 end
-
 
 ####
 #### Chi2 method for choosing Tikhonov regularization parameter
