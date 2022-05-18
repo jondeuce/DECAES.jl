@@ -119,7 +119,7 @@ end
 function NNLSTikhonovRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
     nnls_work = NNLSProblem(TikhonovPaddedMatrix(C, T(NaN)), PaddedVector(d, n))
-    buffers = (x = zeros(T, n), y = zeros(T, n))
+    buffers = (x = zeros(T, n), B⁻¹x = zeros(T, n))
     NNLSTikhonovRegProblem(C, d, m, n, nnls_work, buffers)
 end
 
@@ -145,19 +145,27 @@ chi2(work::NNLSTikhonovRegProblem) = resnorm_sq(work)
 
 resnorm(work::NNLSTikhonovRegProblem) = sqrt(resnorm_sq(work))
 resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - reg(work), 0)
-∇resnorm_sq(work::NNLSTikhonovRegProblem) = ∇resnorm_seminorm_sq(work)[1]
+function ∇resnorm_sq(work::NNLSTikhonovRegProblem)
+    @unpack μ, xᵀB⁻¹x = resnorm_seminorm_gradient_temps(work)
+    return 4μ^3 * xᵀB⁻¹x
+end
+function ∇²resnorm_sq(work::NNLSTikhonovRegProblem)
+    @unpack μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x = resnorm_seminorm_gradient_temps(work)
+    return 12μ^2 * xᵀB⁻¹x - 24μ^4 * xᵀB⁻ᵀB⁻¹x
+end
 
 seminorm(work::NNLSTikhonovRegProblem) = sqrt(seminorm_sq(work))
 seminorm_sq(work::NNLSTikhonovRegProblem) = solution(work) ⋅ solution(work)
-∇seminorm_sq(work::NNLSTikhonovRegProblem) = ∇resnorm_seminorm_sq(work)[2]
+function ∇seminorm_sq(work::NNLSTikhonovRegProblem)
+    @unpack μ, xᵀB⁻¹x = resnorm_seminorm_gradient_temps(work)
+    return -4μ * xᵀB⁻¹x
+end
+function ∇²seminorm_sq(work::NNLSTikhonovRegProblem)
+    @unpack μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x = resnorm_seminorm_gradient_temps(work)
+    return -4 * xᵀB⁻¹x + 24μ^2 * xᵀB⁻ᵀB⁻¹x
+end
 
-function ∇resnorm_seminorm_sq(work::NNLSTikhonovRegProblem)
-    nnls_work = work.nnls_work.nnls_work
-    x₊ = NNLS.positive_solution(nnls_work)
-    x = uview(work.buffers.x, 1:length(x₊))
-    y = uview(work.buffers.y, 1:length(x₊))
-    B = cholesky!(NormalEquation(), nnls_work) # B = (A'A + μI)⁻¹
-
+function resnorm_seminorm_gradient_temps(work::NNLSTikhonovRegProblem)
     # d/dμ x(μ):
     #   ∇x = -2 * μ * (B\(B\(A'b)))
     #      = -2 * μ * (B\x)             <-- x = (A'A)\(A'b) = B\(A'b)
@@ -171,15 +179,25 @@ function ∇resnorm_seminorm_sq(work::NNLSTikhonovRegProblem)
     # d/dμ ||x(μ)||^2:
     #   ∇μ = -4μ * b' * (A*(B\(B\(B\(A'b)))))
     #      = -4μ * b' * (A*(B\(B\x)))   <-- x = (A'A)\(A'b) = B\(A'b)
-    #      = -4μ * (B⁻ᵀ*A'*b)'* (B\x)
     #      = -4μ * (B\(A'b))'* (B\x)    <-- B = B'
     #      = -4μ * x' * (B\x)
+    nnls_work = work.nnls_work.nnls_work
+    B = cholesky!(NormalEquation(), nnls_work) # B = A'A + μ²I
+    x₊ = NNLS.positive_solution(nnls_work)
+    x = uview(work.buffers.x, 1:length(x₊))
+    B⁻¹x = uview(work.buffers.B⁻¹x, 1:length(x₊))
+
     μ = mu(work)
     copyto!(x, x₊)
-    ldiv!(y, B, x)
-    dotxy = dot(x, y)
+    ldiv!(B⁻¹x, B, x)
 
-    return 4μ^3 * dotxy, -4μ * dotxy
+    xᵀB⁻¹x = xᵀB⁻ᵀB⁻¹x = zero(μ)
+    @inbounds @simd for i in 1:length(x)
+        xᵀB⁻¹x += x[i] * B⁻¹x[i]
+        xᵀB⁻ᵀB⁻¹x += B⁻¹x[i] * B⁻¹x[i]
+    end
+
+    return (; μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x)
 end
 
 function chi2factor_relerr!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = nothing; χ²target)

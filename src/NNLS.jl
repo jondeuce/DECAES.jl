@@ -54,8 +54,6 @@ struct NNLSWorkspace{T}
     x::Vector{T}
     w::Vector{T}
     zz::Vector{T}
-    U⁻ᵀx::Vector{T}
-    U⁻¹U⁻ᵀx::Vector{T}
     idx::Vector{Int}
     rnorm::Base.RefValue{T}
     mode::Base.RefValue{Int}
@@ -77,8 +75,6 @@ function NNLSWorkspace{T}(m, n) where {T}
         zeros(T, n),    # x
         zeros(T, n),    # w
         zeros(T, m),    # zz
-        zeros(T, n),    # U⁻ᵀx
-        zeros(T, n),    # U⁻¹U⁻ᵀx
         zeros(Int, n),  # idx
         Ref(zero(T)),   # rnorm
         Ref(0),         # mode
@@ -121,15 +117,14 @@ end
 @inline Base.size(F::NormalEquationCholesky) = (n = size(F.work.A, 2); return (n, n))
 
 function LinearAlgebra.ldiv!(y::AbstractVector, F::NormalEquationCholesky, x::AbstractVector)
-    U = choleskyfactor(F.work, Val(:U))
-    ldiv!(y, U, ldiv!(uview(F.work.U⁻ᵀx, 1:length(x)), U', x))
+    @assert length(x) == length(y) == F.work.nsetp[]
+    (y !== x) && copyto!(y, x)
+    solve_triangular_system!(y, F.work.A, F.work.idx, F.work.nsetp[], Val(true)) # y = U'\x
+    solve_triangular_system!(y, F.work.A, F.work.idx, F.work.nsetp[], Val(false)) # y = U\y = U\(U'\x)
     return y
 end
-function LinearAlgebra.ldiv!(F::NormalEquationCholesky, x::AbstractVector)
-    ldiv!(uview(F.work.U⁻¹U⁻ᵀx, 1:length(x)), F, x)
-    return uview(F.work.U⁻¹U⁻ᵀx, 1:length(x))
-end
-Base.:\(F::NormalEquationCholesky, x::AbstractVector) = copy(ldiv!(F, x))
+LinearAlgebra.ldiv!(F::NormalEquationCholesky, x::AbstractVector) = ldiv!(x, F, x)
+Base.:\(F::NormalEquationCholesky, x::AbstractVector) = ldiv!(copy(x), F, x)
 
 struct NormalEquation end
 
@@ -179,7 +174,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@inline function construct_householder!(u::AbstractVector{T}, up::T) where {T}
+function construct_householder!(u::AbstractVector{T}, up::T) where {T}
     if length(u) <= 1
         return up
     end
@@ -208,17 +203,17 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@inline function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
+function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
     m = length(u)
     if m <= 1
-        return
+        return nothing
     end
 
     @inbounds u1 = u[1]
     @assert abs(u1) > 0
     up_u1 = up * u1
     if up_u1 >= 0
-        return
+        return nothing
     end
 
     @inbounds c1 = c[1]
@@ -236,17 +231,17 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     end
 end
 
-@inline function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int}, nsetp::Int, jup::Int) where {T}
+function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int}, nsetp::Int, jup::Int) where {T}
     m, n = size(A)
     if m - nsetp <= 0
-        return
+        return nothing
     end
 
     @inbounds u1 = A[nsetp, jup]
     @assert abs(u1) > 0
     up_u1 = up * u1
     if up_u1 >= 0
-        return
+        return nothing
     end
 
     @inbounds A[nsetp, jup] = up
@@ -265,7 +260,7 @@ end
     end
     @inbounds A[nsetp, jup] = u1
 
-    return
+    return nothing
 end
 
 """
@@ -310,24 +305,48 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@inline function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
+function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int, ::Val{transp} = Val(false)) where {T, transp}
     if nsetp <= 0
-        return
+        return nothing
     end
-    @inbounds j = idx[nsetp]
-    @inbounds zz[nsetp] /= A[nsetp, j]
-    @inbounds for ip in nsetp-1:-1:1
-        zz1 = zz[ip + 1]
-        @inbounds @simd ivdep for l in 1:ip #@avx
-            zz[l] = zz[l] - A[l, j] * zz1
+
+    if !transp
+        # Solve the upper-triangular system Ux=b in-place where:
+        #   U = A[1:nsetp, idx[1:nstep]]
+        #   b = zz[1:nsetp]
+        #   x = zz[1:nsetp] (i.e. RHS b is overwritten)
+        @inbounds j = idx[nsetp]
+        @inbounds zz[nsetp] /= A[nsetp, j]
+        @inbounds for ip in nsetp-1:-1:1
+            zz1 = zz[ip + 1]
+            @inbounds @simd ivdep for l in 1:ip #@avx
+                zz[l] = zz[l] - A[l, j] * zz1
+            end
+            j = idx[ip]
+            zz[ip] /= A[ip, j]
         end
-        j = idx[ip]
-        zz[ip] /= A[ip, j]
+    else
+        # Solve the lower-triangular system Lx=b in-place where:
+        #   L = A[1:nsetp, idx[1:nstep]]' (i.e. transpose of U above)
+        #   b = zz[1:nsetp]
+        #   x = zz[1:nsetp] (i.e. RHS b is overwritten)
+        @inbounds j = idx[1]
+        @inbounds zz[1] /= A[1, j]
+        @inbounds for ip in 2:nsetp
+            j = idx[ip]
+            zz1 = zz[ip]
+            @inbounds @simd for l in 1:ip-1 #@avx
+                zz1 = zz1 - A[l, j] * zz[l]
+            end
+            zz1 /= A[ip, j]
+            zz[ip] = zz1
+        end
     end
-    return
+
+    return nothing
 end
 
-@inline function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
+function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
     n = length(w)
     wmax = zero(T)
     i_wmax = 0

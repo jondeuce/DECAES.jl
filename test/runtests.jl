@@ -1,10 +1,11 @@
 using Test
 using DECAES
 
-using DECAES.LinearAlgebra
+using LinearAlgebra
+using Random
+using StaticArrays
+
 using DECAES.NNLS
-using DECAES.Random
-using DECAES.StaticArrays
 using DECAES:
     GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
     LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,

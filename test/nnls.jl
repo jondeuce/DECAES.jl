@@ -1,8 +1,8 @@
-NNLS_SIZES = vec(collect(Iterators.product([1,2,5,8,16], [1,2,5,8,16])))
+NNLS_SIZES = vec(collect(Iterators.product([1,2,5,8,16,32], [1,2,5,8,16,32])))
 
 function verify_NNLS(m, n)
-    A = randn(m, n)
-    b = randn(m)
+    A = rand(MersenneTwister(0), m, n)
+    b = rand(MersenneTwister(0), m)
     work = NNLSWorkspace(A, b)
     nnls!(work)
 
@@ -34,6 +34,12 @@ function verify_NNLS(m, n)
         @test work.zz[n₊+1:end] == work.b[n₊+1:end]
         @test NNLS.residualnorm(work) ≈ norm(A*x - b) atol = 10eps() * norm(A)
 
+        b₊ = rand(n₊)
+        U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, U, 1:n₊, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
+        L⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(L⁻¹b₊, U, 1:n₊, n₊, Val(true));  @test L⁻¹b₊ ≈ L\b₊
+        U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, work.A, work.idx, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
+        L⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(L⁻¹b₊, work.A, work.idx, n₊, Val(true));  @test L⁻¹b₊ ≈ L\b₊
+
         # Solution
         @test all(>(0), x₊)
         @test all(==(0), x₀)
@@ -41,14 +47,14 @@ function verify_NNLS(m, n)
         @test x₊ ≈ A₊ \ b
 
         # Dual (i.e. gradient)
-        if n₊ < m
-            # Less components than rows; in general solution is not exact and gradient has negative components
+        if NNLS.residualnorm(work) > 0
+            # Solution is not exact and gradient has negative components
             @test all(<(0), w₋)
             @test all(==(0), w₀)
-            @test w₋ ≈ -A₀' * (A₊ * x₊ - b)
+            @test w₋ ≈ -A₀' * (A₊ * x₊ - b) atol = 10eps() * norm(A)^2
             @test w ≈ -A' * (A * x - b) atol = 10eps() * norm(A)^2
         else
-            # At least as many components as rows; solution is exact, gradient is zero
+            # Solution is exact, gradient is zero
             @test all(==(0), w)
         end
 
@@ -58,8 +64,8 @@ function verify_NNLS(m, n)
 
         F = cholesky!(NormalEquation(), work)
         if n₊ > 0
-            x′ = rand(n₊); x′′ = copy(x′)
-            b′ = rand(n₊); b′′ = copy(b′)
+            x′ = rand(MersenneTwister(0), n₊); x′′ = copy(x′)
+            b′ = rand(MersenneTwister(0), n₊); b′′ = copy(b′)
             ldiv!(x′, F, b′)
             @test x′ ≈ (A₊'A₊) \ b′
             @test b′ ≈ b′′ && !(x′ ≈ x′′)
@@ -104,71 +110,91 @@ function mock_nnls_data(m, n)
     (; A = prob.As[:,:,end], b = prob.b)
 end
 
-∇finitediff(f, x, dx = 1e-6) = (f(x .+ dx) .- f(x .- dx)) ./ (2 .* dx)
+∇finitediff(f, x, h = 1e-8) = (f(x.+h) .- f(x.-h)) ./ (2h)
+∇²finitediff(f, x, h = 1e-4) = (f(x.+h) .- 2 .* f(x) .+ f(x.-h)) ./ h^2
 
 @testset "Least Squares Gradients" begin
     for (m, n) in NNLS_SIZES
-        A, b = rand(m, n), rand(m)
-        C_μ = μ -> [A; μ * LinearAlgebra.I]
-        B_μ = μ -> (C = C_μ(μ); LinearAlgebra.cholesky!(LinearAlgebra.Symmetric(C'C)))
-        x_μ = μ -> C_μ(μ) \ [b; zeros(n)]
+        A = rand(MersenneTwister(0), m, n)
+        b = rand(MersenneTwister(0), m)
+        A_μ = μ -> [A; μ * LinearAlgebra.I]
+        B_μ = μ -> LinearAlgebra.cholesky!(LinearAlgebra.Symmetric(A'A + μ^2*I))
+        x_μ = μ -> A_μ(μ) \ [b; zeros(n)]
 
-        μ = 0.1
+        μ = 0.99
         B = B_μ(μ)
         x = x_μ(μ)
 
         # Derivative of solution x w.r.t. μ
         f = _μ -> x_μ(_μ)
-        dx_dμ = -2*μ*(B\(B\(A'b)))
-        @test dx_dμ ≈ ∇finitediff(f, μ) rtol = 1e-3
-
-        # Derivative of solution l2-norm ||x||^2 w.r.t. μ
-        f = _μ -> sum(abs2, x_μ(_μ))
-        dx²_dμ = 2 * x'dx_dμ
-        @test dx²_dμ ≈ (-4*μ)*b'*(A*(B\(B\(B\(A'b))))) rtol = 1e-3
-        @test dx²_dμ ≈ ∇finitediff(f, μ) rtol = 1e-3
+        dx_dμ = -2*μ*(B\x)
+        @test dx_dμ ≈ -2*μ*(B\(B\(A'b)))
+        @test dx_dμ ≈ ∇finitediff(f, μ) rtol = 1e-4
 
         # Derivative of A*x (or equivalently, A*x-b) w.r.t. μ
         f = _μ -> A*x_μ(_μ)
         dAx_dμ = A*dx_dμ
-        @test dAx_dμ ≈ -2*μ*(A*(B\(B\(A'b)))) rtol = 1e-3
-        @test dAx_dμ ≈ ∇finitediff(f, μ) rtol = 1e-3
+        @test dAx_dμ ≈ -2*μ*(A*(B\(B\(A'b))))
+        @test dAx_dμ ≈ ∇finitediff(f, μ) rtol = 1e-4
+
+        # Derivative of solution l2-norm ||x||^2 w.r.t. μ
+        f = _μ -> sum(abs2, x_μ(_μ))
+        dx²_dμ = 2 * x'dx_dμ
+        @test dx²_dμ ≈ (-4*μ)*b'*(A*(B\(B\(B\(A'b)))))
+        @test dx²_dμ ≈ ∇finitediff(f, μ) rtol = 1e-4
 
         # Derivative of residual l2-norm ||A*x-b||^2 w.r.t. μ
         f = _μ -> sum(abs2, A*x_μ(_μ) - b)
-        dAxb_dμ = 2*(A*x-b)'dAx_dμ
-        @test dAxb_dμ ≈ -4*μ*((A*x-b)'*(A*(B\(B\(A'b))))) rtol = 1e-3
-        @test dAxb_dμ ≈ ∇finitediff(f, μ) rtol = 1e-3
+        dAxb_dμ = -2μ^2 * x'dx_dμ
+        @test dAxb_dμ ≈ 2*(A*x-b)'dAx_dμ
+        @test dAxb_dμ ≈ -4*μ*((A*x-b)'*(A*(B\(B\(A'b)))))
+        @test dAxb_dμ ≈ ∇finitediff(f, μ) rtol = 1e-4
     end
 end
 
 function verify_NNLSTikhonovRegProblem(m, n)
-    A = randn(m, n)
-    b = randn(m)
+    A = rand(MersenneTwister(0), m, n)
+    b = rand(MersenneTwister(0), m)
     work = NNLSTikhonovRegProblem(A, b)
     f_reg(μ) = (DECAES.solve!(work, μ); DECAES.reg(work))
     f_chi2(μ) = (DECAES.solve!(work, μ); DECAES.chi2(work))
+    f_resnorm_sq(μ) = (DECAES.solve!(work, μ); DECAES.resnorm_sq(work))
     f_seminorm_sq(μ) = (DECAES.solve!(work, μ); DECAES.seminorm_sq(work))
 
     GC.@preserve work begin
-        μ = 0.1
+        μ = 0.99
         @test @allocated(DECAES.solve!(work, μ)) == 0
         @test @allocated(DECAES.mu(work)) == 0
 
         ∇μ = DECAES.∇reg(work)
-        @test ∇μ ≈ ∇finitediff(f_reg, μ) rtol = 1e-3
+        @test ∇μ ≈ ∇finitediff(f_reg, μ) rtol = 1e-4
         @test @allocated(DECAES.∇reg(work)) == 0
         @test @inferred(DECAES.∇reg(work)) isa Float64
 
         ∇μ = DECAES.∇chi2(work)
-        @test ∇μ ≈ ∇finitediff(f_chi2, μ) rtol = 1e-3
+        @test ∇μ ≈ ∇finitediff(f_chi2, μ) rtol = 1e-4
         @test @allocated(DECAES.∇chi2(work)) == 0
         @test @inferred(DECAES.∇chi2(work)) isa Float64
 
+        ∇μ = DECAES.∇resnorm_sq(work)
+        @test ∇μ ≈ ∇finitediff(f_resnorm_sq, μ) rtol = 1e-4
+        @test @allocated(DECAES.∇resnorm_sq(work)) == 0
+        @test @inferred(DECAES.∇resnorm_sq(work)) isa Float64
+
         ∇μ = DECAES.∇seminorm_sq(work)
-        @test ∇μ ≈ ∇finitediff(f_seminorm_sq, μ) rtol = 1e-3
+        @test ∇μ ≈ ∇finitediff(f_seminorm_sq, μ) rtol = 1e-4
         @test @allocated(DECAES.∇seminorm_sq(work)) == 0
         @test @inferred(DECAES.∇seminorm_sq(work)) isa Float64
+
+        ∇²μ = DECAES.∇²resnorm_sq(work)
+        @test ∇²μ ≈ ∇²finitediff(f_resnorm_sq, μ) rtol = 1e-3 atol = 1e-4
+        @test @allocated(DECAES.∇²resnorm_sq(work)) == 0
+        @test @inferred(DECAES.∇²resnorm_sq(work)) isa Float64
+
+        ∇²μ = DECAES.∇²seminorm_sq(work)
+        @test ∇²μ ≈ ∇²finitediff(f_seminorm_sq, μ) rtol = 1e-3 atol = 1e-4
+        @test @allocated(DECAES.∇²seminorm_sq(work)) == 0
+        @test @inferred(DECAES.∇²seminorm_sq(work)) isa Float64
     end
 end
 
