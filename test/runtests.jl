@@ -8,7 +8,7 @@ using DECAES.StaticArrays
 using DECAES:
     GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
     LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,
-    NNLSProblem, NNLSTikhonovRegProblem,
+    NNLSProblem, NNLSTikhonovRegProblem, NormalEquation,
     lcurve_corner
 
 @testset "nnls.jl"    verbose = true begin; include("nnls.jl"); end

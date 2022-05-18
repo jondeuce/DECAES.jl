@@ -43,7 +43,8 @@ using UnsafeArrays: @uviews, uviews, uview
 using MuladdMacro: @muladd
 # using LoopVectorization: @avx
 
-export nnls, nnls!, NNLSWorkspace, load!
+export nnls, nnls!, load!
+export NNLSWorkspace, NormalEquation, NormalEquationCholesky
 
 @muladd begin
 
@@ -53,6 +54,8 @@ struct NNLSWorkspace{T}
     x::Vector{T}
     w::Vector{T}
     zz::Vector{T}
+    U⁻ᵀx::Vector{T}
+    U⁻¹U⁻ᵀx::Vector{T}
     idx::Vector{Int}
     rnorm::Base.RefValue{T}
     mode::Base.RefValue{Int}
@@ -63,16 +66,19 @@ end
 @inline residualnorm(work::NNLSWorkspace) = work.rnorm[]
 @inline ncomponents(work::NNLSWorkspace) = work.nsetp[]
 @inline components(work::NNLSWorkspace) = uview(work.idx, 1:ncomponents(work))
-@inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = uview(work.A, 1:ncomponents(work), components(work))
-@inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = choleskyfactor(work, Val(:L))'
+@inline positive_solution(work::NNLSWorkspace) = uview(solution(work), components(work))
+@inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = UpperTriangular(uview(work.A, 1:ncomponents(work), components(work)))
+@inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = choleskyfactor(work, Val(:U))'
 
 function NNLSWorkspace{T}(m, n) where {T}
-    NNLSWorkspace{T}(
+    NNLSWorkspace(
         zeros(T, m, n), # A
         zeros(T, m),    # b
         zeros(T, n),    # x
         zeros(T, n),    # w
         zeros(T, m),    # zz
+        zeros(T, n),    # U⁻ᵀx
+        zeros(T, n),    # U⁻¹U⁻ᵀx
         zeros(Int, n),  # idx
         Ref(zero(T)),   # rnorm
         Ref(0),         # mode
@@ -108,6 +114,26 @@ end
     @assert size(work.zz) == (m,)
     @assert size(work.idx) == (n,)
 end
+
+struct NormalEquationCholesky{T, W <: NNLSWorkspace{T}} <: Factorization{T}
+    work::W
+end
+@inline Base.size(F::NormalEquationCholesky) = (n = size(F.work.A, 2); return (n, n))
+
+function LinearAlgebra.ldiv!(y::AbstractVector, F::NormalEquationCholesky, x::AbstractVector)
+    U = choleskyfactor(F.work, Val(:U))
+    ldiv!(y, U, ldiv!(uview(F.work.U⁻ᵀx, 1:length(x)), U', x))
+    return y
+end
+function LinearAlgebra.ldiv!(F::NormalEquationCholesky, x::AbstractVector)
+    ldiv!(uview(F.work.U⁻¹U⁻ᵀx, 1:length(x)), F, x)
+    return uview(F.work.U⁻¹U⁻ᵀx, 1:length(x))
+end
+Base.:\(F::NormalEquationCholesky, x::AbstractVector) = copy(ldiv!(F, x))
+
+struct NormalEquation end
+
+LinearAlgebra.cholesky!(::NormalEquation, work::NNLSWorkspace) = NormalEquationCholesky(work)
 
 """
 x = nnls(A, b; ...)
@@ -189,10 +215,9 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     end
 
     @inbounds u1 = u[1]
-    cl = abs(u1)
-    @assert cl > 0
-    b = up * u1
-    if b >= 0
+    @assert abs(u1) > 0
+    up_u1 = up * u1
+    if up_u1 >= 0
         return
     end
 
@@ -203,7 +228,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     end
 
     if sm != 0
-        sm /= b
+        sm /= up_u1
         @inbounds c[1] = c[1] + sm * up
         @inbounds @simd ivdep for i in 2:m #@avx
             c[i] = c[i] + sm * u[i]
@@ -218,10 +243,9 @@ end
     end
 
     @inbounds u1 = A[nsetp, jup]
-    cl = abs(u1)
-    @assert cl > 0
-    b = up * u1
-    if b >= 0
+    @assert abs(u1) > 0
+    up_u1 = up * u1
+    if up_u1 >= 0
         return
     end
 
@@ -233,7 +257,7 @@ end
             sm = sm + A[l, j] * A[l, jup]
         end
         @inbounds if sm != 0
-            sm /= b
+            sm /= up_u1
             @inbounds @simd ivdep for l in nsetp:m #@avx
                 A[l, j] = A[l, j] + sm * A[l, jup]
             end
@@ -261,13 +285,13 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
 @inline function orthogonal_rotmat(a::T, b::T) where {T}
     if abs(a) > abs(b)
         xr = b / a
-        yr = sqrt(one(T) + xr * xr)
+        yr = sqrt(1 + xr * xr)
         c = inv(yr) * sign(a)
         s = c * xr
         sig = abs(a) * yr
     elseif b != 0
         xr = a / b
-        yr = sqrt(one(T) + xr * xr)
+        yr = sqrt(1 + xr * xr)
         s = inv(yr) * sign(b)
         c = s * xr
         sig = abs(b) * yr
@@ -437,8 +461,8 @@ function nnls!(
         # SOLVE THE TRIANGULAR SYSTEM.
         # STORE THE SOLUTION TEMPORARILY IN ZZ().
         solve_triangular_system!(zz, A, idx, nsetp)
-        if nsetp > 0
-            i_curr = first(idx)
+        @inbounds if nsetp > 0
+            i_curr = idx[1]
         end
 
         # ******  SECONDARY LOOP BEGINS HERE ******
@@ -540,8 +564,8 @@ function nnls!(
             # COPY B( ) INTO ZZ( ).  THEN SOLVE AGAIN AND LOOP BACK.
             copyto!(zz, b)
             solve_triangular_system!(zz, A, idx, nsetp)
-            if nsetp > 0
-                i_curr = first(idx)
+            @inbounds if nsetp > 0
+                i_curr = idx[1]
             end
         end
         if terminated
@@ -563,6 +587,7 @@ function nnls!(
     if nsetp < m
         @inbounds @simd for ip in nsetp+1:m #@avx
             bi = b[ip]
+            zz[ip] = bi
             sm = sm + bi * bi
         end
     else

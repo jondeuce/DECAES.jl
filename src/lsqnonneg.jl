@@ -57,6 +57,7 @@ struct PaddedVector{T, Vd <: AbstractVector{T}} <: AbstractVector{T}
     pad::Int
 end
 Base.size(x::PaddedVector) = (length(x.d) + x.pad,)
+Base.parent(x::PaddedVector) = x.d
 
 function Base.copyto!(y::AbstractVector{T}, x::PaddedVector{T}) where {T}
     @assert size(x) == size(y)
@@ -77,6 +78,7 @@ struct TikhonovPaddedMatrix{T, MC <: AbstractMatrix{T}} <: AbstractMatrix{T}
 end
 TikhonovPaddedMatrix(C::AbstractMatrix, μ) = TikhonovPaddedMatrix(C, Ref(μ))
 Base.size(A::TikhonovPaddedMatrix) = ((m, n) = size(A.C); return (m+n, n))
+Base.parent(A::TikhonovPaddedMatrix) = A.C
 
 function Base.copyto!(B::AbstractMatrix{T}, A::TikhonovPaddedMatrix{T}) where {T}
     @assert size(A) == size(B)
@@ -100,17 +102,25 @@ exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x
 #### Tikhonov regularized NNLS problem
 ####
 
-struct NNLSTikhonovRegProblem{T, MC <: AbstractMatrix{T}, Vd <: AbstractVector{T}, W}
+struct NNLSTikhonovRegProblem{
+        T,
+        MC <: AbstractMatrix{T},
+        Vd <: AbstractVector{T},
+        W <: NNLSProblem{T, TikhonovPaddedMatrix{T, MC}, PaddedVector{T, Vd}},
+        B,
+    }
     C::MC
     d::Vd
     m::Int
     n::Int
     nnls_work::W
+    buffers::B
 end
 function NNLSTikhonovRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
     nnls_work = NNLSProblem(TikhonovPaddedMatrix(C, T(NaN)), PaddedVector(d, n))
-    NNLSTikhonovRegProblem(C, d, m, n, nnls_work)
+    buffers = (x = zeros(T, n), y = zeros(T, n))
+    NNLSTikhonovRegProblem(C, d, m, n, nnls_work, buffers)
 end
 
 mu(work::NNLSTikhonovRegProblem) = work.nnls_work.C.μ[]
@@ -123,41 +133,52 @@ function solve!(work::NNLSTikhonovRegProblem, μ)
     return solution(work)
 end
 
-solution(work::NNLSTikhonovRegProblem) = solution(work.nnls_work)
+solution(work::NNLSTikhonovRegProblem) = NNLS.solution(work.nnls_work.nnls_work)
 
-resnorm_sq(work::NNLSTikhonovRegProblem) = chi2(work)
-resnorm(work::NNLSTikhonovRegProblem) = sqrt(resnorm_sq(work))
-
-seminorm_sq(work::NNLSTikhonovRegProblem) = solution(work) ⋅ solution(work)
-seminorm(work::NNLSTikhonovRegProblem) = sqrt(seminorm_sq(work))
-
-loss(work::NNLSTikhonovRegProblem) = chi2(work.nnls_work)
+loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_work.nnls_work)^2
 
 reg(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work)
 
-chi2(work::NNLSTikhonovRegProblem) = max(loss(work) - reg(work), 0)
+chi2(work::NNLSTikhonovRegProblem) = resnorm_sq(work)
+∇chi2(work::NNLSTikhonovRegProblem) = ∇resnorm_sq(work)
 
-# Extract columns spanning solution space of regularized NNLS problem
-function subproblem(work::NNLSTikhonovRegProblem{T}) where {T}
-    @unpack C, d, m, n, nnls_work = work
+resnorm(work::NNLSTikhonovRegProblem) = sqrt(resnorm_sq(work))
+resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - reg(work), 0)
+∇resnorm_sq(work::NNLSTikhonovRegProblem) = ∇resnorm_seminorm_sq(work)[1]
+
+seminorm(work::NNLSTikhonovRegProblem) = sqrt(seminorm_sq(work))
+seminorm_sq(work::NNLSTikhonovRegProblem) = solution(work) ⋅ solution(work)
+∇seminorm_sq(work::NNLSTikhonovRegProblem) = ∇resnorm_seminorm_sq(work)[2]
+
+function ∇resnorm_seminorm_sq(work::NNLSTikhonovRegProblem)
+    nnls_work = work.nnls_work.nnls_work
+    x₊ = NNLS.positive_solution(nnls_work)
+    x = uview(work.buffers.x, 1:length(x₊))
+    y = uview(work.buffers.y, 1:length(x₊))
+    B = cholesky!(NormalEquation(), nnls_work) # B = (A'A + μI)⁻¹
+
+    # d/dμ x(μ):
+    #   ∇x = -2 * μ * (B\(B\(A'b)))
+    #      = -2 * μ * (B\x)             <-- x = (A'A)\(A'b) = B\(A'b)
+    # 
+    # d/dμ ||A*x(μ)-b||^2:
+    #   ∇μ = 2 * ((A*x-b)' * (A*∇x))
+    #      = 2 * (A'*(A*x-b))' * ∇x
+    #      = 2 * ((-μ^2*x)' * ∇x)       <-- A'*(A*x-b) = -μ^2*x, as 0 = w = [A; μI]' * ([A; μI]*x - [b;0]) = [A; μI]' * [A*x-b; μ*x] = A'*(A*x-b) + μ^2*x
+    #      = 4μ^3 * x' * (B\x)
+    # 
+    # d/dμ ||x(μ)||^2:
+    #   ∇μ = -4μ * b' * (A*(B\(B\(B\(A'b)))))
+    #      = -4μ * b' * (A*(B\(B\x)))   <-- x = (A'A)\(A'b) = B\(A'b)
+    #      = -4μ * (B⁻ᵀ*A'*b)'* (B\x)
+    #      = -4μ * (B\(A'b))'* (B\x)    <-- B = B'
+    #      = -4μ * x' * (B\x)
     μ = mu(work)
-    x = solution(work)
-    Jnz = findall(!≈(0), x)
-    nnz = length(Jnz)
-    return TikhonovPaddedMatrix(C[:,Jnz], μ), PaddedVector(d, nnz), x[Jnz]
-end
+    copyto!(x, x₊)
+    ldiv!(y, B, x)
+    dotxy = dot(x, y)
 
-function ∇chi2(work::NNLSTikhonovRegProblem)
-    @unpack C, d = work
-    μ = mu(work)
-    C′, d′, x′ = subproblem(work)
-    A, b = C′.C, d′.d
-
-    B = cholesky!(A'A + μ^2 * LinearAlgebra.I)
-    ∇x′ = -2 * μ * (B\(B\(A'b)))
-    ∇μ = 2 * ((A*x′-b)' * (A*∇x′))
-
-    return ∇μ
+    return 4μ^3 * dotxy, -4μ * dotxy
 end
 
 function chi2factor_relerr!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = nothing; χ²target)
