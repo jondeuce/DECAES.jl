@@ -138,6 +138,7 @@ solution(work::NNLSTikhonovRegProblem) = NNLS.solution(work.nnls_work.nnls_work)
 loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_work.nnls_work)^2
 
 reg(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work)
+∇reg(work::NNLSTikhonovRegProblem) = 2 * mu(work) * seminorm_sq(work) + mu(work)^2 * ∇seminorm_sq(work)
 
 chi2(work::NNLSTikhonovRegProblem) = resnorm_sq(work)
 ∇chi2(work::NNLSTikhonovRegProblem) = ∇resnorm_sq(work)

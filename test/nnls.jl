@@ -146,6 +146,7 @@ function verify_NNLSTikhonovRegProblem(m, n)
     A = randn(m, n)
     b = randn(m)
     work = NNLSTikhonovRegProblem(A, b)
+    f_reg(μ) = (DECAES.solve!(work, μ); DECAES.reg(work))
     f_chi2(μ) = (DECAES.solve!(work, μ); DECAES.chi2(work))
     f_seminorm_sq(μ) = (DECAES.solve!(work, μ); DECAES.seminorm_sq(work))
 
@@ -153,6 +154,11 @@ function verify_NNLSTikhonovRegProblem(m, n)
         μ = 0.1
         @test @allocated(DECAES.solve!(work, μ)) == 0
         @test @allocated(DECAES.mu(work)) == 0
+
+        ∇μ = DECAES.∇reg(work)
+        @test ∇μ ≈ ∇finitediff(f_reg, μ) rtol = 1e-3
+        @test @allocated(DECAES.∇reg(work)) == 0
+        @test @inferred(DECAES.∇reg(work)) isa Float64
 
         ∇μ = DECAES.∇chi2(work)
         @test ∇μ ≈ ∇finitediff(f_chi2, μ) rtol = 1e-3
