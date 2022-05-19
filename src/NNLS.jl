@@ -116,11 +116,16 @@ struct NormalEquationCholesky{T, W <: NNLSWorkspace{T}} <: Factorization{T}
 end
 @inline Base.size(F::NormalEquationCholesky) = (n = size(F.work.A, 2); return (n, n))
 
+function solve_triangular_system!(y, F::NormalEquationCholesky, ::Val{transp} = Val(false)) where {transp}
+    solve_triangular_system!(y, F.work.A, F.work.idx, F.work.nsetp[], Val(transp))
+    return y
+end
+
 function LinearAlgebra.ldiv!(y::AbstractVector, F::NormalEquationCholesky, x::AbstractVector)
     @assert length(x) == length(y) == F.work.nsetp[]
     (y !== x) && copyto!(y, x)
-    solve_triangular_system!(y, F.work.A, F.work.idx, F.work.nsetp[], Val(true)) # y = U'\x
-    solve_triangular_system!(y, F.work.A, F.work.idx, F.work.nsetp[], Val(false)) # y = U\y = U\(U'\x)
+    solve_triangular_system!(y, F, Val(true)) # y = U'\x
+    solve_triangular_system!(y, F, Val(false)) # y = U\y = U\(U'\x)
     return y
 end
 LinearAlgebra.ldiv!(F::NormalEquationCholesky, x::AbstractVector) = ldiv!(x, F, x)
@@ -307,7 +312,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
 function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int, ::Val{transp} = Val(false)) where {T, transp}
     if nsetp <= 0
-        return nothing
+        return zz
     end
 
     if !transp
@@ -343,7 +348,7 @@ function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, i
         end
     end
 
-    return nothing
+    return zz
 end
 
 function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}

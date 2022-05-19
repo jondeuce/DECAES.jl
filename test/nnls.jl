@@ -1,8 +1,22 @@
 NNLS_SIZES = vec(collect(Iterators.product([1,2,5,8,16,32], [1,2,5,8,16,32])))
 
+function rand_NNLS_data(m, n)
+    # A strictly positive, unconstrained x has negative entries
+    if m < 4 || n < 2
+        x = rand(MersenneTwister(0), n) .* ifelse.(isodd.(1:n), -1, 1)
+        A = rand(MersenneTwister(0), m, n)
+        b = A*x
+    else
+        opts = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = m, nT2 = n, RefConAngle = 180.0)
+        prob = DECAES.mock_surrogate_search_problem(Val(1), Val(m), opts)
+        A = prob.As[:,:,end]
+        b = prob.b
+    end
+    return A, b
+end
+
 function verify_NNLS(m, n)
-    A = rand(MersenneTwister(0), m, n)
-    b = rand(MersenneTwister(0), m)
+    A, b = rand_NNLS_data(m, n)
     work = NNLSWorkspace(A, b)
     nnls!(work)
 
@@ -32,7 +46,7 @@ function verify_NNLS(m, n)
         @test work.zz[1:n₊] == x₊
         @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋
         @test work.zz[n₊+1:end] == work.b[n₊+1:end]
-        @test NNLS.residualnorm(work) ≈ norm(A*x - b) atol = 10eps() * norm(A)
+        @test NNLS.residualnorm(work) ≈ norm(A*x - b) rtol = 1e-12 atol = 1e-12
 
         b₊ = rand(n₊)
         U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, U, 1:n₊, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
@@ -51,8 +65,8 @@ function verify_NNLS(m, n)
             # Solution is not exact and gradient has negative components
             @test all(<(0), w₋)
             @test all(==(0), w₀)
-            @test w₋ ≈ -A₀' * (A₊ * x₊ - b) atol = 10eps() * norm(A)^2
-            @test w ≈ -A' * (A * x - b) atol = 10eps() * norm(A)^2
+            @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-12 atol = 1e-8
+            @test w ≈ -A' * (A * x - b) rtol = 1e-12 atol = 1e-8
         else
             # Solution is exact, gradient is zero
             @test all(==(0), w)
@@ -83,6 +97,7 @@ end
 end
 
 function build_lcurve_corner_cached_fun(::Type{T} = Float64) where {T}
+    # Mock lcurve function with (ξ(μ), η(μ)) = (μ, 1/μ)
     f = CachedFunction(logμ -> SA[exp(logμ), exp(-logμ)], GrowableCache{T, SVector{2,T}}())
     f = LCurveCornerCachedFunction(f, GrowableCache{T, LCurveCornerPoint{T}}(), GrowableCache{T, LCurveCornerState{T}}())
     return f
@@ -114,9 +129,28 @@ end
 ∇²finitediff(f, x, h = 1e-4) = (f(x.+h) .- 2 .* f(x) .+ f(x.-h)) ./ h^2
 
 @testset "Least Squares Gradients" begin
+    #=
+    Gradient notes:
+
+    d/dμ x(μ):
+      ∇x = -2 * μ * (B\(B\(A'b)))
+         = -2 * μ * (B\x)             <-- x = (A'A)\(A'b) = B\(A'b)
+
+    d/dμ ||A*x(μ)-b||^2:
+      ∇μ = 2 * ((A*x-b)' * (A*∇x))
+         = 2 * (A'*(A*x-b))' * ∇x
+         = 2 * ((-μ^2*x)' * ∇x)       <-- A'*(A*x-b) = -μ^2*x, as 0 = w = [A; μI]' * ([A; μI]*x - [b;0]) = [A; μI]' * [A*x-b; μ*x] = A'*(A*x-b) + μ^2*x
+         = 4μ^3 * x' * (B\x)
+
+    d/dμ ||x(μ)||^2:
+      ∇μ = -4μ * b' * (A*(B\(B\(B\(A'b)))))
+         = -4μ * b' * (A*(B\(B\x)))   <-- x = (A'A)\(A'b) = B\(A'b)
+         = -4μ * (B\(A'b))'* (B\x)    <-- B = B'
+         = -4μ * x' * (B\x)
+    =#
+
     for (m, n) in NNLS_SIZES
-        A = rand(MersenneTwister(0), m, n)
-        b = rand(MersenneTwister(0), m)
+        A, b = rand_NNLS_data(m, n)
         A_μ = μ -> [A; μ * LinearAlgebra.I]
         B_μ = μ -> LinearAlgebra.cholesky!(LinearAlgebra.Symmetric(A'A + μ^2*I))
         x_μ = μ -> A_μ(μ) \ [b; zeros(n)]
@@ -153,8 +187,7 @@ end
 end
 
 function verify_NNLSTikhonovRegProblem(m, n)
-    A = rand(MersenneTwister(0), m, n)
-    b = rand(MersenneTwister(0), m)
+    A, b = rand_NNLS_data(m, n)
     work = NNLSTikhonovRegProblem(A, b)
     f_reg(μ) = (DECAES.solve!(work, μ); DECAES.reg(work))
     f_chi2(μ) = (DECAES.solve!(work, μ); DECAES.chi2(work))
@@ -195,6 +228,40 @@ function verify_NNLSTikhonovRegProblem(m, n)
         @test ∇²μ ≈ ∇²finitediff(f_seminorm_sq, μ) rtol = 1e-3 atol = 1e-4
         @test @allocated(DECAES.∇²seminorm_sq(work)) == 0
         @test @inferred(DECAES.∇²seminorm_sq(work)) isa Float64
+
+        # Curvature computation
+        DECAES.solve!(work, μ)
+        ξ = DECAES.resnorm_sq(work)
+        η = DECAES.seminorm_sq(work)
+        if η > 0
+            ξ_fun = t -> (DECAES.solve!(work, t); DECAES.resnorm_sq(work))
+            η_fun = t -> (DECAES.solve!(work, t); DECAES.seminorm_sq(work))
+            C_fun = t -> (DECAES.solve!(work, t); DECAES.curvature(identity, work))
+            C_menger = DECAES.menger(ξ_fun, η_fun; h = 1e-4)
+
+            ξ′ = DECAES.∇resnorm_sq(work)
+            η′ = DECAES.∇seminorm_sq(work)
+            ξ′′ = DECAES.∇²resnorm_sq(work)
+            η′′ = DECAES.∇²seminorm_sq(work)
+            C = (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
+
+            @test C_fun(μ) ≈ C
+            @test C_fun(μ) ≈ C_menger(μ) rtol = 1e-3
+
+            ξ̄_fun = t -> (DECAES.solve!(work, t); log(DECAES.resnorm_sq(work)))
+            η̄_fun = t -> (DECAES.solve!(work, t); log(DECAES.seminorm_sq(work)))
+            C̄_fun = t -> (DECAES.solve!(work, t); DECAES.curvature(log, work))
+            C̄_menger = DECAES.menger(ξ̄_fun, η̄_fun; h = 1e-4)
+
+            ξ̄′ = ξ′ / ξ
+            η̄′ = η′ / η
+            ξ̄′′ = ξ′′ / ξ - ξ̄′^2
+            η̄′′ = η′′ / η - η̄′^2
+            C̄ = (ξ̄′ * η̄′′ - η̄′ * ξ̄′′) / √((ξ̄′^2 + η̄′^2)^3)
+
+            @test C̄_fun(μ) ≈ C̄
+            @test C̄_fun(μ) ≈ C̄_menger(μ) rtol = 1e-3
+        end
     end
 end
 

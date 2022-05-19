@@ -119,7 +119,7 @@ end
 function NNLSTikhonovRegProblem(C::AbstractMatrix{T}, d::AbstractVector{T}) where {T}
     m, n = size(C)
     nnls_work = NNLSProblem(TikhonovPaddedMatrix(C, T(NaN)), PaddedVector(d, n))
-    buffers = (x = zeros(T, n), B⁻¹x = zeros(T, n))
+    buffers = (x = zeros(T, n), y = zeros(T, n))
     NNLSTikhonovRegProblem(C, d, m, n, nnls_work, buffers)
 end
 
@@ -145,57 +145,52 @@ chi2(work::NNLSTikhonovRegProblem) = resnorm_sq(work)
 
 resnorm(work::NNLSTikhonovRegProblem) = sqrt(resnorm_sq(work))
 resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - reg(work), 0)
-function ∇resnorm_sq(work::NNLSTikhonovRegProblem)
-    @unpack μ, xᵀB⁻¹x = resnorm_seminorm_gradient_temps(work)
-    return 4μ^3 * xᵀB⁻¹x
-end
-function ∇²resnorm_sq(work::NNLSTikhonovRegProblem)
-    @unpack μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x = resnorm_seminorm_gradient_temps(work)
-    return 12μ^2 * xᵀB⁻¹x - 24μ^4 * xᵀB⁻ᵀB⁻¹x
-end
+∇resnorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = 4 * ∇.μ^3 * ∇.xᵀB⁻¹x
+∇²resnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 12 * ∇².μ^2 * ∇².xᵀB⁻¹x - 24 * ∇².μ^4 * ∇².xᵀB⁻ᵀB⁻¹x
 
 seminorm(work::NNLSTikhonovRegProblem) = sqrt(seminorm_sq(work))
 seminorm_sq(work::NNLSTikhonovRegProblem) = solution(work) ⋅ solution(work)
-function ∇seminorm_sq(work::NNLSTikhonovRegProblem)
-    @unpack μ, xᵀB⁻¹x = resnorm_seminorm_gradient_temps(work)
-    return -4μ * xᵀB⁻¹x
-end
-function ∇²seminorm_sq(work::NNLSTikhonovRegProblem)
-    @unpack μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x = resnorm_seminorm_gradient_temps(work)
-    return -4 * xᵀB⁻¹x + 24μ^2 * xᵀB⁻ᵀB⁻¹x
+∇seminorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = -4 * ∇.μ * ∇.xᵀB⁻¹x
+∇²seminorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = -4 * ∇².xᵀB⁻¹x + 24 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x
+
+# L-curve: (ξ(μ), η(μ)) = (||Ax-b||^2, ||x||^2)
+curvature(::typeof(identity), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = inv(2 * ∇.xᵀB⁻¹x * sqrt(1 + ∇.μ^4)^3)
+
+# L-curve: (ξ(μ), η(μ)) = (log||Ax-b||^2, log||x||^2)
+function curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work))
+    ξ = DECAES.resnorm_sq(work)
+    η = DECAES.seminorm_sq(work)
+    C̄ = ξ * η * ((ξ * η / (2 * ∇.xᵀB⁻¹x)) - ∇.μ^2 * (ξ + ∇.μ^2 * η)) / sqrt(ξ^2 + ∇.μ^4 * η^2)^3
+    return C̄
 end
 
-function resnorm_seminorm_gradient_temps(work::NNLSTikhonovRegProblem)
-    # d/dμ x(μ):
-    #   ∇x = -2 * μ * (B\(B\(A'b)))
-    #      = -2 * μ * (B\x)             <-- x = (A'A)\(A'b) = B\(A'b)
-    # 
-    # d/dμ ||A*x(μ)-b||^2:
-    #   ∇μ = 2 * ((A*x-b)' * (A*∇x))
-    #      = 2 * (A'*(A*x-b))' * ∇x
-    #      = 2 * ((-μ^2*x)' * ∇x)       <-- A'*(A*x-b) = -μ^2*x, as 0 = w = [A; μI]' * ([A; μI]*x - [b;0]) = [A; μI]' * [A*x-b; μ*x] = A'*(A*x-b) + μ^2*x
-    #      = 4μ^3 * x' * (B\x)
-    # 
-    # d/dμ ||x(μ)||^2:
-    #   ∇μ = -4μ * b' * (A*(B\(B\(B\(A'b)))))
-    #      = -4μ * b' * (A*(B\(B\x)))   <-- x = (A'A)\(A'b) = B\(A'b)
-    #      = -4μ * (B\(A'b))'* (B\x)    <-- B = B'
-    #      = -4μ * x' * (B\x)
+function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
     nnls_work = work.nnls_work.nnls_work
-    B = cholesky!(NormalEquation(), nnls_work) # B = A'A + μ²I
+    B = cholesky!(NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
     x₊ = NNLS.positive_solution(nnls_work)
-    x = uview(work.buffers.x, 1:length(x₊))
-    B⁻¹x = uview(work.buffers.B⁻¹x, 1:length(x₊))
+    tmp = uview(work.buffers.y, 1:length(x₊))
 
     μ = mu(work)
-    copyto!(x, x₊)
-    ldiv!(B⁻¹x, B, x)
+    copyto!(tmp, x₊)
+    NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
+    xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
 
-    xᵀB⁻¹x = xᵀB⁻ᵀB⁻¹x = zero(μ)
-    @inbounds @simd for i in 1:length(x)
-        xᵀB⁻¹x += x[i] * B⁻¹x[i]
-        xᵀB⁻ᵀB⁻¹x += B⁻¹x[i] * B⁻¹x[i]
-    end
+    return (; μ, xᵀB⁻¹x)
+end
+
+function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
+    nnls_work = work.nnls_work.nnls_work
+    B = cholesky!(NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
+    x₊ = NNLS.positive_solution(nnls_work)
+    tmp = uview(work.buffers.y, 1:length(x₊))
+
+    μ = mu(work)
+    copyto!(tmp, x₊)
+    NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
+    xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
+
+    NNLS.solve_triangular_system!(tmp, B, Val(false)) # tmp = U\(U'\x) = (U'U)\x
+    xᵀB⁻ᵀB⁻¹x = sum(abs2, tmp) # x'B'\B\x = ||B\x||^2 = ||(U'U)\x||^2
 
     return (; μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x)
 end
@@ -767,10 +762,13 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_work_smooth_cache)
 
+    # A point on the L-curve is given by (ξ(μ), η(μ)) = (log||Ax-b||^2, log||x||^2)
+    #   Note: Squaring the norms is convenient for computing gradients of (ξ(μ), η(μ));
+    #         this shifts the L-curve by a constant, but does not change the curvature
     function f_lcurve(logμ)
         solve!(work.nnls_work_smooth_cache, exp(logμ))
-        ξ = log(resnorm(get_cache(work.nnls_work_smooth_cache)))
-        η = log(seminorm(get_cache(work.nnls_work_smooth_cache)))
+        ξ = log(resnorm_sq(get_cache(work.nnls_work_smooth_cache)))
+        η = log(seminorm_sq(get_cache(work.nnls_work_smooth_cache)))
         return SA{T}[ξ, η]
     end
 
@@ -1115,7 +1113,7 @@ function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2,T}}
     a, b, c = norm(v₁), norm(v₂), norm(v₁ - v₂)
     a, b = max(a, b), min(a, b)
     μ = b ≥ c ? c - (a - b) : (b - (a - c))
-    num = ((a - b) + c) * max(μ, zero(μ))
+    num = ((a - b) + c) * max(μ, zero(T))
     den = (a + (b + c)) * ((a - c) + b)
     α = 2 * atan(√(num / den))
     v₁ × v₂ > 0 ? 2*T(π) - α : α
