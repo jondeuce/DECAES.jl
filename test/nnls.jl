@@ -2,16 +2,9 @@ NNLS_SIZES = vec(collect(Iterators.product([1,2,5,8,16,32], [1,2,5,8,16,32])))
 
 function rand_NNLS_data(m, n)
     # A strictly positive, unconstrained x has negative entries
-    if m < 4 || n < 2
-        x = rand(MersenneTwister(0), n) .* ifelse.(isodd.(1:n), -1, 1)
-        A = rand(MersenneTwister(0), m, n)
-        b = A*x
-    else
-        opts = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = m, nT2 = n, RefConAngle = 180.0)
-        prob = DECAES.mock_surrogate_search_problem(Val(1), Val(m), opts)
-        A = prob.As[:,:,end]
-        b = prob.b
-    end
+    x = rand(MersenneTwister(0), n) .* ifelse.(isodd.(1:n), -1, 1)
+    A = rand(MersenneTwister(0), m, n)
+    b = A*x
     return A, b
 end
 

@@ -19,15 +19,15 @@ DECAES provides tools for decomposing multi-exponential signals which arise from
 The main decomposition method used is an inverse Laplace transform-based technique which involves solving the regularized nonnegative least squares (NNLS) inverse problem
 
 ```math
-X = \mathrm{argmin}_{x \ge 0} ||Cx - d||_2^2 + \mu^2 ||x||_2^2
+X = \mathrm{argmin}_{x \ge 0} ||Ax - b||_2^2 + \mu^2 ||x||_2^2
 ```
 
-where $d$ is the signal magnitude data, $C$ is a matrix of exponential decay bases, and $\mu$ is a regularization parameter.
-$C$ is constructed using the extended phase graph algorithm with stimulated echo correction.
-The columns of $C$ are exponential bases with differing characteristic $T_2$ decay times $T_{2,j}$.
+where $b$ is the signal magnitude data, $A$ is a matrix of exponential decay bases, and $\mu$ is a regularization parameter.
+$A$ is constructed using the extended phase graph algorithm with stimulated echo correction.
+The columns of $A$ are exponential bases with differing characteristic $T_2$ decay times $T_{2,j}$.
 
 The output $X$ is the spectrum of (nonnegative) exponential decay amplitudes.
-Amplitude $X_j$ of the spectrum $X$ is therefore interpreted physically as the amount of the signal $d$ which decays with time constant $T_{2,j}$.
+Amplitude $X_j$ of the spectrum $X$ is therefore interpreted physically as the amount of the signal $b$ which decays with time constant $T_{2,j}$.
 For this reason, the spectrum $X$ is commonly referred to as the $T_2$ *distribution*.
 DECAES provides methods for [computing $T_2$-distributions](@ref t2map).
 
