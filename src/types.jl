@@ -97,7 +97,7 @@ See also:
     SaveRegParam::Bool = false
 
     "Boolean flag to include a 5D (or 2D if `SetFlipAngle` is used) array of NNLS basis matrices in the output maps dictionary."
-    SaveNNLSBasis::Bool = SetFlipAngle !== nothing
+    SaveNNLSBasis::Bool = false
 
     "Suppress printing to the console."
     Silent::Bool = false

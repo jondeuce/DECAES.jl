@@ -123,6 +123,10 @@ add_arg_group!(CLI_SETTINGS,
 )
 
 @add_arg_table! CLI_SETTINGS begin
+    "--B1map"
+        nargs = '+' # If --B1map is passed, at least one input is required
+        arg_type = String
+        help = "one or more B1 map filenames. The B1 maps must have the same matrix sizes as the corresponding images, and are assumed to represent flip angles in units of degrees. The number of B1 map files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING. (units: degrees)"
     "--nRefAngles"
         arg_type = Int
         help = "in estimating the local refocusing flip angle to correct for B1 inhomogeneities, up to --nRefAngles angles in the range [--MinRefAngle, 180] are explicitly checked. The optimal angle is then estimated by interpolating between these observations. (default: 32)"
@@ -287,9 +291,21 @@ function main(file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
 
     # Compute T2 distribution from input 4D multi-echo image
     if opts[:T2map]
+        t2map_opts = t2map_options(image, opts)
+        t2map_maps = T2Maps(t2map_opts)
+        t2map_dist = T2Distributions(t2map_opts)
+
+        # Load B1 map
+        if file_info[:B1mapfile] !== nothing
+            @showtime(
+                "Loading B1 map from file: '$(file_info[:B1mapfile])'",
+                try_load_B1mapfile!(t2map_maps, file_info[:B1mapfile]),
+            )
+        end
+
         maps, dist = @showtime(
             "Running T2mapSEcorr on file: $(file_info[:inputfile])",
-            T2mapSEcorr(image, t2map_options(image, opts)),
+            T2mapSEcorr!(t2map_maps, t2map_dist, image, t2map_opts),
         )
 
         # Save T2-distribution to .mat file
@@ -408,7 +424,7 @@ function t2part_options(dist::Array, opts::Dict{Symbol,Any})
 end
 
 function get_file_infos(opts::Dict{Symbol,Any})
-    @unpack input, output, mask = opts
+    @unpack input, output, mask, B1map = opts
     @assert !isempty(input) "At least one input file is required"
 
     # Read in input files
@@ -445,13 +461,24 @@ function get_file_infos(opts::Dict{Symbol,Any})
         error("Number of mask files passed ($(length(mask))) does not equal the number of input image files passed ($(length(inputfiles))")
     end
 
+    # Get B1 map files
+    B1mapfiles = if isempty(B1map)
+        fill(nothing, length(inputfiles)) # no B1map passed
+    elseif length(B1map) == length(inputfiles)
+        @assert opts[:SetFlipAngle] === nothing "Cannot set a fixed flip angle using --SetFlipAngle when passing B1 maps using --B1map"
+        String.(B1map) # one B1map passed for each input file
+    else
+        error("Number of B1 map files passed ($(length(B1map))) does not equal the number of input image files passed ($(length(inputfiles))")
+    end
+
     # Create file_info dictionaries
     file_info = Dict{Symbol, Any}[]
-    for (inputfile, outputfolder, maskfile) in zip(inputfiles, outputfolders, maskfiles)
+    for (inputfile, outputfolder, maskfile, B1mapfile) in zip(inputfiles, outputfolders, maskfiles, B1mapfiles)
         d = Dict{Symbol, Any}(
             :inputfile => inputfile,
             :outputfolder => outputfolder,
             :maskfile => maskfile,
+            :B1mapfile => B1mapfile,
             :choppedinputfile => chop_allowed_suffix(basename(inputfile)),
         )
         push!(file_info, d)
@@ -504,7 +531,17 @@ function load_image(filename, ::Val{N}) where {N}
 end
 load_image(filename; ndims::Int = 4) = load_image(filename, Val(ndims))
 
-function try_apply_maskfile!(image, maskfile)
+function try_load_B1mapfile!(maps::T2Maps{T}, B1mapfile::String) where {T}
+    try
+        load_B1map!(maps, load_image(B1mapfile, Val(3)))
+    catch e
+        @warn "Error while loading B1 map file: $B1mapfile"
+        @warn sprint(showerror, e, catch_backtrace())
+    end
+    return nothing
+end
+
+function try_apply_maskfile!(image::Array{T,4}, maskfile::String) where {T}
     try
         image .*= load_image(maskfile, Val(3))
     catch e
@@ -514,7 +551,7 @@ function try_apply_maskfile!(image, maskfile)
     return image
 end
 
-function try_apply_bet!(image, betpath, betargs)
+function try_apply_bet!(image::Array{T,4}, betpath::String, betargs::String) where {T}
     try
         image .*= make_bet_mask(image, betpath, betargs)
     catch e
@@ -524,7 +561,7 @@ function try_apply_bet!(image, betpath, betargs)
     return image
 end
 
-function make_bet_mask(image::Array{T,3}, betpath, betargs) where {T}
+function make_bet_mask(image::Array{T,3}, betpath::String, betargs::String) where {T}
     # Split betargs, and ensure that "-m" (make binary mask) is among args
     args = convert(Vector{String}, filter!(!isempty, split(betargs, " ")))
     if "-m" ∉ args

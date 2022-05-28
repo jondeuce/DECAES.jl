@@ -56,7 +56,7 @@ Available command line arguments are broken into four categories:
 1. **Positional arguments:** these are the input files. Input files are typically placed at the beginning of `<COMMAND LINE ARGS>`.
 2. **Optional arguments:** settings governing the analysis pipeline. See below for details.
 3. **[`T2mapSEcorr`](@ref)/[`T2partSEcorr`](@ref) arguments:** settings for computing the $T_2$-distribution and subsequent $T_2$-parts analysis. Required arguments are listed first; see below for the full parameter list, and see [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) for parameter descriptions. Note: if no default is shown, the parameter is unused by default.
-4. **B1 correction and stimulated echo correction:** settings for controlling B1 correction and stimulated echo correction. These settings typically need not be modified. However, the following options are noteworthy: `--SetFlipAngle` for skipping B1 correction; and `--SetRefConAngle` for enabling stimulated echo correction.
+4. **B1 correction and stimulated echo correction:** settings for controlling B1 correction and stimulated echo correction. These settings typically need not be modified. However, the following options are noteworthy: `--SetFlipAngle` allows for prescribing a fixed flip angle for all voxels instead of estimating the flip angle per-voxel; and `--B1map` allows for passing B1 maps (units of degrees) directly, replacing the flip angle estimation step.
 5. **Additional save options:** optional additional output maps
 6. **[BET](@ref bet) arguments:** settings for governing automatic brain mask generation using the BET brain extraction tool; [see below](@ref bet) for details.
 

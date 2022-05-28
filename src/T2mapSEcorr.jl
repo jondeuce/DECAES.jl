@@ -1,3 +1,88 @@
+# Internal convenience container for holding T2 maps outputs
+@with_kw_noshow struct T2Maps{
+        T,
+        A1 <: Union{T, Vector{T}},
+        A2 <: Union{Matrix{T}, Array{T,3}},
+        A3 <: Union{Nothing, Array{T,3}},
+        A4 <: Union{Nothing, Array{T,4}},
+        A5 <: Union{Nothing, Array{T,3}},
+        A6 <: Union{Nothing, Array{T,3}},
+        A7 <: Union{Nothing, Matrix{T}, Array{T,5}},
+    }
+    echotimes::Vector{T}
+    t2times::Vector{T}
+    refangleset::A1
+    decaybasisset::A2
+    gdn::Array{T,3}
+    ggm::Array{T,3}
+    gva::Array{T,3}
+    fnr::Array{T,3}
+    snr::Array{T,3}
+    alpha::Array{T,3}
+    is_alpha_provided::Base.RefValue{Bool}
+    resnorm::A3
+    decaycurve::A4
+    mu::A5
+    chi2factor::A6
+    decaybasis::A7
+end
+
+Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Maps) if getfield(maps, f) isa Array])
+Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
+
+function T2Maps(opts::T2mapOptions{T}) where {T}
+    thread_buffer = thread_buffer_maker(opts)
+    T2Maps(;
+        # Misc. processing parameters
+        echotimes      = convert(Array{T}, copy(opts.TE .* (1:opts.nTE))),
+        t2times        = convert(Array{T}, copy(thread_buffer.T2_times)),
+        refangleset    = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(thread_buffer.flip_angles)) : T(opts.SetFlipAngle),
+        decaybasisset  = opts.SetFlipAngle === nothing ?
+            convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis_set_ensemble.decay_basis_set)) :
+            convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis)),
+
+        # Default output maps
+        gdn   = fill(T(NaN), opts.MatrixSize...),
+        ggm   = fill(T(NaN), opts.MatrixSize...),
+        gva   = fill(T(NaN), opts.MatrixSize...),
+        fnr   = fill(T(NaN), opts.MatrixSize...),
+        snr   = fill(T(NaN), opts.MatrixSize...),
+        alpha = fill(T(NaN), opts.MatrixSize...),
+        is_alpha_provided = Ref(false),
+
+        # Optional output maps
+        resnorm    = !opts.SaveResidualNorm ? nothing : fill(T(NaN), opts.MatrixSize...),
+        decaycurve = !opts.SaveDecayCurve   ? nothing : fill(T(NaN), opts.MatrixSize..., opts.nTE),
+        mu         = !opts.SaveRegParam     ? nothing : fill(T(NaN), opts.MatrixSize...),
+        chi2factor = !opts.SaveRegParam     ? nothing : fill(T(NaN), opts.MatrixSize...),
+        decaybasis = !opts.SaveNNLSBasis    ? nothing :
+            opts.SetFlipAngle === nothing ?
+                fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) : # unique decay basis set for each voxel
+                convert(Array{T}, copy(thread_buffer.decay_basis)), # single decay basis set used for all voxels
+    )
+end
+
+function load_B1map!(maps::T2Maps, alpha)
+    maps.alpha .= alpha
+    maps.is_alpha_provided[] = true
+    return maps
+end
+@inline is_B1map_provided(maps::T2Maps) = maps.is_alpha_provided[]
+
+# Internal convenience container for holding T2 distributions
+@with_kw_noshow struct T2Distributions{T}
+    distributions::Array{T,4}
+end
+
+function T2Distributions(opts::T2mapOptions{T}) where {T}
+    T2Distributions(;
+        distributions = fill(T(NaN), opts.MatrixSize..., opts.nT2),
+    )
+end
+
+@inline Base.parent(dist::T2Distributions) = dist.distributions
+@inline Base.convert(::Type{Array{T,4}}, dist::T2Distributions) where {T} = convert(Array{T,4}, parent(dist))
+
 """
     T2mapSEcorr(image::Array{T,4}; <keyword arguments>)
     T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T})
@@ -59,8 +144,15 @@ See also:
 * [`EPGdecaycurve`](@ref)
 """
 T2mapSEcorr(image::Array{T,4}; kwargs...) where {T} = T2mapSEcorr(image, T2mapOptions(image; kwargs...))
+T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T} = T2mapSEcorr!(T2Maps(opts), T2Distributions(opts), image, opts)
 
-function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
+function T2mapSEcorr!(
+        maps::T2Maps{T},
+        dist::T2Distributions{T},
+        image::Array{T,4},
+        opts::T2mapOptions{T},
+    ) where {T}
+
     # =========================================================================
     # Initialize output data structures and thread-local buffers
     # =========================================================================
@@ -68,12 +160,6 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
 
     # Print settings to terminal
     !opts.Silent && @info show_string(opts)
-
-    # =========================================================================
-    # Initialization
-    # =========================================================================
-    maps = T2Maps(opts)
-    distributions = fill(T(NaN), opts.MatrixSize..., opts.nT2)
 
     # =========================================================================
     # Process all pixels
@@ -95,95 +181,42 @@ function T2mapSEcorr(image::Array{T,4}, opts::T2mapOptions{T}) where {T}
 
     workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
         @inbounds for j in inds
-            voxelwise_T2_distribution!(thread_buffer, maps, distributions, uview(signals, :, j), opts, indices[j])
+            voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(signals, :, j), opts, indices[j])
         end
     end
 
     LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
 
-    return convert(Dict{String, Any}, maps), distributions
-end
-
-@with_kw_noshow struct T2Maps{
-        T,
-        A1 <: Union{T, Vector{T}},
-        A2 <: Union{Matrix{T}, Array{T,3}},
-        A3 <: Union{Nothing, Array{T,3}},
-        A4 <: Union{Nothing, Array{T,4}},
-        A5 <: Union{Nothing, Array{T,3}},
-        A6 <: Union{Nothing, Array{T,3}},
-        A7 <: Union{Nothing, Matrix{T}, Array{T,5}},
-    }
-    echotimes::Vector{T}
-    t2times::Vector{T}
-    refangleset::A1
-    decaybasisset::A2
-    gdn::Array{T,3}
-    ggm::Array{T,3}
-    gva::Array{T,3}
-    fnr::Array{T,3}
-    snr::Array{T,3}
-    alpha::Array{T,3}
-    resnorm::A3
-    decaycurve::A4
-    mu::A5
-    chi2factor::A6
-    decaybasis::A7
-end
-
-Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Maps) if getfield(maps, f) !== nothing])
-Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
-
-function T2Maps(opts::T2mapOptions{T}) where {T}
-    thread_buffer = thread_buffer_maker(opts)
-    T2Maps(;
-        # Misc. processing parameters
-        echotimes      = convert(Array{T}, copy(opts.TE .* (1:opts.nTE))),
-        t2times        = convert(Array{T}, copy(thread_buffer.T2_times)),
-        refangleset    = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(thread_buffer.flip_angles)) : T(opts.SetFlipAngle),
-        decaybasisset  = opts.SetFlipAngle === nothing ?
-            convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis_set_ensemble.decay_basis_set)) :
-            convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis)),
-
-        # Default output maps
-        gdn   = fill(T(NaN), opts.MatrixSize...),
-        ggm   = fill(T(NaN), opts.MatrixSize...),
-        gva   = fill(T(NaN), opts.MatrixSize...),
-        fnr   = fill(T(NaN), opts.MatrixSize...),
-        snr   = fill(T(NaN), opts.MatrixSize...),
-        alpha = fill(T(NaN), opts.MatrixSize...),
-
-        # Optional output maps
-        resnorm    = !opts.SaveResidualNorm ? nothing : fill(T(NaN), opts.MatrixSize...),
-        decaycurve = !opts.SaveDecayCurve   ? nothing : fill(T(NaN), opts.MatrixSize..., opts.nTE),
-        mu         = !opts.SaveRegParam     ? nothing : fill(T(NaN), opts.MatrixSize...),
-        chi2factor = !opts.SaveRegParam     ? nothing : fill(T(NaN), opts.MatrixSize...),
-        decaybasis = !opts.SaveNNLSBasis    ? nothing :
-            opts.SetFlipAngle === nothing ?
-                fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) : # unique decay basis set for each voxel
-                convert(Array{T}, copy(thread_buffer.decay_basis)), # single decay basis set used for all voxels
-    )
+    return convert(Dict{String, Any}, maps), convert(Array{T,4}, dist)
 end
 
 # =========================================================
 # Main loop function
 # =========================================================
-function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps, distributions, signal, opts::T2mapOptions, I::CartesianIndex)
+function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps, dist::T2Distributions, signal, opts::T2mapOptions, I::CartesianIndex)
+    @unpack decay_data, flip_angle_work, T2_dist_work = thread_buffer
+
     # Copy decay curve into the thread buffer
     @inbounds @simd for j in 1:opts.nTE
-        thread_buffer.decay_data[j] = signal[j]
+        decay_data[j] = signal[j]
     end
 
-    # Find optimum flip angle and compute EPG decay basis
-    if opts.SetFlipAngle === nothing
-        optimize_flip_angle!(thread_buffer.flip_angle_work, opts)
+    if is_B1map_provided(maps)
+        # Load flip angle from provided B1 map
+        @inbounds flip_angle_work.α[] = maps.alpha[I]
+
+        # Compute basis using provided flip angle
+        epg_decay_basis!(flip_angle_work.decay_basis_set, flip_angle_work.decay_basis, SA[flip_angle_work.α[]])
+    else
+        # Find optimum flip angle and compute EPG decay basis
+        optimize_flip_angle!(flip_angle_work, opts)
     end
 
     # Calculate T2 distribution and map parameters
-    t2_distribution!(thread_buffer.T2_dist_work)
+    t2_distribution!(T2_dist_work)
 
     # Save loop results to outputs
-    save_results!(thread_buffer, maps, distributions, opts, I)
+    save_results!(thread_buffer, maps, dist, opts, I)
 
     return nothing
 end
@@ -408,13 +441,13 @@ solution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
 # =========================================================
 # Save thread local results to output maps
 # =========================================================
-function save_results!(thread_buffer, maps::T2Maps, distributions, o::T2mapOptions, I::CartesianIndex)
+function save_results!(thread_buffer, maps::T2Maps, dist::T2Distributions, o::T2mapOptions, I::CartesianIndex)
     @unpack T2_dist_work, flip_angle_work, logT2_times, decay_data, decay_basis, decay_calc, residuals, gva_buf = thread_buffer
     T2_dist = solution(T2_dist_work)
 
     # Compute and save parameters of distribution
+    @unpack gdn, ggm, gva, fnr, snr, alpha = maps
     @inbounds begin
-        @unpack gdn, ggm, gva, fnr, snr, alpha = maps
         mul!(decay_calc, decay_basis, T2_dist)
         residuals .= decay_calc .- decay_data
         gdn[I]   = sum(T2_dist)
@@ -427,6 +460,7 @@ function save_results!(thread_buffer, maps::T2Maps, distributions, o::T2mapOptio
     end
 
     # Save distribution
+    @unpack distributions = dist
     @inbounds @simd for j in 1:o.nT2
         distributions[I,j] = T2_dist[j]
     end
