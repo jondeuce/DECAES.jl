@@ -229,11 +229,12 @@ cli_params_perms = Any[
 @testset "CLI" begin
     make_settings_perms = [false, true]
     file_suffix_perms = [".mat", ".nii", ".nii.gz"] # Note: no PAR/REC or XML/REC, since we can't write to them
-    iters = (cli_params_perms, make_settings_perms, file_suffix_perms)
-    nloop = max(length.(iters)...)
-    repeat_until(x) = Iterators.take(Iterators.cycle(x), nloop)
+    B1map_perms = [false, true]
+    legacy_perms = [false, true]
+    param_perms = (cli_params_perms, make_settings_perms, file_suffix_perms, B1map_perms, legacy_perms)
+    repeat_until(x) = Iterators.take(Iterators.cycle(x), max(length.(param_perms)...))
 
-    for (param_val_lists, make_settings_file, file_suffix) in zip(map(repeat_until, iters)...), param_val_pairs in zip(param_val_lists...), legacy in [false, true]
+    for (param_val_lists, make_settings_file, file_suffix, B1map, legacy) in zip(map(repeat_until, param_perms)...), param_val_pairs in zip(param_val_lists...)
         paramdict = deepcopy(default_paramdict)
         for (param, paramval) in param_val_pairs
             paramdict[param] = paramval
@@ -257,6 +258,13 @@ cli_params_perms = Any[
             settings_kwargs_cli[:outputpath] = path
             settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
             cli_t2map_args = construct_args(paramdict; settings_kwargs_cli...)
+
+            if B1map && !("--SetFlipAngle" ∈ cli_t2map_args)
+                # Write reference B1map computed above to file and pass filename to DECAES CLI
+                B1mapfilename = joinpath(path, "B1" * file_suffix)
+                write_image(B1mapfilename, t2map["alpha"])
+                append!(cli_t2map_args, ["--B1map", B1mapfilename])
+            end
 
             t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_devnull() do
                 run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
