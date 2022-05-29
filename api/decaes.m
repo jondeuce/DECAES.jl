@@ -92,7 +92,7 @@ function status = decaes(varargin)
 % 
 %   Note the separation of the Matlab-specific flags from the DECAES settings file.
 % 
-% This version of decaes.m was written for DECAES v0.4.3.
+% This version of decaes.m was written for DECAES v0.4.4.
 % DECAES was written by Jonathan Doucette (jdoucette@physics.ubc.ca).
 % Original MATLAB implementation is by Thomas Prasloski (tprasloski@gmail.com).
 
