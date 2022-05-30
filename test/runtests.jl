@@ -1,9 +1,9 @@
 using Test
 using DECAES
 
-using LinearAlgebra
-using Random
-using StaticArrays
+using DECAES.LinearAlgebra
+using DECAES.Random
+using DECAES.StaticArrays
 
 using DECAES.NNLS
 using DECAES:
