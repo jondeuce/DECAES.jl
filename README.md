@@ -98,7 +98,7 @@ Benchmarking notes:
 
 ## JuliaCon 2021
 
-[![JuliaCon 2021 - Matlab to Julia: Hours to Minutes for MRI Image Analysis](https://imgur.com/u364KDv)](https://www.youtube.com/watch?v=6OxsK2R5VkA)
+[![JuliaCon 2021 - Matlab to Julia: Hours to Minutes for MRI Image Analysis](https://imgur.com/2dnhAdR.png)](https://www.youtube.com/watch?v=6OxsK2R5VkA)
 
 ## Citing this work
 
