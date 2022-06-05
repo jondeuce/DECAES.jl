@@ -1170,7 +1170,7 @@ end
 @inline function evaluate!(spline_values::AbstractArray{T,N}, spline::AbstractNormalSpline{n,T,RK}, points::AbstractArrOfSVecs{n,T,N}) where {n, T <: Real, N, RK <: ReproducingKernel_0}
     return _evaluate!(spline_values, spline, points)
 end
-@inline function evaluate(spline::AbstractNormalSpline{n,T,RK}, point::SVector{n,T}) where {n, T <: Real, N, RK <: ReproducingKernel_0}
+@inline function evaluate(spline::AbstractNormalSpline{n,T,RK}, point::SVector{n,T}) where {n, T <: Real, RK <: ReproducingKernel_0}
     return _evaluate(spline, point)
 end
 

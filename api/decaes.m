@@ -329,6 +329,7 @@ function runtime = try_find_julia_runtime()
     end
 
     % Try to find the default system julia
+    st = 1;
     if isunix
         [st, res] = system('which julia');
     elseif ispc
