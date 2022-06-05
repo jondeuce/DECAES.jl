@@ -41,7 +41,7 @@ using LinearAlgebra
 using UnPack: @unpack
 using UnsafeArrays: @uviews, uviews, uview
 using MuladdMacro: @muladd
-# using LoopVectorization: @avx
+# using LoopVectorization: @turbo
 
 export nnls, nnls!, load!
 export NNLSWorkspace, NormalEquation, NormalEquationCholesky
@@ -185,8 +185,9 @@ function construct_householder!(u::AbstractVector{T}, up::T) where {T}
     end
 
     sm = zero(T)
-    @inbounds @simd for ui in u #@avx
-        sm = sm + ui * ui
+    # @turbo for i in eachindex(u)
+    @inbounds @simd for i in eachindex(u)
+        sm = sm + u[i] * u[i]
     end
     cl = sqrt(sm)
 
@@ -223,14 +224,16 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
 
     @inbounds c1 = c[1]
     sm = c1 * up
-    @inbounds @simd for i in 2:m #@avx
+    # @turbo for i in 2:m
+    @inbounds @simd for i in 2:m
         sm = sm + c[i] * u[i]
     end
 
     if sm != 0
         sm /= up_u1
         @inbounds c[1] = c[1] + sm * up
-        @inbounds @simd ivdep for i in 2:m #@avx
+        # @turbo for i in 2:m
+        @inbounds @simd ivdep for i in 2:m
             c[i] = c[i] + sm * u[i]
         end
     end
@@ -253,12 +256,14 @@ function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int
     @inbounds for ip in nsetp+1:n
         j = idx[ip]
         sm = zero(T)
-        @inbounds @simd for l in nsetp:m #@avx
+        # @turbo for l in nsetp:m
+        @inbounds @simd for l in nsetp:m
             sm = sm + A[l, j] * A[l, jup]
         end
         @inbounds if sm != 0
             sm /= up_u1
-            @inbounds @simd ivdep for l in nsetp:m #@avx
+            # @turbo for l in nsetp:m
+            @inbounds @simd ivdep for l in nsetp:m
                 A[l, j] = A[l, j] + sm * A[l, jup]
             end
         end
@@ -324,7 +329,8 @@ function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, i
         @inbounds zz[nsetp] /= A[nsetp, j]
         @inbounds for ip in nsetp-1:-1:1
             zz1 = zz[ip + 1]
-            @inbounds @simd ivdep for l in 1:ip #@avx
+            # @turbo for l in 1:ip
+            @inbounds @simd ivdep for l in 1:ip
                 zz[l] = zz[l] - A[l, j] * zz1
             end
             j = idx[ip]
@@ -340,7 +346,8 @@ function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, i
         @inbounds for ip in 2:nsetp
             j = idx[ip]
             zz1 = zz[ip]
-            @inbounds @simd for l in 1:ip-1 #@avx
+            # @turbo for l in 1:ip-1
+            @inbounds @simd for l in 1:ip-1
                 zz1 = zz1 - A[l, j] * zz[l]
             end
             zz1 /= A[ip, j]
@@ -411,7 +418,8 @@ function nnls!(
         @inbounds for ip in nsetp+1:n
             j = idx[ip]
             sm = zero(T)
-            @inbounds @simd for l in nsetp+1:m #@avx
+            # @turbo for l in nsetp+1:m
+            @inbounds @simd for l in nsetp+1:m
                 sm = sm + A[l, j] * b[l]
             end
             w[j] = sm
@@ -475,7 +483,8 @@ function nnls!(
         end
 
         if nsetp != m
-            @inbounds @simd ivdep for l in nsetp+1:m #@avx
+            # @turbo for l in nsetp+1:m
+            @inbounds @simd ivdep for l in nsetp+1:m
                 A[l, j_maxdual] = zero(T)
             end
         end
@@ -544,12 +553,14 @@ function nnls!(
                         A[ip, j]   = zero(T)
 
                         # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
+                        # @turbo for l in 1:j-1
                         @inbounds @simd for l in 1:j-1
                             tmp = A[ip-1, l]
                             A[ip-1, l] =  cc * tmp + ss * A[ip, l]
                             A[ip,   l] = -ss * tmp + cc * A[ip, l]
                         end
 
+                        # @turbo for l in j+1:n
                         @inbounds @simd for l in j+1:n
                             tmp = A[ip-1, l]
                             A[ip-1, l] =  cc * tmp + ss * A[ip, l]
@@ -609,7 +620,8 @@ function nnls!(
 
     sm = zero(T)
     if nsetp < m
-        @inbounds @simd for ip in nsetp+1:m #@avx
+        # @turbo for ip in nsetp+1:m
+        @inbounds @simd for ip in nsetp+1:m
             bi = b[ip]
             zz[ip] = bi
             sm = sm + bi * bi
