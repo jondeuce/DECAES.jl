@@ -28,8 +28,13 @@ function write_image(filename, image)
     end
 end
 
+function matlab_api_main(matlab_args, args)
+    mxcall(:decaes, 0, matlab_args..., args...)
+end
+
 # Call main function on image file `image`
 function run_main(image, args; make_settings_file::Bool)
+    global RUN_MATLAB_TESTS
 
     # Write input image to file for reading
     inputfilename = args[1]
@@ -202,31 +207,31 @@ end
 # CLI parameter settings to loop over
 #   -Each param value will be tested individually, with all other params set to default values
 #   -Each list should contain some non-default/edge case values
-cli_params_perms = Any[
-    (:MPWin            .=> [(38e-3, 180e-3)],),
-    (:MinRefAngle      .=> [55.0],),
-    (:RefConAngle      .=> [172.0],),
-    (
-        :Reg           .=> ["none", "chi2", "gcv", "lcurve"],
-        :Chi2Factor    .=> [nothing, 1.025, nothing, nothing],
-    ),
-    (:SPWin            .=> [(13e-3, 37e-3)],),
-    (:SaveResidualNorm .=> [false, true],),
-    (:SaveDecayCurve   .=> [false, true],),
-    (:SaveNNLSBasis    .=> [false, true],),
-    (:SaveRegParam     .=> [false, true],),
-    (:SetFlipAngle     .=> [nothing, 170.0],),
-    (:Sigmoid          .=> [nothing, 1.0],),
-    (:T1               .=> [0.95],),
-    (:T2Range          .=> [(16e-3, 1.8)],),
-    (:TE               .=> [8e-3, 11e-3],),
-    (:Threshold        .=> [125_000.0, Inf],), # Include non-zero and infinite (i.e. either some or all voxels skipped)
-    (:nRefAngles       .=> [9, 10],), # Include odd number
-    (:nRefAnglesMin    .=> [4, 5],), # Include odd number
-    (:nT2              .=> [2, 47],), # Include odd number
-]
+function run_cli_tests()
+    cli_params_perms = Any[
+        (:MPWin            .=> [(38e-3, 180e-3)],),
+        (:MinRefAngle      .=> [55.0],),
+        (:RefConAngle      .=> [172.0],),
+        (
+            :Reg           .=> ["none", "chi2", "gcv", "lcurve"],
+            :Chi2Factor    .=> [nothing, 1.025, nothing, nothing],
+        ),
+        (:SPWin            .=> [(13e-3, 37e-3)],),
+        (:SaveResidualNorm .=> [false, true],),
+        (:SaveDecayCurve   .=> [false, true],),
+        (:SaveNNLSBasis    .=> [false, true],),
+        (:SaveRegParam     .=> [false, true],),
+        (:SetFlipAngle     .=> [nothing, 170.0],),
+        (:Sigmoid          .=> [nothing, 1.0],),
+        (:T1               .=> [0.95],),
+        (:T2Range          .=> [(16e-3, 1.8)],),
+        (:TE               .=> [8e-3, 11e-3],),
+        (:Threshold        .=> [125_000.0, Inf],), # Include non-zero and infinite (i.e. either some or all voxels skipped)
+        (:nRefAngles       .=> [9, 10],), # Include odd number
+        (:nRefAnglesMin    .=> [4, 5],), # Include odd number
+        (:nT2              .=> [2, 47],), # Include odd number
+    ]
 
-@testset "CLI" begin
     make_settings_perms = [false, true]
     file_suffix_perms = [".mat", ".nii", ".nii.gz"] # Note: no PAR/REC or XML/REC, since we can't write to them
     B1map_perms = [false, true]
@@ -306,6 +311,10 @@ cli_params_perms = Any[
     end
 end
 
+@testset "Command line interface" begin
+    run_cli_tests()
+end
+
 # ================================================================================
 # UBC MWI Toolbox MATLAB compatibility tests
 #   NOTE: For these tests to run, MATLAB must be installed on your default path.
@@ -322,44 +331,39 @@ matlabify(x::Bool) = x
 matlabify(x) = map(Float64, x)
 matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k, v) in kwargs if v !== nothing])
 
-mfile_exists(fname) = MATLAB.mxcall(:exist, 1, fname) == 2
-
-mxT2mapSEcorr(image, maxCores = 6; kwargs...) =
-    MATLAB.mxcall(:T2map_SEcorr_nechoes_2019, 2, image, maxCores, matlabify(kwargs)...)
-
-mxT2partSEcorr(image; kwargs...) =
-    MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
-
-# Arbitrary non-default T2mapSEcorr options for testing
-mat_t2map_params_perms = Any[
-    (:TE               .=> [9e-3],),
-    (:T1               .=> [1.1],),
-    (:Threshold        .=> [250.0],),
-    (:nT2              .=> [10, 59],), # Include odd number
-    (:T2Range          .=> [(8e-3, 1.0)],),
-    (:RefConAngle      .=> [175.0],),
-    (:MinRefAngle      .=> [60.0],),
-    (:nRefAngles       .=> [7, 12],),
-    (
-        :Reg           .=> ["none", "chi2", "lcurve", "gcv"],
-        :Chi2Factor    .=> [nothing, 1.03, nothing, nothing],
-    ),
-    (:SetFlipAngle     .=> [178.0],),
-    (:SaveResidualNorm .=> [false, true],),
-    (:SaveDecayCurve   .=> [false, true],),
-    (:SaveRegParam     .=> [false, true],),
-    (:SaveNNLSBasis    .=> [false, true],),
-]
-
-# Arbitrary non-default T2partSEcorr options for testing
-mat_t2part_params_perms = Any[
-    (:T2Range    .=> [(11e-3, 1.5)],),
-    (:SPWin      .=> [(12e-3, 28e-3)],),
-    (:MPWin      .=> [(35e-3, 150e-3)],),
-    (:Sigmoid    .=> [1.5],),
-]
+mxT2mapSEcorr(image, maxCores = 1; kwargs...) = MATLAB.mxcall(:T2map_SEcorr_nechoes_2019, 2, image, maxCores, matlabify(kwargs)...)
+mxT2partSEcorr(image; kwargs...) = MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
 
 function matlab_tests()
+    # Arbitrary non-default T2mapSEcorr options for testing
+    mat_t2map_params_perms = Any[
+        (:TE               .=> [9e-3],),
+        (:T1               .=> [1.1],),
+        (:Threshold        .=> [250.0],),
+        (:nT2              .=> [10, 59],), # Include odd number
+        (:T2Range          .=> [(8e-3, 1.0)],),
+        (:RefConAngle      .=> [175.0],),
+        (:MinRefAngle      .=> [60.0],),
+        (:nRefAngles       .=> [7, 12],),
+        (
+            :Reg           .=> ["none", "chi2", "lcurve", "gcv"],
+            :Chi2Factor    .=> [nothing, 1.03, nothing, nothing],
+        ),
+        (:SetFlipAngle     .=> [178.0],),
+        (:SaveResidualNorm .=> [false, true],),
+        (:SaveDecayCurve   .=> [false, true],),
+        (:SaveRegParam     .=> [false, true],),
+        (:SaveNNLSBasis    .=> [false, true],),
+    ]
+
+    # Arbitrary non-default T2partSEcorr options for testing
+    mat_t2part_params_perms = Any[
+        (:T2Range    .=> [(11e-3, 1.5)],),
+        (:SPWin      .=> [(12e-3, 28e-3)],),
+        (:MPWin      .=> [(35e-3, 150e-3)],),
+        (:Sigmoid    .=> [1.5],),
+    ]
+
     # Relative tolerance threshold for legacy algorithms to match MATLAB version
     default_rtol = 1e-10
 
@@ -455,34 +459,10 @@ function matlab_tests()
     end
 end
 
-# Try loading MATLAB.jl and running tests
-try
-    # Check for environment flags
-    mwi_toolbox_path = get(ENV, "DECAES_MWI_TOOLBOX_PATH", "")
-    run_matlab_tests = get(ENV, "DECAES_RUN_MWI_TOOLBOX_TESTS", "") != "0"
-
-    if run_matlab_tests
-        @eval using MATLAB
-
-        if !isempty(mwi_toolbox_path)
-            mxcall(:addpath, 0, mwi_toolbox_path)
-        end
-
-        if mfile_exists("T2map_SEcorr_nechoes_2019") && mfile_exists("T2part_SEcorr_2019")
-            matlab_tests()
-        else
-            @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
-                "Modify your default MATLAB path to include these files, or set the DECAES_MWI_TOOLBOX_PATH environment variable.\n\n" *
-                "For example, on unix-like systems run" *
-                "\n\n    export DECAES_MWI_TOOLBOX_PATH=/path/to/MWI_NNLS_toolbox_0319\n\n" *
-                "before testing DECAES, or add a command such as" *
-                "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
-                "to your startup.m file in MATLAB."
-        end
+if RUN_MATLAB_TESTS
+    @testset "UBC MWI toolbox" begin
+        matlab_tests()
     end
-catch e
-    @warn "Failed to load Julia package MATLAB.jl; skipping UBCMWF MATLAB tests"
-    @warn sprint(showerror, e, catch_backtrace())
 end
 
 nothing

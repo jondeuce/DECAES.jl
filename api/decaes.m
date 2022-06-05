@@ -53,11 +53,11 @@ function status = decaes(varargin)
 %     * Lastly, we indicate that the regularization parameters should be
 %       saved using the --SaveRegParam flag
 % 
-%       decaes image.nii.gz --output results --mask image_mask.mat --T2map --T2part --TE 7e-3 --nT2 60 --T2Range 10e-3 2.0 --SPWin 10e-3 25e-3 --MPWin 25e-3 200.0e-3 --Reg lcurve --SaveRegParam
+%       decaes image.nii.gz --output results --mask image_mask.mat --T2map --T2part --TE 7e-3 --nT2 60 --T2Range 7e-3 2.0 --SPWin 7e-3 25e-3 --MPWin 25e-3 200.0e-3 --Reg lcurve --SaveRegParam
 % 
 %   Run the same command using function syntax:
 % 
-%       decaes('image.nii.gz', '--output', 'results', '--mask', 'image_mask.mat', '--T2map', '--T2part', '--TE', 7e-3, '--nT2', 60, '--T2Range', [10e-3, 2.0], '--SPWin', [10e-3, 25e-3], '--MPWin', [25e-3, 200.0e-3], '--Reg', 'lcurve', '--SaveRegParam')
+%       decaes('image.nii.gz', '--output', 'results', '--mask', 'image_mask.mat', '--T2map', '--T2part', '--TE', 7e-3, '--nT2', 60, '--T2Range', [7e-3, 2.0], '--SPWin', [7e-3, 25e-3], '--MPWin', [25e-3, 200.0e-3], '--Reg', 'lcurve', '--SaveRegParam')
 % 
 %   Create a settings file called 'settings.txt' containing the settings
 %   from the above example (note: only one value or flag per line):
@@ -74,10 +74,10 @@ function status = decaes(varargin)
 %       --nT2
 %       60
 %       --T2Range
-%       10e-3
+%       7e-3
 %       2.0
 %       --SPWin
-%       10e-3
+%       7e-3
 %       25e-3
 %       --MPWin
 %       25e-3

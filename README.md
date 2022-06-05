@@ -14,7 +14,7 @@ Post-processing of these T2-distributions allows for the computation of measures
 
 DECAES is written in the open-source [Julia programming language](https://julialang.org/).
 Julia and command line interfaces are available through this package.
-The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the MATLAB function [`decaes.m`](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.m).
+The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the MATLAB function [`decaes.m`](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.m), as well as a Python interface via the [`decaes.py`](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.py) module.
 If you use DECAES in your research, please [cite](CITATION.bib) our work.
 
 ## Installation
@@ -23,6 +23,20 @@ In Julia v1.6 or later you can install DECAES from the Pkg REPL:
 ```
 pkg> add DECAES
 ```
+
+## Documentation
+
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jondeuce.github.io/DECAES.jl/dev)
+
+Find package documentation at the above link, which includes:
+* The command line interface [API](https://jondeuce.github.io/DECAES.jl/dev/cli), available [command line arguments](https://jondeuce.github.io/DECAES.jl/dev/cli/#Arguments-1), and [examples](https://jondeuce.github.io/DECAES.jl/dev/cli/#Examples-1)
+* API reference detailing how to use DECAES.jl from within Julia
+* Other internals and algorithmic details
+
+## DECAES tutorial
+
+If you are new to DECAES, the best place to start is the [examples repository](https://github.com/jondeuce/mwiexamples).
+There, we provide a walk-through tutorial for using the MATLAB and command-line interfaces for DECAES, including example multi spin-echo (MSE) data for performing MWI.
 
 ## Command Line Interface
 
@@ -53,27 +67,38 @@ main() # call CLI entrypoint function
 This script can then be invoked from the command line as follows:
 
 ```bash
-$ julia --threads=auto decaes.jl -- <COMMAND LINE ARGS> # `--threads=auto` enables parallel processing
+$ julia --threads=auto decaes.jl -- <COMMAND LINE ARGS> # --threads=auto enables parallel processing
 ```
 
 **2. Julia `-e` flag:** The contents of the above script can be written directly at the command line using the `-e` (for "evaluate") flag:
 
 ```bash
-$ julia --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS> # `--threads=auto` enables parallel processing
+$ julia --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS> # --threads=auto enables parallel processing
 ```
 
-## Documentation
+## Benchmarks
 
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jondeuce.github.io/DECAES.jl/dev)
+<center>
 
-Find package documentation at the above link, which includes:
-* The command line interface [API](https://jondeuce.github.io/DECAES.jl/dev/cli), available [command line arguments](https://jondeuce.github.io/DECAES.jl/dev/cli/#Arguments-1), and [examples](https://jondeuce.github.io/DECAES.jl/dev/cli/#Examples-1)
-* API reference detailing how to use DECAES.jl from within Julia
-* Other internals and algorithmic details
+| Dataset     | Matrix Size     | CPU               | Cores | MATLAB     | **DECAES** |
+| :---:       | :---:           | :---:             | :---: | :---:      | :---:      |
+| 48-echo MSE | 240 x 240 x 48  | Intel i5 4200U    | 2     | 4h:35m:18s | **7m:49s** |
+| 56-echo MSE | 240 x 240 x 113 | Xeon E5-2640 (x2) | 12    | 1h:25m:01s | **2m:39s** |
+| 48-echo MSE | 240 x 240 x 48  | Xeon E5-2640 (x2) | 12    | 59m:40s    | **1m:40s** |
+| 56-echo MSE | 240 x 240 x 113 | Ryzen 9 3950X     | 16    | 22m:33s    | **43s**    |
+| 48-echo MSE | 240 x 240 x 48  | Ryzen 9 3950X     | 16    | 17m:56s    | **27s**    |
 
-## Examples repository
+</center>
 
-See the [examples repository](https://github.com/jondeuce/mwiexamples) for a walk-through guide for using the CLI, including example CPMG data for performing MWI, as well as a script for calling the CLI from MATLAB.
+Benchmarking notes:
+
+* MATLAB scripts used were from the `MWI_NNLS_toolbox_0319` subfolder of the [ubcmwf github repository](https://github.com/ubcmri/ubcmwf)
+* DECAES.jl was compiled into an [app](https://julialang.github.io/PackageCompiler.jl/stable/apps.html) using the `--compile` flag to reduce compile time overhead
+* Both implementations made use of precomputed brain masks to skip voxels outside of the brain
+
+## JuliaCon 2021
+
+[![JuliaCon 2021 - Matlab to Julia: Hours to Minutes for MRI Image Analysis](https://imgur.com/2dnhAdR.png)](https://www.youtube.com/watch?v=6OxsK2R5VkA)
 
 ## Citing this work
 
@@ -95,81 +120,3 @@ If you use DECAES in your research, please cite the following:
   pmid = {32451148}
 }
 ```
-
-# Benchmarks
-
-Comparison of processing time on various data sets.
-The MATLAB implementation uses the scripts contained within the `MWI_NNLS_toolbox_0319` folder in the [ubcmwf github repository](https://github.com/ubcmri/ubcmwf).
-The Julia implementation uses DECAES.jl.
-
-**Processor:** 3.60GHz Intel Core i7-7700 with 4 CPU cores/8 threads:
-
-<center>
-
-| Toolbox                | Parallelism        | Image Size             | T2-Distribution | Speedup   | Total Time   | Speedup   |
-| :---:                  | :---:              | :---:                  | :---:           | :---:     | :---:        | :---:     |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x48x48 + mask   | 01h:29m:35s     | -         | 01h:30m:37s  | -         |
-| DECAES                 | 4 threads          | 240x240x48x48 + mask   | 00h:01m:35s     | **57X**   | 00h:02m:34s  | **35X**   |
-| DECAES                 | 8 threads          | 240x240x48x48 + mask   | 00h:01m:24s     | **64X**   | 00h:02m:14s  | **41X**   |
-|                        |                    |                        |                 |           |              |           |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x113x56 + mask  | 02h:25m:19s     | -         | 02h:27m:52s  | -         |
-| DECAES                 | 4 threads          | 240x240x113x56 + mask  | 00h:02m:34s     | **57X**   | 00h:04m:00s  | **37X**   |
-| DECAES                 | 8 threads          | 240x240x113x56 + mask  | 00h:02m:20s     | **62X**   | 00h:03m:38s  | **41X**   |
-|                        |                    |                        |                 |           |              |           |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x48x48          | 02h:53m:13s     | -         | 02h:54m:24s  | -         |
-| DECAES                 | 8 threads          | 240x240x48x48          | 00h:03m:35s     | **48X**   | 00h:04m:11s  | **42X**   |
-|                        |                    |                        |                 |           |              |           |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 240x240x113x56         | 09h:35m:17s     | -         | 09h:39m:33s  | -         |
-| DECAES                 | 8 threads          | 240x240x113x56         | 00h:11m:49s     | **49X**   | 00h:12m:36s  | **46X**   |
-
-</center>
-
-<!--
-Benchmarks for small datasets from the [examples repository](https://github.com/jondeuce/mwiexamples)
-| Toolbox                | Parallelism        | Image Size             | T2-Distribution | Speedup   | Total Time   | Speedup   |
-| :---:                  | :---:              | :---:                  | :---:           | :---:     | :---:        | :---:     |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 175x140x1x56           | 00h:03m:03s     |    -      | 00h:03m:04s  |    -      |
-| DECAES                 | 1 thread           | 175x140x1x56           | 00h:00m:13s     | **14X**   | 00h:00m:30s  | **6.1X**  |
-| DECAES                 | 4 threads          | 175x140x1x56           | 00h:00m:07s     | **26X**   | 00h:00m:26s  | **7.1X**  |
-| DECAES                 | 8 threads          | 175x140x1x56           | 00h:00m:05s     | **37X**   | 00h:00m:23s  | **8.0X**  |
-|                        |                    |                        |                 |           |              |           |
-| MWI_NNLS_toolbox_0319  | 4 workers + parfor | 175x140x8x56           | 00h:19m:56s     | -         | 00h:20m:02s  | -         |
-| DECAES                 | 1 thread           | 175x140x8x56           | 00h:01m:28s     | **14X**   | 00h:01m:46s  | **11X**   |
-| DECAES                 | 4 threads          | 175x140x8x56           | 00h:00m:26s     | **46X**   | 00h:00m:46s  | **26X**   |
-| DECAES                 | 8 threads          | 175x140x8x56           | 00h:00m:23s     | **52X**   | 00h:00m:43s  | **28X**   |
--->
-
-**Processor:** 2.10GHz Intel Xeon Gold 6130 with 16 CPU cores/32 threads:
-
-<center>
-
-| Toolbox                | Parallelism        | Image Size             | T2-Distribution | Total Time  |
-| :---:                  | :---:              | :---:                  | :---:           | :---:       |
-| DECAES                 | 4 threads          | 240x240x48x48 + mask   | 04m:01s         | 04m:14s     |
-| DECAES                 | 8 threads          | 240x240x48x48 + mask   | 02m:13s         | 02m:28s     |
-| DECAES                 | 16 threads         | 240x240x48x48 + mask   | 01m:11s         | 01m:24s     |
-| DECAES                 | 32 threads         | 240x240x48x48 + mask   | 00m:57s         | 01m:09s     |
-|                        |                    |                        |                 |             |
-| DECAES                 | 4 threads          | 240x240x113x56 + mask  | 05m:56s         | 06m:25s     |
-| DECAES                 | 8 threads          | 240x240x113x56 + mask  | 03m:45s         | 04m:21s     |
-| DECAES                 | 16 threads         | 240x240x113x56 + mask  | 02m:09s         | 02m:37s     |
-| DECAES                 | 32 threads         | 240x240x113x56 + mask  | 01m:40s         | 02m:09s     |
-
-</center>
-
-**Note:** images sizes which include "+ mask" used brain masks generated with the [BET tool](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/BET/UserGuide) (done automatically using the `--bet` flag for DECAES, and manually for MATLAB) and only processed voxels within the brain mask.
-
-The T2-Distribution column shows the time taken to complete the most costly step of the analysis pipeline, calling the function [`T2mapSEcorr`](https://jondeuce.github.io/DECAES.jl/dev/ref.html#DECAES.T2mapSEcorr).
-This function performs the voxelwise nonnegative least-squares (NNLS) analysis to compute T2-distributions.
-The Total Time column includes image loading and saving time, Julia startup and compilation time, BET brain mask generation, and the post-processing step of calling the [`T2partSEcorr`](https://jondeuce.github.io/DECAES.jl/dev/ref.html#DECAES.T2partSEcorr).
-Note that MATLAB startup time is not included in the Total Time.
-
-Notes regarding parallelism:
-* MATLAB parallelism is implemented via `parfor` loops, executing the independent voxelwise T2-distribution computations in parallel.
-MATLAB `parfor` loops are rather restrictive, as each loop iteration is executed on separate MATLAB processes.
-Each loop iteration must be completed independent from each other, which among other restrictions, means memory cannot be shared between loop iterations.
-* Julia parallelism is implemented via the more flexible [task-based multi-threading](https://julialang.org/blog/2019/07/multithreading) model of parallelism.
-Communication between threads is possible, and memory can be easily shared and reused among threads.
-This allows one to perform memory allocation up front: thread-local memory buffers, containing e.g. pre-allocated matrices for intermediate calculations, can be created outside of the parallel loop and efficiently re-used.
-* Julia multithreading makes use of hyperthreads by default.
-It is possible to configure MATLAB to use hyperthreads in `parfor` loops, though it is [not generally beneficial](https://www.mathworks.com/matlabcentral/answers/80129-definitive-answer-for-hyperthreading-and-the-parallel-computing-toolbox-pct) and indeed we found a ~20% slowdown.
