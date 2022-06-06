@@ -3,7 +3,7 @@ AUTO-GENERATED FILE - DO NOT EDIT
 
 This file is derived from the following fork of the NormalHermiteSplines.jl package:
 
-    https://github.com/jondeuce/NormalHermiteSplines.jl#b432ef1057fd673ba18d76c033996c811c4e45f3
+    https://github.com/jondeuce/NormalHermiteSplines.jl#c3215a02d0de935bd33aff33fc7ce6557db938cc
 
 As it is not possible to depend on a package fork, the above module is included here verbatim.
 
