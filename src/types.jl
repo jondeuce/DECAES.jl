@@ -43,14 +43,6 @@ See also:
     T2Range::NTuple{2,T} # seconds
     @assert 0.0 < T2Range[1] < T2Range[2]
 
-    # "Variable interecho spacing"
-    # vTEparam::Union{Tuple{T,T,Int}, Nothing} = nothing
-    # @assert vTEparam === nothing || begin
-    #     error("Variable interecho spacing is not yet supported")
-    #     TE1, TE2, nTE1 = vTEparam
-    #     0.0 < TE1 < TE2 && nTE1 < nTE && round(Int, TE2/TE1) ≈ TE2/TE1
-    # end
-
     "Assumed value of T1 (Units: seconds)."
     T1::T = 1.0 # seconds
     @assert T1 > 0.0
@@ -116,7 +108,6 @@ function show_string(o::T2mapOptions)
     fields = fields[sortperm(uppercase.(string.(fields)))] # sort alphabetically, ignoring case
     padlen = 1 + maximum(f -> length(string(f)), fields)
     for f in fields
-        (f == :vTEparam) && continue # skip
         print(io, "\n* $(lpad(rpad(f, padlen), padlen)): $(getfield(o, f))")
     end
     return String(take!(io))

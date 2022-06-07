@@ -22,6 +22,7 @@ Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 PolynomialRoots = "3a141323-8675-5d76-9d11-e1df1406c778"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Requires = "ae029012-a4dd-5104-9daa-d747884805df"
 SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
@@ -45,6 +46,7 @@ ParXRec = "0.1"
 Parameters = "0.12"
 PolynomialRoots = "1"
 ProgressMeter = "1.7"
+Requires = "1"
 SIMD = "3.3"
 SpecialFunctions = "0.10, 1, 2"
 StaticArrays = "0.12, 1"
@@ -54,8 +56,9 @@ UnsafeArrays = "1.0"
 julia = "1.6"
 
 [extras]
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 MATLAB = "10e44e05-a98a-55b3-a45b-ba969058deb6"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["MATLAB", "Test"]
+test = ["Aqua", "MATLAB", "Test"]

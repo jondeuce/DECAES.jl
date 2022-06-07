@@ -228,8 +228,8 @@ Useful for optimization problems where the last function call may not be
 the optimium, but perhaps it was one or two calls previous and is still in the
 `NNLSTikhonovRegProblemCache` and a recomputation can be avoided.
 """
-struct NNLSTikhonovRegProblemCache{N,W}
-    cache::NTuple{N,W}
+struct NNLSTikhonovRegProblemCache{N, W <: NTuple{N}}
+    cache::W
     idx::Base.RefValue{Int}
 end
 function NNLSTikhonovRegProblemCache(A::AbstractMatrix{T}, b::AbstractVector{T}, ::Val{N} = Val(5)) where {T,N}

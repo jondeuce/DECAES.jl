@@ -53,13 +53,19 @@ if RUN_MATLAB_TESTS && RUN_MWI_TOOLBOX_TESTS
     end
 end
 
+# Try running auto quality assurance tests
+try
+    @eval using Aqua
+    @testset "aqua" begin
+        Aqua.test_all(DECAES; ambiguities = false)
+    end
+catch
+    @warn "Failed to load Aqua.jl; skipping Aqua tests"
+    @warn sprint(showerror, e, catch_backtrace())
+end
+
 @testset "nnls.jl"    verbose = true begin; include("nnls.jl"); end
 @testset "utils.jl"   verbose = true begin; include("utils.jl"); end
 @testset "epg.jl"     verbose = true begin; include("epg.jl"); end
 @testset "splines.jl" verbose = true begin; include("splines.jl"); end
 @testset "cli.jl"     verbose = true begin; include("cli.jl"); end
-
-# using Aqua
-# @testset "Aqua tests" begin
-#     Aqua.test_all(DECAES)
-# end

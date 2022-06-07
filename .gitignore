@@ -2,6 +2,7 @@
 *.jl.cov
 *.jl.mem
 .DS_Store
+/api/.decaes
 /dev/
 /docs/build/
 /docs/site/

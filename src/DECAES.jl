@@ -11,10 +11,23 @@ using Logging: ConsoleLogger, with_logger
 using LoggingExtras: FileLogger, TeeLogger, TransformerLogger
 using Parameters: @with_kw, @with_kw_noshow
 using ProgressMeter: Progress, BarGlyphs
+using Requires: @require
 using SIMD: FloatingTypes, Vec, shufflevector
 using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
 using UnPack: @unpack, @pack!
 using UnsafeArrays: @uviews, uviews, uview
+
+function __init__()
+    @require LoopVectorization="bdcacae8-1622-11e9-2a5c-532679323890" @eval using .LoopVectorization: @turbo
+end
+
+macro acc(ex)
+    if isdefined(DECAES, Symbol("@turbo"))
+        esc( :( @turbo $(ex) ) )
+    else
+        esc( :( @inbounds @simd $(ex) ) )
+    end
+end
 
 include("NNLS.jl")
 using .NNLS
