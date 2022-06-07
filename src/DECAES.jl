@@ -1,7 +1,12 @@
 module DECAES
 
+# Standard libraries
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
-import ArgParse, BangBang, Dierckx, DocStringExtensions, ForwardDiff, Logging, LoggingExtras, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, ProgressMeter, SIMD, StaticArrays, TupleTools, UnPack, UnsafeArrays
+
+# Imported modules
+import ArgParse, BangBang, Dierckx, DocStringExtensions, ForwardDiff, Logging, LoggingExtras, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, ProgressMeter, Requires, SIMD, StaticArrays, TupleTools, UnPack, UnsafeArrays
+
+# Explicitly imported symbols
 using ArgParse: @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
 using BangBang: setindex!!, setproperty!!, setproperties!!
 using Base.MathConstants: φ
@@ -23,9 +28,27 @@ end
 
 macro acc(ex)
     if isdefined(DECAES, Symbol("@turbo"))
+        # Misusing LoopVectorization can have serious consequences. Like @inbounds, misusing it can lead to segfaults and memory corruption. We expect that any time you use the @turbo macro with a given block of code that you:
+        #   1. Are not indexing an array out of bounds. @turbo does not perform any bounds checking.
+        #   2. Are not iterating over an empty collection. Iterating over an empty loop such as for i ∈ eachindex(Float64[]) is undefined behavior, and will likely result in the out of bounds memory accesses. Ensure that loops behave correctly.
+        #   3. Are not relying on a specific execution order. @turbo can and will re-order operations and loops inside its scope, so the correctness cannot depend on a particular order. You cannot implement cumsum with @turbo.
+        #   4. Are not using multiple loops at the same level in nested loops.
         esc( :( @turbo $(ex) ) )
     else
-        esc( :( @inbounds @simd $(ex) ) )
+        # Your inner loop should have the following properties to allow vectorization:
+        #   * The loop must be an innermost loop
+        #   * The loop body must be straight-line code. Therefore, [`@inbounds`](@ref) is
+        #       currently needed for all array accesses. The compiler can sometimes turn
+        #       short `&&`, `||`, and `?:` expressions into straight-line code if it is safe
+        #       to evaluate all operands unconditionally. Consider using the [`ifelse`](@ref)
+        #       function instead of `?:` in the loop if it is safe to do so.
+        #   * Accesses must have a stride pattern and cannot be "gathers" (random-index
+        #       reads) or "scatters" (random-index writes).
+        #   * The stride should be unit stride.
+        # With the ivdep flag:
+        #   * There exists no loop-carried memory dependencies
+        #   * No iteration ever waits on a previous iteration to make forward progress.
+        esc( :( @inbounds @simd ivdep $(ex) ) )
     end
 end
 

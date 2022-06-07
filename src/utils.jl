@@ -36,14 +36,14 @@ end
 @inline floattype(xs::NamedTuple) = floattype(Tuple(xs))
 
 function set_diag!(A::AbstractMatrix, val)
-    @inbounds @simd ivdep for i in 1:min(size(A)...)
+    @acc for i in 1:min(size(A)...)
         A[i,i] = val
     end
     return A
 end
 
 function set_top!(A::AbstractArray, B::AbstractArray)
-    @inbounds @simd ivdep for I in CartesianIndices(B)
+    @acc for I in CartesianIndices(B)
         A[I] = B[I]
     end
     return A

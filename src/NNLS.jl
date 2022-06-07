@@ -186,7 +186,6 @@ function construct_householder!(u::AbstractVector{T}, up::T) where {T}
 
     sm = zero(T)
     @acc for i in eachindex(u)
-    # @inbounds @simd for i in eachindex(u)
         sm = sm + u[i] * u[i]
     end
     cl = sqrt(sm)
@@ -225,7 +224,6 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
     @inbounds c1 = c[1]
     sm = c1 * up
     @acc for i in 2:m
-    # @inbounds @simd for i in 2:m
         sm = sm + c[i] * u[i]
     end
 
@@ -233,7 +231,6 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
         sm /= up_u1
         @inbounds c[1] = c[1] + sm * up
         @acc for i in 2:m
-        # @inbounds @simd ivdep for i in 2:m
             c[i] = c[i] + sm * u[i]
         end
     end
@@ -257,13 +254,11 @@ function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int
         j = idx[ip]
         sm = zero(T)
         @acc for l in nsetp:m
-        # @inbounds @simd for l in nsetp:m
             sm = sm + A[l, j] * A[l, jup]
         end
         @inbounds if sm != 0
             sm /= up_u1
             @acc for l in nsetp:m
-            # @inbounds @simd ivdep for l in nsetp:m
                 A[l, j] = A[l, j] + sm * A[l, jup]
             end
         end
@@ -330,7 +325,6 @@ function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, i
         @inbounds for ip in nsetp-1:-1:1
             zz1 = zz[ip + 1]
             @acc for l in 1:ip
-            # @inbounds @simd ivdep for l in 1:ip
                 zz[l] = zz[l] - A[l, j] * zz1
             end
             j = idx[ip]
@@ -347,7 +341,6 @@ function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, i
             j = idx[ip]
             zz1 = zz[ip]
             @acc for l in 1:ip-1
-            # @inbounds @simd for l in 1:ip-1
                 zz1 = zz1 - A[l, j] * zz[l]
             end
             zz1 /= A[ip, j]
@@ -419,7 +412,6 @@ function nnls!(
             j = idx[ip]
             sm = zero(T)
             @acc for l in nsetp+1:m
-            # @inbounds @simd for l in nsetp+1:m
                 sm = sm + A[l, j] * b[l]
             end
             w[j] = sm
@@ -484,7 +476,6 @@ function nnls!(
 
         if nsetp != m
             @acc for l in nsetp+1:m
-            # @inbounds @simd ivdep for l in nsetp+1:m
                 A[l, j_maxdual] = zero(T)
             end
         end
@@ -531,7 +522,7 @@ function nnls!(
 
             # OTHERWISE USE ALPHA WHICH WILL BE BETWEEN 0 AND 1 TO
             # INTERPOLATE BETWEEN THE OLD X AND THE NEW ZZ.
-            @inbounds @simd for ip in 1:nsetp
+            @inbounds for ip in 1:nsetp
                 j = idx[ip]
                 x[j] = x[j] + alpha * (zz[ip] - x[j])
             end
@@ -553,15 +544,13 @@ function nnls!(
                         A[ip, j]   = zero(T)
 
                         # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
-                        @acc for l in 1:j-1
-                        # @inbounds @simd for l in 1:j-1
+                        @simd ivdep for l in 1:j-1
                             tmp = A[ip-1, l]
                             A[ip-1, l] =  cc * tmp + ss * A[ip, l]
                             A[ip,   l] = -ss * tmp + cc * A[ip, l]
                         end
 
-                        @acc for l in j+1:n
-                        # @inbounds @simd for l in j+1:n
+                        @simd ivdep for l in j+1:n
                             tmp = A[ip-1, l]
                             A[ip-1, l] =  cc * tmp + ss * A[ip, l]
                             A[ip,   l] = -ss * tmp + cc * A[ip, l]
@@ -608,7 +597,7 @@ function nnls!(
         end
         # ******  END OF SECONDARY LOOP  ******
 
-        @inbounds @simd for ip in 1:nsetp
+        @inbounds for ip in 1:nsetp
             x[idx[ip]] = zz[ip]
         end
         # ALL NEW COEFFS ARE POSITIVE.  LOOP BACK TO BEGINNING.
@@ -621,7 +610,6 @@ function nnls!(
     sm = zero(T)
     if nsetp < m
         @acc for ip in nsetp+1:m
-        # @inbounds @simd for ip in nsetp+1:m
             bi = b[ip]
             zz[ip] = bi
             sm = sm + bi * bi
