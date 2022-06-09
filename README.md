@@ -96,9 +96,13 @@ Benchmarking notes:
 * DECAES.jl was compiled into an [app](https://julialang.github.io/PackageCompiler.jl/stable/apps.html) using the `--compile` flag to reduce compile time overhead
 * Both implementations made use of precomputed brain masks to skip voxels outside of the brain
 
+## DECAES Tutorial 2022
+
+[![DECAES.jl Software Tutorial: Myelin and Luminal Water Imaging in under 1 Minute](https://imgur.com/Ulh6jA0.png)](https://www.youtube.com/watch?v=xCKWWNywOTw)
+
 ## JuliaCon 2021
 
-[![JuliaCon 2021 - Matlab to Julia: Hours to Minutes for MRI Image Analysis](https://imgur.com/2dnhAdR.png)](https://www.youtube.com/watch?v=6OxsK2R5VkA)
+[![JuliaCon 2021 - Matlab to Julia: Hours to Minutes for MRI Image Analysis](https://imgur.com/zJpRdtx.png)](https://www.youtube.com/watch?v=6OxsK2R5VkA)
 
 ## Citing this work
 
