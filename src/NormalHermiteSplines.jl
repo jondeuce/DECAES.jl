@@ -31,7 +31,6 @@ export get_epsilon, estimate_epsilon, get_cond, estimate_cond, estimate_accuracy
 
 using LinearAlgebra
 using StaticArrays
-using UnPack
 using UnsafeArrays
 
 const AbstractArrOfSVecs{n,T,N} = AbstractArray{SVector{n,T},N}
@@ -379,7 +378,7 @@ Base.empty!(C::ElasticCholesky) = (C.ncols[] = 0; C)
 Base.show(io::IO, mime::MIME"text/plain", C::ElasticCholesky{T}) where {T} = (print(io, "ElasticCholesky{T}\nU factor:\n"); show(io, mime, UpperTriangular(C.U[C.colperms[1:C.ncols[]], C.colperms[1:C.ncols[]]])))
 
 function LinearAlgebra.ldiv!(x::AbstractVector{T}, C::ElasticCholesky{T}, b::AbstractVector{T}, ::Val{permview} = Val(false)) where {T, permview}
-    @unpack U, U⁻ᵀb, colperms, ncols = C
+    (; U, U⁻ᵀb, colperms, ncols) = C
     J = uview(colperms, 1:ncols[])
     U = UpperTriangular(uview(U, J, J))
     U⁻ᵀb = uview(U⁻ᵀb, 1:ncols[])
@@ -393,7 +392,7 @@ function LinearAlgebra.ldiv!(x::AbstractVector{T}, C::ElasticCholesky{T}, b::Abs
 end
 
 function Base.insert!(C::ElasticCholesky{T}, j::Int, B::AbstractMatrix{T}) where {T}
-    @unpack A, colperms, ncols = C
+    (; A, colperms, ncols) = C
     @inbounds colperms[ncols[] + 1] = j
     rows = uview(colperms, 1 : ncols[] + 1)
     @inbounds for i in rows
@@ -432,7 +431,7 @@ function LinearAlgebra.cholesky!(
         v::AbstractVector{T},
         ::Val{fill_parent},
     ) where {T, fill_parent}
-    @unpack maxcols, A, U, colperms, ncols = C
+    (; maxcols, A, U, colperms, ncols) = C
     @assert length(v) == ncols[] + 1 <= maxcols
 
     @inbounds if ncols[] == 0
@@ -471,7 +470,7 @@ end
 
 # Update the `j`th column of the factorization `C.U`, assuming the corresponding column `j` of `C.A` has been filled
 function LinearAlgebra.cholesky!(C::ElasticCholesky{T}, j::Int) where {T}
-    @unpack maxcols, A, colperms, ncols = C
+    (; maxcols, A, colperms, ncols) = C
     @assert ncols[] + 1 <= maxcols
 
     @inbounds colperms[ncols[] + 1] = j
@@ -697,7 +696,7 @@ function Base.insert!(
     ) where {n, T, RK <: ReproducingKernel_0}
     @assert length(nodes) == length(values)
 
-    # Insert `n` regular nodes 
+    # Insert `n` regular nodes
     @inbounds for i in 1:length(nodes)
         insert!(spl, nodes[i], values[i])
     end
@@ -716,12 +715,12 @@ function Base.insert!(
     @assert length(nodes) == length(values)
     @assert length(d_nodes) == length(d_dirs) == length(d_values)
 
-    # Insert `n` regular nodes 
+    # Insert `n` regular nodes
     @inbounds for i in 1:length(nodes)
         insert!(spl, nodes[i], values[i])
     end
 
-    # Insert `n` derivative nodes 
+    # Insert `n` derivative nodes
     @inbounds for i in 1:length(d_nodes)
         insert!(spl, d_nodes[i], d_dirs[i], d_values[i])
     end

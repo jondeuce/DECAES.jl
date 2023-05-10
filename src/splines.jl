@@ -107,7 +107,7 @@ function spline_opt_legacy(spl::Dierckx.Spline1D)
 
     # Note that the above finds the x value nearest the true minimizer, but we need the x value corresponding to
     # the y value nearest the true minimum. Since we are near the minimum, search for a local minimum.
-    @unpack x, y, i = local_gridsearch(spl, xs, i0)
+    (; x, y, i) = local_gridsearch(spl, xs, i0)
 
     return (; x, y)
 end
@@ -143,7 +143,7 @@ function spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
     # Note that the above finds the x value nearest the true root, but we need the x value corresponding to the
     # y value nearest to `value`. Since we are near the root, search for a local minimum in abs(spl(x)-value).
     dy(x) = abs(spl(x) - value)
-    @unpack x, y, i = local_gridsearch(dy, xs, i0)
+    (; x, y, i) = local_gridsearch(dy, xs, i0)
 
     return x
 end
@@ -635,7 +635,7 @@ end
 load!(prob::NNLSDiscreteSurrogateSearch{D,T}, b::AbstractVector{T}) where {D,T} = copyto!(prob.b, b)
 
 function loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
-    @unpack As, b, nnls_work = prob
+    (; As, b, nnls_work) = prob
     solve!(nnls_work, uview(As, :, :, I), b)
     ℓ = chi2(nnls_work)
     u = prob.legacy ? ℓ : log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
@@ -643,7 +643,7 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) whe
 end
 
 function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
-    @unpack As, ∇As, b, ∂Ax⁺, Ax⁺b, nnls_work = prob
+    (; As, ∇As, b, ∂Ax⁺, Ax⁺b, nnls_work) = prob
     ℓ = chi2(nnls_work)
     ℓ <= eps(T) && return zero(SVector{D,T}) # loss capped at eps(T) from below; return zero gradient
     x = solution(nnls_work)

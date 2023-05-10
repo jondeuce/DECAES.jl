@@ -218,7 +218,7 @@ end
 @inline optfields(j!::EPGJacobianFunctor) = optfields(j!.f!)
 
 function (j!::EPGJacobianFunctor{T,ETL})(J::Union{AbstractMatrix, DiffResults.DiffResult}, y::AbstractVector{T}, θ::EPGParameterization{T,ETL}) where {T,ETL}
-    @unpack f!, cfg = j!
+    (; f!, cfg) = j!
     f! = EPGFunctor(f!, θ)
     x  = destructure(parameters(f!), optfields(f!))
     ForwardDiff.jacobian!(J, f!, y, x, cfg)
@@ -248,7 +248,7 @@ end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
-    @unpack MPSV = work
+    (; MPSV) = work
     A   = B1correction(θ)
     αₑₓ = A * 90
     α₁  = A * 180
@@ -299,7 +299,7 @@ end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T,ETL}, θ::EPGIncreasingFlipAnglesOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
-    @unpack MPSV = work
+    (; MPSV) = work
     A   = B1correction(θ)
     αₑₓ = A * flipangle(θ, 0)
     TE  = echotime(θ)
@@ -360,7 +360,7 @@ end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
-    @unpack MPSV = work
+    (; MPSV) = work
     A  = B1correction(θ)
     α₁ = deg2rad(A * 180)
     αᵢ = deg2rad(A * θ.β)
@@ -525,7 +525,7 @@ end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
-    @unpack MPSV₁, MPSV₂ = work
+    (; MPSV₁, MPSV₂) = work
     A  = B1correction(θ)
     α₁ = deg2rad(A * 180)
     αᵢ = deg2rad(A * θ.β)
@@ -605,7 +605,7 @@ end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
-    @unpack MPSV₁, MPSV₂ = work
+    (; MPSV₁, MPSV₂) = work
     A  = B1correction(θ)
     α₁ = deg2rad(A * 180)
     αᵢ = deg2rad(A * θ.β)
@@ -769,7 +769,7 @@ end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
-    @unpack MPSV₁, MPSV₂ = work
+    (; MPSV₁, MPSV₂) = work
     A  = B1correction(θ)
     α₁ = deg2rad(A * 180)
     αᵢ = deg2rad(A * θ.β)
@@ -851,7 +851,7 @@ end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMVector_Vec_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
-    @unpack MPSV₁, MPSV₂ = work
+    (; MPSV₁, MPSV₂) = work
     A  = B1correction(θ)
     α₁ = deg2rad(A * 180)
     αᵢ = deg2rad(A * θ.β)
@@ -933,7 +933,7 @@ end
 
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVector_Split{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     # Unpack workspace
-    @unpack MPSV₁, MPSV₂ = work
+    (; MPSV₁, MPSV₂) = work
     A  = B1correction(θ)
     α₁ = deg2rad(A * 180)
     αᵢ = deg2rad(A * θ.β)
@@ -1018,7 +1018,7 @@ end
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T,ETL}, θ::EPGOptions{T,ETL}) where {T,ETL}
     ###########################
     # Setup
-    @unpack MPSV = work
+    (; MPSV) = work
     A  = B1correction(θ)
     α₁ = deg2rad(A * 180)
     αᵢ = deg2rad(A * θ.β)

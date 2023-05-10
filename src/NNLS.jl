@@ -4,27 +4,27 @@
 
 # This NNLS submodule is modified version of the corresponding NNLS module from
 # the forked NonNegLeastSquares.jl repository:
-# 
+#
 #   https://github.com/jondeuce/NonNegLeastSquares.jl/blob/a122bf7acb498efcaf140b719133691e7c4cd03d/src/nnls.jl#L1
-# 
+#
 # The original MIT licence from NonNegLeastSquares.jl is included below:
-# 
+#
 # -----------------------------------------------------------------------------
-# 
+#
 # The MIT License (MIT)
-# 
+#
 # Copyright (c) 2015 Alex Williams
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -32,7 +32,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-# 
+#
 # -----------------------------------------------------------------------------
 
 module NNLS
@@ -40,7 +40,6 @@ module NNLS
 using ..DECAES: @acc
 using LinearAlgebra
 using MuladdMacro: @muladd
-using UnPack: @unpack
 using UnsafeArrays: @uviews, uviews, uview
 
 export nnls, nnls!, load!
@@ -384,7 +383,7 @@ function nnls!(
     ) where {T}
 
     checkargs(work)
-    @unpack A, b, x, w, zz, idx = work
+    (; A, b, x, w, zz, idx) = work
     m, n = size(A)
 
     iter = 0

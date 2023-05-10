@@ -58,7 +58,7 @@ function compare_refcon_correction(
         t2maps_refcon::AbstractDict,
         t2dist_refcon::AbstractTensor{4},
     )
-    DECAES.@unpack t2times, echotimes = t2maps_norefcon
+    (; t2times, echotimes) = t2maps_norefcon
     t2times, echotimes = 1000 .* t2times, 1000 .* echotimes
     globalmean(x) = vec(mean(x[mask, :]; dims = 1))
 

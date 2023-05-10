@@ -91,7 +91,7 @@ end
 # Save thread local results to output maps
 # =========================================================
 function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOptions{T}, I) where {T}
-    @unpack dist, T2_times, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights = thread_buffer
+    (; dist, T2_times, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights) = thread_buffer
 
     # Return nothing if distribution contains NaN entries
     @inbounds for j in 1:o.nT2
@@ -152,7 +152,7 @@ end
 
 function sigmoid_weights(o::T2partOptions{T}) where {T}
     if o.Sigmoid !== nothing
-        # Curve reaches 50% at T2_50perc and is (k and 1-k)*100 percent at T2_50perc +/- T2_kperc  
+        # Curve reaches 50% at T2_50perc and is (k and 1-k)*100 percent at T2_50perc +/- T2_kperc
         k, T2_kperc, T2_50perc = T(0.1), o.Sigmoid, o.SPWin[2]
         sigma = abs(T2_kperc / (sqrt(T(2)) * erfinv(2*k-1)))
         (x -> x <= eps(T) ? zero(T) : x).(normccdf.((logrange(o.T2Range..., o.nT2) .- T2_50perc) ./ sigma))

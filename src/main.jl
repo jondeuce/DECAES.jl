@@ -424,10 +424,9 @@ function t2part_options(dist::Array, opts::Dict{Symbol,Any})
 end
 
 function get_file_infos(opts::Dict{Symbol,Any})
-    @unpack input, output, mask, B1map = opts
-    @assert !isempty(input) "At least one input file is required"
-
     # Read in input files
+    input = opts[:input]
+    @assert !isempty(input) "At least one input file is required"
     inputfiles = String[path for path in input if is_allowed_suffix(path)]
 
     if isempty(inputfiles)
@@ -442,6 +441,7 @@ function get_file_infos(opts::Dict{Symbol,Any})
     end
 
     # Get output folders
+    output = opts[:output]
     outputfolders = if isempty(output)
         dirname.(inputfiles) # store results in folder containing corresponding input file
     elseif length(output) == length(inputfiles)
@@ -453,6 +453,7 @@ function get_file_infos(opts::Dict{Symbol,Any})
     end
 
     # Get mask files
+    mask = opts[:mask]
     maskfiles = if isempty(mask)
         fill(nothing, length(inputfiles)) # no mask passed
     elseif length(mask) == length(inputfiles)
@@ -462,6 +463,7 @@ function get_file_infos(opts::Dict{Symbol,Any})
     end
 
     # Get B1 map files
+    B1map = opts[:B1map]
     B1mapfiles = if isempty(B1map)
         fill(nothing, length(inputfiles)) # no B1map passed
     elseif length(B1map) == length(inputfiles)

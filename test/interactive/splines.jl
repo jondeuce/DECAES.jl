@@ -1,20 +1,18 @@
-if normpath(@__DIR__) ∉ LOAD_PATH
-    pushfirst!(LOAD_PATH, normpath(@__DIR__, "../.."))
-    pushfirst!(LOAD_PATH, normpath(@__DIR__))
-end
+import Pkg
+Pkg.activate(@__DIR__)
 
 using DECAES
 using DECAES.NormalHermiteSplines
-using StaticArrays
-using Random
-using LinearAlgebra
 const nhs = DECAES.NormalHermiteSplines
 
 # Packages from this local env
+using Random
+using LinearAlgebra
+using StaticArrays
 using BenchmarkTools
 using LaTeXStrings
 using CairoMakie
-set_theme!(theme_ggplot2(); resolution = (800,600), font = "CMU Serif")
+set_theme!(theme_ggplot2(); resolution = (500,400), font = "CMU Serif")
 
 function plot_neighbours(::Val{D} = Val(2)) where {D}
     grid  = DECAES.meshgrid(SVector{D,Float64}, [range(0, 1; length = 25) for _ in 1:D]...)
@@ -70,8 +68,17 @@ function plot_bisection_search(
 
     # solve discrete search problem
     state = DECAES.DiscreteSurrogateSearcher(surr; mineval = mineval, maxeval = maxeval)
-    minx, miny = DECAES.bisection_search(surr, state; maxeval = maxeval)
-    # minx, miny = DECAES.local_search(surr, minx)
+    minx, miny = DECAES.bisection_search(surr, state; maxeval = min(D == 1 ? 5 : 12, maxeval))
+    # x₀ = (minx + DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))) / 2
+    # x₀ = DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))
+    # x₀ = DECAES.is_inside(state, minx) ? minx : DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
+    x₀ = DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
+    minx, miny = DECAES.local_search(surr, x₀, state; maxeval = maxeval)
+    # xmid = DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))
+    # xopt = DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
+    # minx₂, miny₂ = DECAES.local_search(surr, xopt, state; maxeval = maxeval)
+    # minx₁, miny₁ = DECAES.local_search(surr, xmid, state; maxeval = maxeval)
+    # minx = ifelse(miny₁ < miny₂, minx₁, minx₂)
 
     # reconstruct surrogate from evaluated points and plot
     if surrtype === :cubic
@@ -86,11 +93,11 @@ function plot_bisection_search(
 
     if D == 1
         fig = Figure()
-        ax = fig[1,1] = Axis(fig)
-        lines!(surr.grid[1][1]..surr.grid[end][1], f_true; color = :darkblue, label = "f")
-        lines!(surr.grid[1][1]..surr.grid[end][1], x -> spl(x); color = :darkred, label = "spl")
-        scatter!(first.(nodes()), values(); markersize = 10, color = :blue, label = "pts")
-        scatter!(first.(minx), [miny]; markersize = 10, color = :red, marker = :star5, label = "min")
+        ax = fig[1,1] = Axis(fig; xlabel = L"Flip Angle $\alpha$")
+        lines!(surr.grid[1][1]..surr.grid[end][1], f_true; color = :darkblue, linestyle = :dash, label = L"||CX-d||_2^2")
+        lines!(surr.grid[1][1]..surr.grid[end][1], x -> spl(x); color = :darkred, label = "Spline")
+        scatter!(first.(nodes()), values(); markersize = 8, color = :blue, label = "Evaluated")
+        scatter!(first.(minx), [miny]; markersize = 8, color = :red, marker = :circle, label = "Minimizer")
         fig[1,2] = Legend(fig, ax)
         return fig
     else
@@ -102,12 +109,12 @@ function plot_bisection_search(
 
         fig = Figure()
         ax1 = Axis(fig[1,1]; title = L"$\sigma(x)$")
-        contourf!(ax1, xs, ys, zs; limits = extrema(zs_true), levels = 50)
+        contourf!(ax1, xs, ys, zs; levels = 50) # limits = extrema(zs_true)
         scatter!(ax1, (p->p[1]).(nodes()), (p->p[2]).(nodes()), values(); marker = :rect, markersize = 10, color = :black, label = "pts")
         scatter!(ax1, [minx[1]], [minx[2]]; markersize = 15, color = :red, marker = :star5, label = "spl min")
 
         ax2 = Axis(fig[1,2]; title = L"f(x)")
-        cont2 = contourf!(ax2, xs, ys, zs_true; limits = extrema(zs_true), levels = 50)
+        cont2 = contourf!(ax2, xs, ys, zs_true; levels = 50) # limits = extrema(zs_true)
         scatter!(ax2, (p->p[1]).(nodes()), (p->p[2]).(nodes()), values(); marker = :rect, markersize = 10, color = :black, label = "pts")
         scatter!(ax2, [xs[Imin_true[1]]], [ys[Imin_true[2]]]; markersize = 15, color = :white, marker = :star5, label = "true min")
         scatter!(ax2, [minx[1]], [minx[2]]; markersize = 15, color = :red, marker = :star5, label = "spl min")
@@ -117,10 +124,11 @@ function plot_bisection_search(
         return fig
     end
 end
+
 function plot_bisection_search(
         ::Val{D}; 
-        flip   = 175.0,
-        refcon = 150.0,
+        flip   = 150.0,
+        refcon = 180.0,
         npts   = 32,
         kwargs...,
     ) where {D}
@@ -128,9 +136,28 @@ function plot_bisection_search(
     prob = DECAES.mock_surrogate_search_problem(Val(D), Val(32), opts)
     plot_bisection_search(Val(D), Val(32), prob, opts; npts = npts, kwargs...)
 end
+
 function plot_bisection_search(b::AbstractVector, opts::T2mapOptions, ::Val{D}; kwargs...) where {D}
     prob = DECAES.mock_surrogate_search_problem(b, opts, Val(D))
     plot_bisection_search(Val(D), Val(opts.nTE), prob, opts; npts = opts.nRefAngles, kwargs...)
+end
+
+function sequential_plot_bisection_search(; 
+        flip = 135.0,
+        npts = 32,
+        snr = 40,
+        seed = 0,
+        kwargs...,
+    )
+    Random.seed!(seed)
+    opts = DECAES.mock_t2map_opts(; MatrixSize = (1,1,1), nTE = 32, SetFlipAngle = flip, nRefAngles = npts, nRefAnglesMin = 3)
+    b = vec(DECAES.mock_image(opts; SNR = snr))
+    for maxeval in 3:7
+        prob = DECAES.mock_surrogate_search_problem(b, opts, Val(1), Val(32))
+        fig = plot_bisection_search(Val(1), Val(32), prob, opts; npts = npts, maxeval = maxeval, kwargs...)
+        display(fig)
+        # save("hermite_spline_maxeval-$(maxeval).png", fig)
+    end
 end
 
 function benchmark_spline()

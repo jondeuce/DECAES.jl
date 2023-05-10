@@ -275,11 +275,11 @@ end
 ####
 
 # Threaded `foreach` construct, borrowing implementation from ThreadTools.jl:
-# 
+#
 #   https://github.com/baggepinnen/ThreadTools.jl/blob/55aaf2bbe735e52cefaad143e7614d4f00e312b0/src/ThreadTools.jl#L57
-# 
+#
 # Updated according to suggestions from the folks at DataFrames.jl:
-# 
+#
 #   https://github.com/jondeuce/DECAES.jl/issues/37
 function tforeach(f, x::AbstractArray; blocksize::Int = default_blocksize())
     nt = Threads.nthreads()
@@ -307,7 +307,7 @@ default_blocksize() = 64
 # by `threadid()`; this is no longer guaranteed to work in v1.7+, as tasks are now allowed to
 # migrate across threads. Instead, here we allocate a local `resource` via the `allocate` function
 # argument at `@spawn`-time, obviating the need to tie the resource to the `threadid()`.
-# 
+#
 #   See: https://juliafolds.github.io/data-parallelism/tutorials/concurrency-patterns/#worker_pool
 
 function workerpool(work!, allocate, inputs::Channel; ninputs::Int, ntasks::Int = Threads.nthreads(), verbose::Bool = false)
@@ -442,7 +442,7 @@ function ADAM{N,T}(η = 0.001, β = (0.9, 0.999)) where {N,T}
 end
 
 function update(∇::SVector{N,T}, o::ADAM{N,T}) where {N,T}
-    @unpack η, β, mt, vt, βp = o
+    (; η, β, mt, vt, βp) = o
 
     ϵ  = T(1e-8)
     βp = @. βp * β
@@ -512,7 +512,7 @@ end
 function mock_image(o::T2mapOptions{T} = mock_t2map_opts(Float64); SNR = 50, kwargs...) where {T}
     oldseed = Random.seed!(0)
 
-    @unpack MatrixSize, TE, nTE = T2mapOptions(o; kwargs...)
+    (; MatrixSize, TE, nTE) = T2mapOptions(o; kwargs...)
     σ = exp10(-T(SNR)/20)
     α = o.SetFlipAngle === nothing ? T(165.0) : o.SetFlipAngle
     β = o.RefConAngle === nothing ? T(150.0) : o.RefConAngle

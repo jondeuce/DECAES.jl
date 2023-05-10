@@ -194,7 +194,7 @@ end
 # Main loop function
 # =========================================================
 function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps, dist::T2Distributions, signal, opts::T2mapOptions, I::CartesianIndex)
-    @unpack decay_data, flip_angle_work, T2_dist_work = thread_buffer
+    (; decay_data, flip_angle_work, T2_dist_work) = thread_buffer
 
     # Copy decay curve into the thread buffer
     @acc for j in 1:opts.nTE
@@ -475,11 +475,11 @@ solution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
 # Save thread local results to output maps
 # =========================================================
 function save_results!(thread_buffer, maps::T2Maps, dist::T2Distributions, o::T2mapOptions, I::CartesianIndex)
-    @unpack T2_dist_work, flip_angle_work, logT2_times, decay_data, decay_basis, decay_calc, residuals, gva_buf = thread_buffer
+    (; T2_dist_work, flip_angle_work, logT2_times, decay_data, decay_basis, decay_calc, residuals, gva_buf) = thread_buffer
     T2_dist = solution(T2_dist_work)
 
     # Compute and save parameters of distribution
-    @unpack gdn, ggm, gva, fnr, snr, alpha = maps
+    (; gdn, ggm, gva, fnr, snr, alpha) = maps
     @inbounds begin
         mul!(decay_calc, decay_basis, T2_dist)
         residuals .= decay_calc .- decay_data
@@ -493,26 +493,26 @@ function save_results!(thread_buffer, maps::T2Maps, dist::T2Distributions, o::T2
     end
 
     # Save distribution
-    @unpack distributions = dist
+    (; distributions) = dist
     @acc for j in 1:o.nT2
         distributions[I,j] = T2_dist[j]
     end
 
     # Optionally save regularization parameters
     if o.SaveRegParam
-        @unpack mu, chi2factor = maps
+        (; mu, chi2factor) = maps
         @inbounds mu[I], chi2factor[I] = T2_dist_work.μ[], T2_dist_work.χ²fact[]
     end
 
     # Optionally save ℓ²-norm of residuals
     if o.SaveResidualNorm
-        @unpack resnorm = maps
+        (; resnorm) = maps
         @inbounds resnorm[I] = sqrt(sum(abs2, residuals))
     end
 
     # Optionally save signal decay curve from fit
     if o.SaveDecayCurve
-        @unpack decaycurve = maps
+        (; decaycurve) = maps
         @acc for j in 1:o.nTE
             decaycurve[I,j] = decay_calc[j]
         end
@@ -520,7 +520,7 @@ function save_results!(thread_buffer, maps::T2Maps, dist::T2Distributions, o::T2
 
     # Optionally save NNLS basis
     if o.SaveNNLSBasis && o.SetFlipAngle === nothing
-        @unpack decaybasis = maps
+        (; decaybasis) = maps
         @acc for J in CartesianIndices((o.nTE, o.nT2))
             decaybasis[I,J] = decay_basis[J]
         end

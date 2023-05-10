@@ -61,7 +61,7 @@ Base.parent(x::PaddedVector) = x.b
 
 function Base.copyto!(y::AbstractVector{T}, x::PaddedVector{T}) where {T}
     @assert size(x) == size(y)
-    @unpack b, pad = x
+    (; b, pad) = x
     m = length(b)
     @acc for i in 1:m
         y[i] = b[i]
@@ -167,7 +167,7 @@ function curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_t
 end
 
 function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
-    @unpack nnls_work = work.nnls_prob
+    (; nnls_work) = work.nnls_prob
     B = cholesky!(NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
     x₊ = NNLS.positive_solution(nnls_work)
     tmp = uview(work.buffers.y, 1:length(x₊))
@@ -181,7 +181,7 @@ function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
 end
 
 function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
-    @unpack nnls_work = work.nnls_prob
+    (; nnls_work) = work.nnls_prob
     B = cholesky!(NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
     x₊ = NNLS.positive_solution(nnls_work)
     tmp = uview(work.buffers.y, 1:length(x₊))
@@ -320,7 +320,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
     reset_cache!(work.nnls_prob_smooth_cache)
 
     if legacy
-        # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit 
+        # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit
         mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor; legacy = legacy) do μ
             μ == 0 && return chi2_min
             solve!(work.nnls_prob_smooth_cache, μ)
@@ -889,21 +889,21 @@ end
 is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x⃗[1]) < xtol || norm(state.P⃗[1] - state.P⃗[4]) < Ptol
 
 function move_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
-    @unpack x⃗, P⃗ = state
+    (; x⃗, P⃗) = state
     x⃗ = SA[x⃗[1], (T(φ) * x⃗[1] + x⃗[3]) / (T(φ) + 1), x⃗[2], x⃗[3]]
     P⃗ = SA[P⃗[1], f(x⃗[2]), P⃗[2], P⃗[3]] # only P⃗[2] is recalculated
     return LCurveCornerState{T}(x⃗, P⃗)
 end
 
 function move_right(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
-    @unpack x⃗, P⃗ = state
+    (; x⃗, P⃗) = state
     x⃗ = SA[x⃗[2], x⃗[3], x⃗[2] + (x⃗[4] - x⃗[3]), x⃗[4]]
     P⃗ = SA[P⃗[2], P⃗[3], f(x⃗[3]), P⃗[4]] # only P⃗[3] is recalculated
     return LCurveCornerState(x⃗, P⃗)
 end
 
 function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing; global_search = false) where {T}
-    @unpack x⃗, P⃗ = state
+    (; x⃗, P⃗) = state
     for i in 1:4
         x, P, C = x⃗[i], P⃗[i], T(-Inf)
         if Pfilter === nothing || Pfilter(P)
@@ -1017,7 +1017,7 @@ end
 
 function maximize_curvature(state::LCurveCornerState{T}) where {T}
     # Maximize curvature and transform back from t-space to x-space
-    @unpack x⃗, P⃗ = state
+    (; x⃗, P⃗) = state
     t₁, t₂, t₃, t₄ = T(0), 1/T(3), 2/T(3), T(1)
     t_opt, P_opt, C_opt = maximize_curvature(P⃗...)
     x_opt =
@@ -1210,14 +1210,14 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T,N}; method = :brent) where {T,
 end
 
 # Implements equation (32) from:
-# 
+#
 #   Analysis of Discrete Ill-Posed Problems by Means of the L-Curve
 #   Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115)
-# 
+#
 # where here A = A, b = b, λ = μ, and L = identity.
 function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
     # Unpack buffers
-    @unpack A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf = work
+    (; A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf) = work
 
     # Solve regularized NNLS problem and record chi2 = ||A*x - b||^2 which is returned
     μ = exp(logμ)
@@ -1263,9 +1263,9 @@ end
 
 # Equation (27) from Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115),
 # specialized for L = identity:
-# 
+#
 #   tr(I_m - A * (A'A + λ^2 * L'L)^-1 * A') = m - n + sum_i λ^2 / (γ_i^2 + λ^2)
-# 
+#
 # where γ_i are the generalized singular values, which are equivalent to ordinary
 # singular values when L = identity, and size(A) = (m, n).
 function gcv_tr!(A, λ)
