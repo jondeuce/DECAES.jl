@@ -1,6 +1,5 @@
 module DECAESApp
 
-using LoopVectorization
 using DECAES
 
 """

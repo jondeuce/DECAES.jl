@@ -5,7 +5,6 @@ version = "0.4.5"
 
 [deps]
 DECAES = "d84fb938-a666-558e-89d9-d531edc6724f"
-LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 PackageCompiler = "9b87118b-4619-50d2-8e1e-99f35a4d4d9d"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

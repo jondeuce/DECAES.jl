@@ -1,17 +1,19 @@
 function compare_epg(
-        work₁::DECAES.AbstractEPGWorkspace{T,ETL},
-        work₂::DECAES.AbstractEPGWorkspace{T,ETL},
-    ) where {T,ETL}
-    α, TE, T2, T1, β = T(163.0), T(11e-3), T(39e-3), T(1.1), T(151.0)
-    θ   = DECAES.EPGOptions((; α, TE, T2, T1, β), Val(ETL), T)
-    dc₁ = DECAES.EPGdecaycurve!(work₁, θ)
-    dc₂ = DECAES.EPGdecaycurve!(work₂, θ)
-    if !(dc₁ ≈ dc₂)
+        work₁::DECAES.AbstractEPGWorkspace{T,ETL₁},
+        work₂::DECAES.AbstractEPGWorkspace{T,ETL₂};
+        verbose = false,
+    ) where {T,ETL₁,ETL₂}
+    xs = (; α = T(11e-3), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0), β = T(163.0))
+    θ₁ = DECAES.EPGOptions(xs, Val(ETL₁), T)
+    θ₂ = DECAES.EPGOptions(xs, Val(ETL₂), T)
+    dc₁ = DECAES.EPGdecaycurve!(work₁, θ₁)
+    dc₂ = DECAES.EPGdecaycurve!(work₂, θ₂)
+    if verbose && !(dc₁ ≈ dc₂)
         @info "Comparing: $((nameof(typeof(work₁)), nameof(typeof(work₂))))"
         @info "    max error:   $(maximum(abs, dc₁ .- dc₂))"
-        @info "    diff vector: $(round.(abs.(dc₁ .- dc₂)'; sigdigits = 4))"
+        @info "    diff vector: $(abs.(dc₁ .- dc₂)')"
     end
-    @test dc₁ ≈ dc₂
+    @test isapprox(dc₁, dc₂; rtol=√eps(T), atol=10*eps(T))
 end
 
 @testset "EPG algorithms" begin

@@ -224,7 +224,15 @@ end
 # =========================================================
 # EPG decay basis set construction
 # =========================================================
-struct EPGBasisSetFunctor{T, ETL, opt_vars, Tθ <: EPGParameterization{T,ETL}, W <: AbstractEPGWorkspace{T, ETL}, F <: EPGFunctor{T, ETL, opt_vars}, J <: EPGJacobianFunctor{T, ETL, opt_vars}}
+struct EPGBasisSetFunctor{
+        T,
+        ETL,
+        opt_vars,
+        Tθ <: EPGParameterization{T, ETL},
+        W <: AbstractEPGWorkspace{T, ETL},
+        F, # <: EPGFunctor{T, ETL, opt_vars}
+        J, # <: EPGJacobianFunctor{T, ETL, opt_vars}
+    }
     θ::Tθ
     T2_times::Vector{T}
     epg_work::W
@@ -236,7 +244,9 @@ function EPGBasisSetFunctor(o::T2mapOptions{T}, θ::EPGParameterization{T,ETL}, 
     epg_work = EPGdecaycurve_work(θ)
     epg_functor! = EPGFunctor(θ, opt_vars)
     epg_jac_functor! = EPGJacobianFunctor(θ, opt_vars)
-    EPGBasisSetFunctor(θ, t2_times(o), epg_work, epg_functor!, epg_jac_functor!)
+    EPGBasisSetFunctor{T,ETL,opt_vars,typeof(θ),typeof(epg_work),typeof(epg_functor!),typeof(epg_jac_functor!)}(
+        θ, t2_times(o), epg_work, epg_functor!, epg_jac_functor!,
+    )
 end
 
 #### EPG basis set
@@ -293,7 +303,16 @@ end
 # =========================================================
 # Ensemble of EPG decay basis sets for discrete parameter search
 # =========================================================
-struct EPGBasisSetEnsemble{D, T, ETL, opt_vars, A1<:AbstractArray{T}, A2<:AbstractArray{T}, F <: EPGBasisSetFunctor{T, ETL, opt_vars}, P <: NNLSDiscreteSurrogateSearch{D, T}}
+struct EPGBasisSetEnsemble{
+        D,
+        T,
+        ETL,
+        opt_vars,
+        A1 <: AbstractArray{T},
+        A2 <: AbstractArray{T},
+        F, # <: EPGBasisSetFunctor{T, ETL, opt_vars},
+        P, # <: NNLSDiscreteSurrogateSearch{D, T},
+    }
     decay_basis_set::A1
     ∇decay_basis_set::A2
     epg_basis_functor!::F
@@ -301,15 +320,18 @@ struct EPGBasisSetEnsemble{D, T, ETL, opt_vars, A1<:AbstractArray{T}, A2<:Abstra
 end
 
 function EPGBasisSetEnsemble(o::T2mapOptions{T}, θ::EPGOptions{T,ETL}, ::Val{opt_vars}, decay_data::AbstractVector{T}) where {T, ETL, opt_vars}
-    opt_ranges = ntuple(length(opt_vars)) do i
+    D = length(opt_vars)
+    opt_ranges = ntuple(D) do i
         opt_vars[i] === :α ? flip_angles(o) :
             error("Optimization variable must be the flip angle :α")
     end
     decay_basis_set    = zeros(T, ETL, o.nT2, length.(opt_ranges)...)
-    ∇decay_basis_set   = zeros(T, ETL, o.nT2, length(opt_vars), length.(opt_ranges)...)
+    ∇decay_basis_set   = zeros(T, ETL, o.nT2, D, length.(opt_ranges)...)
     epg_basis_functor! = EPGBasisSetFunctor(o, θ, Val(opt_vars))
     nnls_search_prob   = NNLSDiscreteSurrogateSearch(decay_basis_set, ∇decay_basis_set, opt_ranges, decay_data; legacy = o.legacy)
-    EPGBasisSetEnsemble(decay_basis_set, ∇decay_basis_set, epg_basis_functor!, nnls_search_prob)
+    EPGBasisSetEnsemble{D,T,ETL,opt_vars,typeof(decay_basis_set),typeof(∇decay_basis_set),typeof(epg_basis_functor!),typeof(nnls_search_prob)}(
+        decay_basis_set, ∇decay_basis_set, epg_basis_functor!, nnls_search_prob,
+    )
 end
 
 function epg_decay_basis!(work::EPGBasisSetEnsemble{D,T,ETL,opt_vars}, θ::EPGParameterization{T,ETL}) where {D,T,ETL,opt_vars}
@@ -340,9 +362,17 @@ end
 # =========================================================
 # Flip angle optimization
 # =========================================================
-struct FlipAngleOptimizationWorkspace{T, ETL, A1<:AbstractMatrix{T}, A2<:AbstractVector{T}, B <: EPGBasisSetFunctor{T,ETL}, E <: Union{Nothing, <:EPGBasisSetEnsemble{1, T, ETL}}, S <: Union{Nothing, AbstractSurrogate{1, T}}}
-    decay_basis::A1
-    decay_data::A2
+struct FlipAngleOptimizationWorkspace{
+        T,
+        ETL,
+        M <: AbstractMatrix{T},
+        V <: AbstractVector{T},
+        B, # <: EPGBasisSetFunctor{T,ETL},
+        E, # <: Union{Nothing, EPGBasisSetEnsemble{1, T, ETL}},
+        S, # <: Union{Nothing, AbstractSurrogate{1, T}},
+    }
+    decay_basis::M
+    decay_data::V
     decay_basis_set::B
     decay_basis_set_ensemble::E
     α::Base.RefValue{T}
@@ -350,8 +380,9 @@ struct FlipAngleOptimizationWorkspace{T, ETL, A1<:AbstractMatrix{T}, A2<:Abstrac
 end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
+    ETL = o.nTE
     α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
-    θ = EPGOptions((; α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle), Val(o.nTE))
+    θ = EPGOptions((; α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle), Val(ETL))
     decay_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
 
     if o.SetFlipAngle !== nothing
@@ -368,7 +399,9 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Abstrac
             HermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
     end
 
-    FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate)
+    FlipAngleOptimizationWorkspace{T,ETL,typeof(decay_basis),typeof(decay_data),typeof(decay_basis_set),typeof(decay_basis_set_ensemble),typeof(α_surrogate)}(
+        decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate,
+    )
 end
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
