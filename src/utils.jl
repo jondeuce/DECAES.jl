@@ -45,6 +45,16 @@ function with_singlethreaded_blas(f)
     end
 end
 
+function with_random_seed(f, rng = Random.default_rng(); seed::Int = 0)
+    state = copy(rng)
+    try
+        Random.seed!(rng, seed)
+        f(rng)
+    finally
+        copy!(rng, state)
+    end
+end
+
 function set_diag!(A::AbstractMatrix, val)
     @acc for i in 1:min(size(A)...)
         A[i,i] = val
@@ -291,24 +301,27 @@ end
 # Updated according to suggestions from the folks at DataFrames.jl:
 #
 #   https://github.com/jondeuce/DECAES.jl/issues/37
-function tforeach(f, x::AbstractArray; blocksize::Int = default_blocksize())
+function tforeach(work!, allocate, x::AbstractArray; blocksize::Int = default_blocksize())
     nt = Threads.nthreads()
     len = length(x)
     if nt > 1 && len > blocksize
         @sync for p in split_indices(len, blocksize)
-            Threads.@spawn begin
+            Threads.@spawn allocate() do resource
                 @simd ivdep for i in p
-                    f(@inbounds x[i])
+                    @inbounds work!(x[i], resource)
                 end
             end
         end
     else
-        @simd ivdep for i in eachindex(x)
-            f(@inbounds x[i])
+        allocate() do resource
+            @simd ivdep for i in eachindex(x)
+                @inbounds work!(x[i], resource)
+            end
         end
     end
     return nothing
 end
+tforeach(f, x::AbstractArray; kwargs...) = tforeach((x, r) -> f(x), g -> g(nothing), x; kwargs...)
 
 default_blocksize() = 64
 
@@ -493,23 +506,21 @@ end
 #### Generate (moderately) realistic mock images
 ####
 
-function mock_t2map_opts(::Type{T} = Float64; kwargs...) where {T}
+function mock_t2map_opts(::Type{T} = Float64; nsignals = nothing, kwargs...) where {T}
     T2mapOptions{T}(;
-        MatrixSize = (2, 2, 2),
+        MatrixSize = nsignals === nothing ? (2, 2, 2) : (nsignals, 1, 1),
         TE = 10e-3,
         nTE = 32,
         T2Range = (10e-3, 2.0),
         nT2 = 40,
         Reg = "lcurve",
-        SetFlipAngle = 165.0,
-        RefConAngle = 150.0,
         kwargs...
     )
 end
 
-function mock_t2parts_opts(::Type{T} = Float64; kwargs...) where {T}
+function mock_t2parts_opts(::Type{T} = Float64; nsignals = nothing, kwargs...) where {T}
     T2partOptions{T}(;
-        MatrixSize = (2, 2, 2),
+        MatrixSize = nsignals === nothing ? (2, 2, 2) : (nsignals, 1, 1),
         nT2 = 40,
         T2Range = (10e-3, 2.0),
         SPWin = (10e-3, 40e-3),
@@ -519,48 +530,67 @@ function mock_t2parts_opts(::Type{T} = Float64; kwargs...) where {T}
 end
 
 # Mock CPMG image
-function mock_image(o::T2mapOptions{T} = mock_t2map_opts(Float64); SNR = 50, kwargs...) where {T}
-    oldseed = Random.seed!(0)
-
-    (; MatrixSize, TE, nTE) = T2mapOptions(o; kwargs...)
-    σ = exp10(-T(SNR)/20)
+function mock_image(o::T2mapOptions{T}; SNR = 50) where {T}
+    (; MatrixSize, TE, nTE) = o
+    σ = exp10(-T(SNR) / 20)
     α = o.SetFlipAngle === nothing ? T(165.0) : o.SetFlipAngle
-    β = o.RefConAngle === nothing ? T(150.0) : o.RefConAngle
-    mag() = T(0.85) .* EPGdecaycurve(nTE, α, TE, T(65e-3), T(1), β) .+
-            T(0.15) .* EPGdecaycurve(nTE, α, TE, T(15e-3), T(1), β) # bi-exponential signal with EPG correction
-    noise(m) = abs(m[1]) .* σ .* randn(T, size(m)) # gaussian noise of size SNR relative to signal amplitude
-    noiseysignal() = (m = mag(); sqrt.((m .+ noise(m)).^2 .+ noise(m).^2)) # bi-exponential signal with rician noise
-
+    β = o.RefConAngle === nothing ? T(180.0) : o.RefConAngle
     M = zeros(T, (MatrixSize..., nTE))
-    @inbounds for I in CartesianIndices(MatrixSize)
-        M[I,:] .= T(1e5 + 1e5*rand()) .* noiseysignal()
+
+    function allocate(loop_body!)
+        m = zeros(T, nTE)
+        work1 = EPGWork_ReIm_DualVector_Split_Dynamic(T, nTE)
+        work2 = EPGWork_ReIm_DualVector_Split_Dynamic(T, nTE)
+        loop_body!((; m, work1, work2))
     end
 
-    Random.seed!(oldseed)
+    indices = CartesianIndices(MatrixSize)
+    blocksize = max(ceil(Int, length(indices) / Threads.nthreads()), 1)
+    tforeach(allocate, indices; blocksize) do I, (m, work1, work2)
+        sfr = T(0.1) + T(0.2) * rand(T)
+        T21 = T(10e-3) + T(10e-3) * rand(T) # short T2
+        T22 = T(50e-3) + T(50e-3) * rand(T) # long T2
+        dc1 = EPGdecaycurve!(work1, EPGOptions{T, Nothing}((α, TE, T21, T(1), β)))
+        dc2 = EPGdecaycurve!(work2, EPGOptions{T, Nothing}((α, TE, T22, T(1), β)))
+        @inbounds begin
+            m .= sfr .* dc1 .+ (1 - sfr) .* dc2 # bi-exponential signal with EPG correction
+            σM = m[1] * σ
+            for k in 1:nTE
+                zR, zI = σM * randn(T), σM * randn(T)
+                m[k] = √((m[k] + zR)^2 + zI^2)
+            end
+            M[I, :] .= m
+        end
+    end
+
     return M
 end
+
+function mock_image(::Type{T}; SNR = 50, kwargs...) where {T}
+    o = mock_t2map_opts(T; kwargs...)
+    return mock_image(o; SNR)
+end
+mock_image(; kwargs...) = mock_image(Float64; kwargs...)
 
 # Mock T2 distribution, computed with default parameters
 function mock_T2_dist(o::T2mapOptions = mock_t2map_opts(Float64); kwargs...)
     T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]
 end
 
-# Simple benchmark
-function mock_t2map_benchmark(; plot = false, kwargs...)
-    t2map_opts = mock_t2map_opts(; MatrixSize = (64, 64, 64), SetFlipAngle = 165.0, RefConAngle = 180.0, SaveResidualNorm = true, kwargs...)
+# Simple benchmarks
+function bench_mock_image(::Type{T} = Float64; nsignals = 100 * 1024, kwargs...) where {T}
+    # Main.@btime mock_image($T; nsignals = $nsignals)
+    @time mock_image(T; nsignals, kwargs...)
+end
+
+function bench_mock_t2map(; nsignals = 100 * 1024, kwargs...)
+    t2map_opts = mock_t2map_opts(; nsignals, kwargs...)
     t2part_opts = T2partOptions(t2map_opts; SPWin = (t2map_opts.T2Range[1], 40e-3), MPWin = (40e-3, t2map_opts.T2Range[2]))
 
     image = mock_image(t2map_opts)
-    # t2maps, t2dist = Main.@btime T2mapSEcorr($image, $(T2mapOptions(t2map_opts; SetFlipAngle = nothing)))
-    t2maps, t2dist = @time T2mapSEcorr(image, T2mapOptions(t2map_opts; SetFlipAngle = nothing))
+    # t2maps, t2dist = Main.@btime T2mapSEcorr($image, $t2map_opts)
+    t2maps, t2dist = @time T2mapSEcorr(image, t2map_opts)
     t2part = @time T2partSEcorr(t2dist, t2part_opts)
-
-    if plot
-        dα = vec(t2maps["alpha"] .- t2map_opts.SetFlipAngle)
-        relerr = vec(t2maps["resnorm"] ./ sqrt.(sum(abs2, image; dims = 4)))
-        Main.UnicodePlots.histogram(dα; title = "MAE flip angle = $(mean(abs.(dα)))") |> display
-        Main.UnicodePlots.histogram(relerr; title = "relative resnorm = $(mean(relerr))") |> display
-    end
 
     return t2maps, t2dist, t2part
 end

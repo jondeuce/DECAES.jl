@@ -723,22 +723,22 @@ function spline_opt(
 end
 
 function mock_surrogate_search_problem(
-        b::AbstractVector,
-        opts::T2mapOptions,
+        b::AbstractVector{T},
+        opts::T2mapOptions{T},
         ::Val{D},
         ::Val{ETL};
         alphas = range(50, 180, length = opts.nRefAngles),
         betas = range(50, 180, length = opts.nRefAngles),
-    ) where {D,ETL}
+    ) where {D, T, ETL}
 
     # Mock CPMG image
     @assert opts.nTE == ETL
     opt_vars = D == 1 ? (:α,) : (:α, :β)
     opt_ranges = D == 1 ? (alphas,) : (alphas, betas)
-    As = zeros(ETL, opts.nT2, length.(opt_ranges)...)
-    ∇As = zeros(ETL, opts.nT2, D, length.(opt_ranges)...)
+    As = zeros(T, ETL, opts.nT2, length.(opt_ranges)...)
+    ∇As = zeros(T, ETL, opts.nT2, D, length.(opt_ranges)...)
     T2s = logrange(opts.T2Range..., opts.nT2)
-    θ = EPGOptions((; α = opts.SetFlipAngle, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = opts.RefConAngle), Val(ETL), Float64)
+    θ = EPGOptions((; α = T(165.0), TE = opts.TE, T2 = zero(T), T1 = opts.T1, β = T(180.0)), Val(ETL), T)
     j! = EPGJacobianFunctor(θ, opt_vars)
 
     _, Rαs = SplitCartesianIndices(As, Val(2))

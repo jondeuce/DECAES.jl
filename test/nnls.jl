@@ -113,7 +113,7 @@ end
 end
 
 function mock_nnls_data(m, n)
-    opts = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = m, nT2 = n, SetFlipAngle = 180.0, RefConAngle = 180.0)
+    opts = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = m, nT2 = n)
     prob = DECAES.mock_surrogate_search_problem(Val(1), Val(m), opts)
     (; A = prob.As[:,:,end], b = prob.b)
 end

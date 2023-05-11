@@ -127,6 +127,7 @@ add_arg_group!(CLI_SETTINGS,
         nargs = '+' # If --B1map is passed, at least one input is required
         arg_type = String
         help = "one or more B1 map filenames. The B1 maps must have the same matrix sizes as the corresponding images, and are assumed to represent flip angles in units of degrees. The number of B1 map files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING. (units: degrees)"
+        group = :B1_SE_corr
     "--nRefAngles"
         arg_type = Int
         help = "in estimating the local refocusing flip angle to correct for B1 inhomogeneities, up to --nRefAngles angles in the range [--MinRefAngle, 180] are explicitly checked. The optimal angle is then estimated by interpolating between these observations. (default: 32)"
@@ -186,7 +187,7 @@ add_arg_group!(CLI_SETTINGS,
     "--betargs"
         arg_type = String
         default = "-m -n -f 0.25 -R"
-        help = "BET command line interface arguments. Must be passed as a single string with arguments separated by spaces, e.g. \"-m -n\". The flag \"-m\" indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided"
+        help = "BET command line interface arguments. Must be passed as a single string with arguments separated by commas or spaces, e.g. \"-m -n\". The flag \"-m\" indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided"
         group = :bet_args
     "--betpath"
         arg_type = String
@@ -572,7 +573,8 @@ end
 
 function make_bet_mask(image::Array{T,3}, betpath::String, betargs::String) where {T}
     # Split betargs, and ensure that "-m" (make binary mask) is among args
-    args = convert(Vector{String}, filter!(!isempty, split(betargs, " ")))
+    dlm = c -> isspace(c) || c == ','
+    args = convert(Vector{String}, split(betargs, dlm; keepempty = false))
     if "-m" ∉ args
         push!(args, "-m")
     end
