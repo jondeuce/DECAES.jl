@@ -220,9 +220,8 @@ See also:
 function main(command_line_args::Vector{String} = ARGS)
 
     # Parse command line arguments
-    opts = parse_args(command_line_args, CLI_SETTINGS; as_symbols = true)
+    opts = parse_cli(command_line_args)
     opts === nothing && return nothing # Help message was triggered. Return nothing instead of exit(0)
-    opts = handle_cli_deprecations!(opts) # Handle deprecated options
 
     if opts[:compile]
         # Compile DECAES into a relocatable app
@@ -374,6 +373,14 @@ end
 ####
 #### Helper functions
 ####
+
+function parse_cli(args)
+    opts = parse_args(args, CLI_SETTINGS; as_symbols = true)
+    if opts !== nothing
+        opts = handle_cli_deprecations!(opts)
+    end
+    return opts
+end
 
 function handle_cli_deprecations!(opts)
     handle_renamed_cli_flag!(opts, :Progress => nothing)

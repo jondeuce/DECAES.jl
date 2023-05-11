@@ -35,6 +35,16 @@ end
 @inline floattype(xs::Tuple) = float(promote_type(map(typeof, xs)...))
 @inline floattype(xs::NamedTuple) = floattype(Tuple(xs))
 
+function with_singlethreaded_blas(f)
+    nblasthreads = LinearAlgebra.BLAS.get_num_threads()
+    try
+        LinearAlgebra.BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
+        f()
+    finally
+        LinearAlgebra.BLAS.set_num_threads(nblasthreads) # Reset BLAS threads
+    end
+end
+
 function set_diag!(A::AbstractMatrix, val)
     @acc for i in 1:min(size(A)...)
         A[i,i] = val

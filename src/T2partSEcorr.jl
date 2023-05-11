@@ -50,20 +50,18 @@ function T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T}) where
     end
 
     # Run T2-Part analysis
-    LinearAlgebra.BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
-
     ntasks = opts.Threaded ? Threads.nthreads() : 1
     indices = CartesianIndices(opts.MatrixSize)
     blocksize = ceil(Int, length(indices) / ntasks)
     indices_blocks = split_indices(length(indices), blocksize)
 
-    workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
-        @inbounds for j in inds
-            voxelwise_T2_parts!(thread_buffer, maps, T2distributions, opts, indices[j])
+    with_singlethreaded_blas() do
+        workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
+            @inbounds for j in inds
+                voxelwise_T2_parts!(thread_buffer, maps, T2distributions, opts, indices[j])
+            end
         end
     end
-
-    LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
 
     return convert(Dict{String, Any}, maps)
 end

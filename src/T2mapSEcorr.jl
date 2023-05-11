@@ -164,7 +164,6 @@ function T2mapSEcorr!(
     # =========================================================================
     # Process all pixels
     # =========================================================================
-    LinearAlgebra.BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
 
     # For each worker in the worker pool, allocate a separete thread-local buffer, then run the work function `work!`
     function with_thread_buffer(work!)
@@ -179,13 +178,13 @@ function T2mapSEcorr!(
     ntasks = opts.Threaded ? Threads.nthreads() : 1
     indices_blocks = split_indices(length(indices), default_blocksize())
 
-    workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
-        @inbounds for j in inds
-            voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(signals, :, j), opts, indices[j])
+    with_singlethreaded_blas() do
+        workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
+            @inbounds for j in inds
+                voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(signals, :, j), opts, indices[j])
+            end
         end
     end
-
-    LinearAlgebra.BLAS.set_num_threads(Threads.nthreads()) # Reset BLAS threads
 
     return convert(Dict{String, Any}, maps), convert(Array{T,4}, dist)
 end

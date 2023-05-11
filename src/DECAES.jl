@@ -4,7 +4,7 @@ module DECAES
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
 
 # Imported modules
-import ArgParse, Dierckx, DocStringExtensions, ForwardDiff, Logging, LoggingExtras, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, ProgressMeter, SIMD, StaticArrays, TupleTools, UnsafeArrays
+import ArgParse, Dierckx, DocStringExtensions, ForwardDiff, Logging, LoggingExtras, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, PrecompileTools, ProgressMeter, SIMD, StaticArrays, TupleTools, UnsafeArrays
 
 # Explicitly imported symbols
 using ArgParse: @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
@@ -14,6 +14,7 @@ using ForwardDiff: DiffResults
 using Logging: ConsoleLogger, with_logger
 using LoggingExtras: FileLogger, TeeLogger, TransformerLogger
 using Parameters: @with_kw, @with_kw_noshow
+using PrecompileTools: @compile_workload, @setup_workload
 using ProgressMeter: Progress, BarGlyphs
 using SIMD: FloatingTypes, Vec, shufflevector
 using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
@@ -52,5 +53,12 @@ export T2mapSEcorr, T2mapOptions, T2partSEcorr, T2partOptions
 export EPGdecaycurve, EPGdecaycurve!, EPGdecaycurve_work
 export lsqnonneg, lsqnonneg_chi2, lsqnonneg_gcv, lsqnonneg_lcurve, lcurve_corner
 export main
+
+# Precompile
+@compile_workload begin
+    redirect_to_devnull() do
+        main(["--help"])
+    end
+end
 
 end
