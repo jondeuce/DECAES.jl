@@ -2,24 +2,24 @@ function status = decaes(varargin)
 %DECAES (DE)composition and (C)omponent (A)nalysis of (E)xponential (S)ignals
 % Call out to the DECAES command line tool. The DECAES.jl Julia package will
 % be installed automatically, if necessary.
-% 
+%
 % See the online documentation for more information on DECAES:
 %   https://jondeuce.github.io/DECAES.jl/dev/
-% 
+%
 % See the mwiexamples github repository for myelin water imaging examples,
 % including sample data:
 %   https://github.com/jondeuce/mwiexamples
-% 
+%
 % If you use DECAES in your research, please cite our work:
 %   https://doi.org/10.1016/j.zemedi.2020.04.001
-% 
+%
 % INPUTS:
 %   Input argument syntax mimics that of the DECAES command line interface.
 %   Arguments must be strings, numeric values, or arrays of numeric values.
 %   For arrays, each element is treated as a separate input argument.
 %   All arguments will be forwarded to DECAES, with the exception of the
 %   following Matlab-specific flags:
-% 
+%
 %   --runtime:  Path to Julia binary runtime. Defaults to 'julia'.
 %   --threads:  Number of computational threads for DECAES to use.
 %               Defaults to 'auto', deferring to Julia to choose the optimal value.
@@ -33,10 +33,10 @@ function status = decaes(varargin)
 %               much friendlier interactive use. The Julia server will be killed
 %               automatically when Matlab exits. Do not use this flag if DECAES
 %               only needs to be run once.
-% 
+%
 % OUTPUTS:
 %   status:     (optional) System call status; see SYSTEM for details
-% 
+%
 % EXAMPLES:
 %   Run DECAES multithreaded on 'image.nii.gz' using command syntax:
 %     * We specify an output folder named 'results' using the '--output'
@@ -52,16 +52,16 @@ function status = decaes(varargin)
 %       parameter using the --Reg flag
 %     * Lastly, we indicate that the regularization parameters should be
 %       saved using the --SaveRegParam flag
-% 
+%
 %       decaes image.nii.gz --output results --mask image_mask.mat --T2map --T2part --TE 7e-3 --nT2 60 --T2Range 7e-3 2.0 --SPWin 7e-3 25e-3 --MPWin 25e-3 200.0e-3 --Reg lcurve --SaveRegParam
-% 
+%
 %   Run the same command using function syntax:
-% 
+%
 %       decaes('image.nii.gz', '--output', 'results', '--mask', 'image_mask.mat', '--T2map', '--T2part', '--TE', 7e-3, '--nT2', 60, '--T2Range', [7e-3, 2.0], '--SPWin', [7e-3, 25e-3], '--MPWin', [25e-3, 200.0e-3], '--Reg', 'lcurve', '--SaveRegParam')
-% 
+%
 %   Create a settings file called 'settings.txt' containing the settings
 %   from the above example (note: only one value or flag per line):
-% 
+%
 %       image.nii.gz
 %       --output
 %       results
@@ -85,14 +85,14 @@ function status = decaes(varargin)
 %       --Reg
 %       lcurve
 %       --SaveRegParam
-% 
+%
 %   Run the example using the above settings file 'settings.txt' on a local Julia server:
-% 
+%
 %       decaes --server @settings.txt
-% 
+%
 %   Note the separation of the Matlab-specific flags from the DECAES settings file.
-% 
-% This version of decaes.m was written for DECAES v0.4.5.
+%
+% This version of decaes.m was written for DECAES v0.5.0.
 % DECAES was written by Jonathan Doucette (jdoucette@physics.ubc.ca).
 % Original MATLAB implementation is by Thomas Prasloski (tprasloski@gmail.com).
 
