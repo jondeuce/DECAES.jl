@@ -2,36 +2,41 @@ using Pkg
 Pkg.instantiate()
 Pkg.status()
 
-using PackageCompiler
 using DECAESApp
+using PackageCompiler
 
-"""
-    build(build_path::String; kwargs...)
+function build(; create_symlink = true)
+    @info "DECAES: Starting build."
+    package_dir = pkgdir(DECAESApp)
+    compiled_app = joinpath(package_dir, "build")
+    exe = joinpath(compiled_app, "bin", "decaes")
 
-Build DECAES into an executable [app](https://julialang.github.io/PackageCompiler.jl/stable/apps.html).
-By default, `build_path` points to the folder "decaes_app" in the working directory.
-Building will error if `build_path` exists, unless the keyword argument `force = true` is passed.
-All keyword arguments `kwargs` are forwarded to `PackageCompiler.create_app`.
-```
-"""
-function build(
-        build_path = joinpath(pwd(), "decaes_app");
-        kwargs...,
-    )
-    @assert !ispath(build_path) "The following build path already exists and will not be overwritten: $(build_path)"
-    create_app(
-        pkgdir(DECAESApp),
-        build_path;
-        executables = ["decaes" => "julia_main"],
-        precompile_execution_file = joinpath(pkgdir(DECAESApp), "app_precompile.jl"),
-        include_lazy_artifacts = true,
-        incremental = false,
-        filter_stdlibs = false,
-        force = false,
-        kwargs...,
-    )
-    @info "DECAES: Build complete."
-    @info "DECAES: Executable binary can be found here: $(joinpath(build_path, "bin", "decaes"))"
+    try
+        create_app(
+            package_dir,
+            compiled_app;
+            executables = ["decaes" => "julia_main"],
+            precompile_execution_file = joinpath(package_dir, "app_precompile.jl"),
+            incremental = false,
+            filter_stdlibs = false,
+            force = true,
+            include_lazy_artifacts = true,
+            include_transitive_dependencies = true,
+        )
+        @info "DECAES: Build complete."
+        @info "DECAES: Executable binary can be found here: $(exe)"
+    catch e
+        rm(compiled_app; force = true, recursive = true)
+        rethrow()
+    end
+
+    if create_symlink
+        bin = mkpath(joinpath(homedir(), ".julia", "bin"))
+        link = joinpath(bin, "decaes")
+        rm(link; force = true)
+        symlink(exe, link; dir_target = false)
+        @info "DECAES: Symbolic link created: $(link)"
+    end
 end
 
 if !isinteractive()

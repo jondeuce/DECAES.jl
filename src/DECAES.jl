@@ -4,7 +4,7 @@ module DECAES
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
 
 # Imported modules
-import ArgParse, Dierckx, DocStringExtensions, ForwardDiff, Logging, LoggingExtras, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, PrecompileTools, ProgressMeter, SIMD, StaticArrays, TupleTools, UnsafeArrays
+import ArgParse, Dierckx, DocStringExtensions, ForwardDiff, Logging, LoggingExtras, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, PrecompileTools, ProgressMeter, SIMD, Scratch, StaticArrays, TupleTools, UnsafeArrays
 
 # Explicitly imported symbols
 using ArgParse: @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
@@ -17,6 +17,7 @@ using Parameters: @with_kw, @with_kw_noshow
 using PrecompileTools: @compile_workload, @setup_workload
 using ProgressMeter: Progress, BarGlyphs
 using SIMD: FloatingTypes, Vec, shufflevector
+using Scratch: @get_scratch!
 using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
 using UnsafeArrays: @uviews, uviews, uview
 

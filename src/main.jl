@@ -204,7 +204,7 @@ add_arg_group!(CLI_SETTINGS,
 @add_arg_table! CLI_SETTINGS begin
     "--compile"
         action = :store_true
-        help = "compile DECAES into a relocatable executable app and exit. A folder 'decaes_app' is generated in the working directory. The app can be run from the command line using the syntax './decaes_app/bin/decaes <DECAES arguments> --julia-args <Julia arguments>'. Note: PackageCompiler.jl will be automatically downloaded and installed upon first use of the --compile flag"
+        help = "compile DECAES into a executable app and exit. The DECAES app is stored in `~/.julia/scratchspaces/<DECAES UUID>`, and a symbolic link to the executable is created at `~/.julia/bin/decaes`. The app can be run from the command line using the syntax 'decaes <DECAES arguments> --julia-args <Julia arguments>'. Note: PackageCompiler.jl will be automatically downloaded and installed upon first use of the --compile flag"
         group = :compilation
 end
 
@@ -357,18 +357,16 @@ end
 Build DECAES into a relocatable executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
 """
 function compile_decaes_app()
-    mktempdir() do temp_dir
-        # Copy DECAES app into a temporary directory
-        app_dir = joinpath(pkgdir(DECAES), "api", "DECAESApp")
-        temp_app_dir = joinpath(temp_dir, "DECAESApp")
-        cp(app_dir, temp_app_dir)
+    # Copy DECAES app into a temporary directory
+    app_dir = pkgdir(DECAES, "api", "DECAESApp")
+    scratch_app_dir = @get_scratch!("DECAESApp")
+    cp(app_dir, scratch_app_dir; force = true)
 
-        # Run build script in a new julia instance. This will instantiate the `DECAESApp` build dependencies
-        # and build the relocatable executable app into a folder "decaes_app" in the current working directory
-        temp_build_script = joinpath(temp_app_dir, "app_builder.jl")
-        cmd = `$(Base.julia_cmd()) --startup-file=no --threads=auto --project=$(temp_app_dir) $(temp_build_script)`
-        run(cmd)
-    end
+    # Run build script in a new julia instance. This will instantiate `DECAESApp`
+    # and build the relocatable executable app into the `build` subfolder
+    scratch_app_builder = joinpath(scratch_app_dir, "app_builder.jl")
+    cmd = `$(Base.julia_cmd()) --startup-file=no --threads=auto --project=$(scratch_app_dir) $(scratch_app_builder)`
+    run(cmd)
 end
 
 ####
