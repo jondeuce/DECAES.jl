@@ -9,3 +9,4 @@
 /bench/main/results*
 /bench/main/settings*
 Manifest.toml
+results
