@@ -192,7 +192,7 @@ end
 # =========================================================
 # Main loop function
 # =========================================================
-function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps, dist::T2Distributions, signal, opts::T2mapOptions, I::CartesianIndex)
+function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps, dist::T2Distributions, signal::AbstractVector, opts::T2mapOptions, I::CartesianIndex)
     (; decay_data, flip_angle_work, T2_dist_work) = thread_buffer
 
     # Copy decay curve into the thread buffer
@@ -492,36 +492,33 @@ function save_results!(thread_buffer, maps::T2Maps, dist::T2Distributions, o::T2
     end
 
     # Save distribution
-    (; distributions) = dist
     @acc for j in 1:o.nT2
-        distributions[I,j] = T2_dist[j]
+        dist.distributions[I,j] = T2_dist[j]
     end
 
     # Optionally save regularization parameters
-    if o.SaveRegParam
-        (; mu, chi2factor) = maps
-        @inbounds mu[I], chi2factor[I] = T2_dist_work.μ[], T2_dist_work.χ²fact[]
+    if maps.mu !== nothing && maps.chi2factor !== nothing # o.SaveRegParam == true
+        @inbounds maps.mu[I], maps.chi2factor[I] = T2_dist_work.μ[], T2_dist_work.χ²fact[]
     end
 
     # Optionally save ℓ²-norm of residuals
-    if o.SaveResidualNorm
-        (; resnorm) = maps
-        @inbounds resnorm[I] = sqrt(sum(abs2, residuals))
+    if maps.resnorm !== nothing # o.SaveResidualNorm == true
+        @inbounds maps.resnorm[I] = sqrt(sum(abs2, residuals))
     end
 
     # Optionally save signal decay curve from fit
-    if o.SaveDecayCurve
-        (; decaycurve) = maps
+    if maps.decaycurve !== nothing # o.SaveDecayCurve == true
         @acc for j in 1:o.nTE
-            decaycurve[I,j] = decay_calc[j]
+            maps.decaycurve[I,j] = decay_calc[j]
         end
     end
 
     # Optionally save NNLS basis
-    if o.SaveNNLSBasis && o.SetFlipAngle === nothing
-        (; decaybasis) = maps
-        @acc for J in CartesianIndices((o.nTE, o.nT2))
-            decaybasis[I,J] = decay_basis[J]
+    if maps.decaybasis !== nothing # o.SaveNNLSBasis == true
+        if o.SetFlipAngle === nothing
+            @acc for J in CartesianIndices((o.nTE, o.nT2))
+                maps.decaybasis[I,J] = decay_basis[J]
+            end
         end
     end
 

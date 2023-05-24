@@ -30,21 +30,40 @@ function make_spline(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, l
     return Dierckx.Spline1D(X, Y; k = deg_spline, bc = "extrapolate")
 end
 
-function build_polynomials(spl::Dierckx.Spline1D)
+function build_polynomials(spl::Dierckx.Spline1D, knots = Dierckx.get_knots(spl))
     k = spl.k
-    t = Dierckx.get_knots(spl)[1:end-1]
+    @inbounds t = knots[1:end-1]
     coeffs = zeros(k+1, length(t))
-    coeffs[1, :] .= spl.(t)
-    for m in 1:k
+    @inbounds coeffs[1, :] .= spl(t)
+    @inbounds for m in 1:k
         coeffs[m+1, :] .= Dierckx.derivative(spl, t, m) ./ factorial(m)
     end
-    return [Poly(coeffs[:, j]) for j in 1:size(coeffs, 2)]
+    return [Poly(@views coeffs[:, j]) for j in 1:size(coeffs, 2)]
 end
 
-# Global minimization through fitting a spline to data (X, Y)
-function spline_opt(spl::Dierckx.Spline1D)
+function build_polynomial!(coeffs, spl::Dierckx.Spline1D, t)
+    @assert length(coeffs) == spl.k+1
+    mfact = 1
+    @inbounds coeffs[1] = spl(t)
+    @inbounds for m in 1:spl.k
+        mfact *= m
+        coeffs[m+1] = Dierckx.derivative(spl, t, m) / mfact
+    end
+    return coeffs
+end
+
+# Fit a spline to data `(X, Y)` and minimize `spl(x)`
+function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1))
+    @assert length(X) == length(Y) "X and Y must have the same length"
+    @assert 0 < deg_spline <= 3 "Degree of spline must be 1, 2, or 3"
+    if deg_spline == 1
+        # Linear spline achievies minimum at one of the nodes
+        y, i = findmin(Y)
+        return (; x = X[i], y)
+    end
+    spl = make_spline(X, Y; deg_spline)
     knots = Dierckx.get_knots(spl)
-    polys = build_polynomials(spl)
+    polys = build_polynomials(spl, knots)
     x, y = knots[1], polys[1](0) # initial lefthand point
     @inbounds for (i, p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
@@ -62,28 +81,41 @@ function spline_opt(spl::Dierckx.Spline1D)
     end
     return (; x, y)
 end
-spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = spline_opt(make_spline(X, Y; deg_spline))
 
-# Root finding through fitting a spline to data (X, Y)
-function spline_root(spl::Dierckx.Spline1D, value::Number = 0)
-    knots = Dierckx.get_knots(spl)
-    polys = build_polynomials(spl)
-    x = eltype(knots)(NaN)
-    @inbounds for (i, p) in enumerate(polys)
-        x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
-        # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
-        for rᵢ in PolynomialRoots.roots(sub!(p, value))
-            if imag(rᵢ) ≈ 0 # real roots only
-                xᵢ = x₀ + real(rᵢ)
-                if x₀ <= xᵢ <= x₁ # filter roots within range
-                    x = isnan(x) ? xᵢ : min(x, xᵢ)
+# Fit a spline to data `(X, Y)` and solve `spl(x) = value`
+function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X)-1))
+    x = eltype(X)(NaN)
+    if deg_spline == 1
+        # Linear spline has at most one root in each section
+        @inbounds for i in 1:length(X)-1
+            x₀, y₀, x₁, y₁ = X[i], Y[i], X[i+1], Y[i+1]
+            if y₀ <= value <= y₁
+                slope = (value - y₀) / (y₁ - y₀)
+                x = y₀ ≈ value ? x₀ :
+                    y₁ ≈ value ? x₁ :
+                    x₀ + (x₁ - x₀) * (isfinite(slope) ? slope : zero(slope))
+                break
+            end
+        end
+    else
+        spl = make_spline(X, Y; deg_spline)
+        knots = Dierckx.get_knots(spl)
+        polys = build_polynomials(spl)
+        @inbounds for (i, p) in enumerate(polys)
+            x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
+            # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
+            for rᵢ in PolynomialRoots.roots(sub!(p, value))
+                if imag(rᵢ) ≈ 0 # real roots only
+                    xᵢ = x₀ + real(rᵢ)
+                    if x₀ <= xᵢ <= x₁ # filter roots within range
+                        x = isnan(x) ? xᵢ : min(x, xᵢ)
+                    end
                 end
             end
         end
     end
     return x
 end
-spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X)-1)) = spline_root(make_spline(X, Y; deg_spline), value)
 
 ####
 #### Legacy spline utils
@@ -255,7 +287,7 @@ function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
     _, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
     @inbounds p = surr.grid[I]
     p, u = local_search(surr, p)
-    return (p, u)
+    return p, u
 end
 
 # Specialize the 1D case to use the faster and more robust Brent-Dekker method
@@ -292,7 +324,7 @@ function suggest_point(surr::HermiteSplineSurrogate{1,T}) where {T}
         pᵒᵖᵗ, uᵒᵖᵗ = p₀, u₀
     end
 
-    return (pᵒᵖᵗ, uᵒᵖᵗ)
+    return pᵒᵖᵗ, uᵒᵖᵗ
 end
 
 ####
@@ -406,7 +438,7 @@ function bisection_search(
         evaluate_box!(surr, state, box, x; maxeval = maxeval)
         x, u = suggest_point(surr)
         if state.numeval[] ≥ maxeval || converged(state, box)
-            return (x, u)
+            return x, u
         end
     end
 end
@@ -537,7 +569,7 @@ function local_search(
 
     u = NormalHermiteSplines.evaluate(surr.spl, x)
 
-    return (x, u)
+    return x, u
 end
 
 #=
@@ -572,7 +604,7 @@ function local_search(
     x = SVector{D,T}(ntuple(d -> @inbounds(minx[d]), D))
     u = T(minf)
 
-    return (x, u)
+    return x, u
 end
 =#
 
@@ -719,7 +751,8 @@ function spline_opt(
         @inbounds Float64(evaluate(spl, x[1]))
     end
     minf, minx, ret = NLopt.optimize(opt, Vector{Float64}(α₀))
-    return (SVector{D,T}(minx), T(minf))
+    x, f = SVector{D,T}(minx), T(minf)
+    return x, f
 end
 
 function mock_surrogate_search_problem(

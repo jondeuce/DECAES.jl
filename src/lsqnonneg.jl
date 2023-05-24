@@ -819,7 +819,7 @@ Find the corner of the L-curve via curvature maximization using Algorithm 1 from
 A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”.
 IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
-function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, refine = false, backtracking = true, verbose = false) where {T}
+function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, refine = false, backtracking = true) where {T}
     # Initialize state
     state = initial_state(f, T(xlow), T(xhigh))
 
@@ -836,8 +836,8 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
     Pfilter = P -> min(norm(P - Ptopleft), norm(P - Pbottomright)) > T(Ctol)
     update_curvature!(f, state, Pfilter)
 
-    msg(s, state) = verbose && (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [f.point_cache[x].C for x in state.x⃗])))
-    msg("Starting", state)
+    # msg(s, state) = (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [f.point_cache[x].C for x in state.x⃗])))
+    # msg("Starting", state)
 
     iter = 0
     while true
@@ -856,11 +856,11 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         if f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C
             state = move_left(f, state)
             update_curvature!(f, state, Pfilter)
-            msg("C₂ > C₃; moved left", state)
+            # msg("C₂ > C₃; moved left", state)
         else
             state = move_right(f, state)
             update_curvature!(f, state, Pfilter)
-            msg("C₃ ≥ C₂; moved right", state)
+            # msg("C₃ ≥ C₂; moved right", state)
         end
         backtracking && push!(f.state_cache, (iter, state))
         is_converged(state; xtol = T(xtol), Ptol = T(Ptol)) && break
@@ -868,10 +868,10 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
 
     if refine
         x = refine!(f, state, Pfilter)
-        msg("Converged; refined solution", state)
+        # msg("Converged; refined solution", state)
     else
         x = f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
-        msg("Converged", state)
+        # msg("Converged", state)
     end
 
     return x
@@ -928,14 +928,9 @@ function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCorner
     return state
 end
 
-function refine!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing; analytical = false) where {T}
+function refine!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing) where {T}
     # Fit spline to (negative) curvature estimates on grid and minimize over the spline
-    if analytical
-        x_opt, _, _ = maximize_curvature(state)
-    else
-        C_spl = make_spline(state.x⃗, [-f.point_cache[x].C for x in state.x⃗])
-        x_opt, _ = spline_opt(C_spl)
-    end
+    x_opt, _ = spline_opt(state.x⃗, [-f.point_cache[x].C for x in state.x⃗])
     _ = f(x_opt)
     update_curvature!(f, state, Pfilter)
     (x_opt, (_, _)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))

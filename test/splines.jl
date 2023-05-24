@@ -1,3 +1,21 @@
+function test_cubic_splines()
+    X = sort(rand(10))
+    Y = rand(10)
+
+    for deg_spline in 1:3
+        spl = DECAES.make_spline(X, Y; deg_spline)
+        (; x, y) = DECAES.spline_opt(X, Y; deg_spline)
+        @assert X[1] <= x <= X[end]
+        @assert spl(x) ≈ y
+        @assert minimum(spl, range(X[1], X[end], length = 100)) >= y
+
+        ȳ = (maximum(Y) + minimum(Y)) / 2
+        x̄ = DECAES.spline_root(X, Y, ȳ; deg_spline)
+        @assert X[1] <= x̄ <= X[end]
+        @assert spl(x̄) ≈ ȳ
+    end
+end
+
 function test_mock_surrogate_search_problem(
         opts::T2mapOptions = DECAES.mock_t2map_opts(;
             MatrixSize = (1, 1, 1),
@@ -93,6 +111,9 @@ function test_discrete_searcher()
 end
 
 @testset "Splines" begin
+    @testset "cubic" begin
+        test_cubic_splines()
+    end
     @testset "mock surrogate search problem" begin
         test_mock_surrogate_search_problem()
     end

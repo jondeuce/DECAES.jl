@@ -66,6 +66,6 @@ end
 
 @testset "nnls.jl"    verbose = true begin; include("nnls.jl"); end
 @testset "utils.jl"   verbose = true begin; include("utils.jl"); end
-@testset "epg.jl"     verbose = true begin; include("epg.jl"); end
 @testset "splines.jl" verbose = true begin; include("splines.jl"); end
+@testset "epg.jl"     verbose = true begin; include("epg.jl"); end
 @testset "cli.jl"     verbose = true begin; include("cli.jl"); end

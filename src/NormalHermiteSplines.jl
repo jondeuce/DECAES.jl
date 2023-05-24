@@ -947,8 +947,8 @@ function _construct!(
         values::AbstractVector{T},
     ) where {n, T, RK <: ReproducingKernel_0}
     n₁ = length(values)
-    length(_get_nodes(spl)) != n₁ && error("Number of data values ($n₁) does not correspond to the number of nodes $(length(_get_nodes(spl))).")
-    size(_get_chol(spl)) != (n₁, n₁) && error("Number of data values ($n₁) does not correspond to the size of the Gram matrix ($(size(_get_chol(spl)))).")
+    @assert length(_get_nodes(spl)) == n₁ "Number of data values ($n₁) does not correspond to the number of nodes $(length(_get_nodes(spl)))."
+    @assert size(_get_chol(spl)) == (n₁, n₁) "Number of data values ($n₁) does not correspond to the size of the Gram matrix ($(size(_get_chol(spl))))."
 
     # Resize buffers
     resize!(_get_values(spl), n₁)
@@ -994,9 +994,9 @@ function _construct!(
     ) where {n, T, RK <: ReproducingKernel_1}
     n₁ = length(values)
     n₂ = length(d_values)
-    length(_get_nodes(spl)) != n₁ && error("Number of data values ($n₁) does not correspond to the number of nodes $(length(_get_nodes(spl))).")
-    length(_get_d_nodes(spl)) != n₂ && error("Number of derivative values ($n₂) does not correspond to the number of derivative nodes.")
-    size(_get_chol(spl)) != (n₁+n₂, n₁+n₂) && error("Number of data and derivative values ($(n₁+n₂)) do not correspond to the size of the Gram matrix ($(size(_get_chol(spl)))).")
+    @assert length(_get_nodes(spl)) == n₁ "Number of data values ($n₁) does not correspond to the number of nodes $(length(_get_nodes(spl)))."
+    @assert length(_get_d_nodes(spl)) == n₂ "Number of derivative values ($n₂) does not correspond to the number of derivative nodes."
+    @assert size(_get_chol(spl)) == (n₁+n₂, n₁+n₂) "Number of data and derivative values ($(n₁+n₂)) do not correspond to the size of the Gram matrix ($(size(_get_chol(spl))))."
 
     # Resize buffers
     resize!(_get_values(spl), n₁)
