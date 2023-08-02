@@ -225,7 +225,7 @@ Compiling DECAES (experimental):
                         automatically downloaded and installed upon
                         first use of the --compile flag</code></pre><div class="admonition is-info"><header class="admonition-header">Note</header><div class="admonition-body"><p>If desired, the <span>$T_2$</span>-distribution computation and the <span>$T_2$</span>-parts analysis may be performed separately:</p><ul><li>When the <code>--T2map</code> flag is passed, or both <code>--T2map</code> and <code>--T2part</code> flags are passed, input image arrays should be 4D with data as (row, column, slice, echo)</li><li>When only the <code>--T2part</code> flag is passed, input image arrays should be 4D with data as (row, column, slice, <span>$T_2$</span> bin)</li></ul></div></div><h2 id="Outputs"><a class="docs-heading-anchor" href="#Outputs">Outputs</a><a id="Outputs-1"></a><a class="docs-heading-anchor-permalink" href="#Outputs" title="Permalink"></a></h2><p>DECAES will produce up to five output files, each with the input filename (without suffix) used as a prefix. For example, if the input file is called <code>image.nii</code>, the possible output files are:</p><ol><li><code>image.t2dist.mat</code>: MATLAB file containing the 4D array of <span>$T_2$</span>-distributions (produced when <code>--T2map</code> flag is passed)</li><li><code>image.t2maps.mat</code>: MATLAB file containing <span>$T_2$</span>-distribution property maps and NNLS fit parameters; see <a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a> (produced when <code>--T2map</code> flag is passed)</li><li><code>image.t2parts.mat</code>: MATLAB file containing <span>$T_2$</span>-parts analysis results such as the MWF; see <a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a> (produced when <code>--T2part</code> flag is passed)</li><li><code>image.log</code>: Log file containing the console output</li><li><code>image.settings.txt</code>: Copy of settings file which was named <code>settings.txt</code> (produced when <a href="#settingsfiles">passing settings as a file</a>)</li></ol><p>If the <code>--dry</code> flag is passed, none of the above files will be produced.</p><h2 id="Multithreading"><a class="docs-heading-anchor" href="#Multithreading">Multithreading</a><a id="Multithreading-1"></a><a class="docs-heading-anchor-permalink" href="#Multithreading" title="Permalink"></a></h2><p>Multithreaded parallel processing can be enabled by passing the <code>julia</code> command line flag <code>--threads=auto</code>:</p><pre class="documenter-example-output"><code class="nohighlight hljs ansi">$ julia --threads=auto decaes.jl -- image.nii &lt;COMMAND LINE ARGS&gt;</code></pre><p>This is highly recommended to speed up computation time, but is not strictly required.</p><h2 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h2><h3 id="defaultoptions"><a class="docs-heading-anchor" href="#defaultoptions">Default options</a><a id="defaultoptions-1"></a><a class="docs-heading-anchor-permalink" href="#defaultoptions" title="Permalink"></a></h3><p>Suppose you have a multi spin-echo image file <code>image.nii</code> which you would like to perform <span>$T_2$</span> analysis on. We can call <a href="../ref/#DECAES.T2mapSEcorr"><code>T2mapSEcorr</code></a> and <a href="../ref/#DECAES.T2partSEcorr"><code>T2partSEcorr</code></a> on the file <code>image.nii</code> using <code>decaes.jl</code>. We pass the required arguments with the appropriate flags and leave the remaining parameters at default values:</p><pre class="documenter-example-output"><code class="nohighlight hljs ansi">$ julia --threads=auto decaes.jl -- image.nii --T2map --T2part --TE 10e-3 --nT2 40 --T2Range 10e-3 2.0 --SPWin 10e-3 40e-3 --MPWin 40e-3 200.0e-3 --Reg lcurve</code></pre><p>After a few seconds, the script should begin running with the following messages appearing as the script progresses (note that real images will take longer to process than this toy example):</p><pre class="documenter-example-output"><code class="nohighlight hljs ansi">[ Info: Starting DECAES v0.5.0 using Julia v1.9.2 with 4 threads
 [ Info: Loading input file: image.nii.gz
-[ Info: Done (0.24 seconds)
+[ Info: Done (0.29 seconds)
 [ Info: Running T2mapSEcorr on file: image.nii.gz
 ┌ Info: T2-distribution analysis settings:
 │ * Chi2Factor       : nothing
@@ -249,11 +249,11 @@ Compiling DECAES (experimental):
 │ * TE               : 0.01
 │ * Threaded         : true
 └ * Threshold        : 0.0
-[ Info: Done (2.6 seconds)
+[ Info: Done (3.22 seconds)
 [ Info: Saving T2 distribution to file: image.t2dist.mat
-[ Info: Done (0.87 seconds)
+[ Info: Done (1.0 seconds)
 [ Info: Saving T2 parameter maps to file: image.t2maps.mat
-[ Info: Done (0.28 seconds)
+[ Info: Done (0.31 seconds)
 [ Info: Running T2partSEcorr
 ┌ Info: T2-parts analysis settings:
 │ * legacy     : false
@@ -268,7 +268,7 @@ Compiling DECAES (experimental):
 [ Info: Done (0.0 seconds)
 [ Info: Saving T2 parts maps to file: image.t2parts.mat
 [ Info: Done (0.0 seconds)
-[ Info: Finished (4.46 seconds)</code></pre><h3 id="settingsfiles"><a class="docs-heading-anchor" href="#settingsfiles">Settings files</a><a id="settingsfiles-1"></a><a class="docs-heading-anchor-permalink" href="#settingsfiles" title="Permalink"></a></h3><p>As there are several required parameters, it is convenient to store settings for DECAES in a settings file. Using the same options from the <a href="#defaultoptions">previous section</a>, we create a file <code>settings.txt</code> with the following contents:</p><pre><code class="nohighlight hljs">/path/to/image.nii
+[ Info: Finished (5.4 seconds)</code></pre><h3 id="settingsfiles"><a class="docs-heading-anchor" href="#settingsfiles">Settings files</a><a id="settingsfiles-1"></a><a class="docs-heading-anchor-permalink" href="#settingsfiles" title="Permalink"></a></h3><p>As there are several required parameters, it is convenient to store settings for DECAES in a settings file. Using the same options from the <a href="#defaultoptions">previous section</a>, we create a file <code>settings.txt</code> with the following contents:</p><pre><code class="nohighlight hljs">/path/to/image.nii
 --T2map
 --T2part
 --TE
