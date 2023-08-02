@@ -1,4 +1,5 @@
 using Pkg
+Pkg.resolve()
 Pkg.instantiate()
 Pkg.status()
 

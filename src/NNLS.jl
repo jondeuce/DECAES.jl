@@ -40,7 +40,7 @@ module NNLS
 using ..DECAES: @acc
 using LinearAlgebra
 using MuladdMacro: @muladd
-using UnsafeArrays: @uviews, uviews, uview
+using UnsafeArrays: uview
 
 export nnls, nnls!, load!
 export NNLSWorkspace, NormalEquation, NormalEquationCholesky

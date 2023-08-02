@@ -4,9 +4,9 @@ using DECAES
 using LinearAlgebra
 using Random
 using TOML
-using StaticArrays
 
 using DECAES.NNLS
+using DECAES.StaticArrays
 using DECAES:
     GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
     LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,
@@ -60,7 +60,7 @@ try
     @testset "aqua" begin
         Aqua.test_all(DECAES; ambiguities = false)
     end
-catch
+catch e
     @warn "Failed to load Aqua.jl; skipping Aqua tests"
     @warn sprint(showerror, e, catch_backtrace())
 end

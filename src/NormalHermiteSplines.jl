@@ -31,7 +31,7 @@ export get_epsilon, estimate_epsilon, get_cond, estimate_cond, estimate_accuracy
 
 using LinearAlgebra
 using StaticArrays
-using UnsafeArrays
+using UnsafeArrays: uview
 
 const AbstractArrOfSVecs{n,T,N} = AbstractArray{SVector{n,T},N}
 const AbstractVecOfSVecs{n,T} = AbstractVector{SVector{n,T}}

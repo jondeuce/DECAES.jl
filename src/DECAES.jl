@@ -21,7 +21,7 @@ using ProgressMeter: Progress, BarGlyphs
 using SIMD: FloatingTypes, Vec, shufflevector
 using Scratch: @get_scratch!
 using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
-using UnsafeArrays: @uviews, uviews, uview
+using UnsafeArrays: uview
 
 macro acc(ex)
     # Your inner loop should have the following properties to allow vectorization:
