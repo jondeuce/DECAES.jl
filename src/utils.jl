@@ -257,22 +257,20 @@ ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.pro
 function maybe_print!(p::DECAESProgress)
     # Internal `progress_meter` prints to the IOBuffer `p.io_buffer`; check this buffer for new messages.
     #   Note: take!(::IOBuffer) is threadsafe
-    new_msg = String(take!(p.io_buffer))
-    if !isempty(new_msg)
+    msg = String(take!(p.io_buffer))
+    if !isempty(msg)
         # Format message
-        new_msg = replace(new_msg, "\r" => "")
-        new_msg = replace(new_msg, "\u1b[K" => "")
-        new_msg = replace(new_msg, "\u1b[A" => "")
+        msg = replace(msg, "\r" => "", "\u1b[K" => "", "\u1b[A" => "")
 
         # Update last message
         last_msg = lock(p.io_lock) do
-            last_msg, p.last_msg[] = p.last_msg[], new_msg
+            last_msg, p.last_msg[] = p.last_msg[], msg
             return last_msg
         end
 
         if !isempty(last_msg)
             # Don't print first message, as it usually gives a bad time estimate due to precompilation
-            @info new_msg
+            @info msg
             flush(stderr)
         end
     end
@@ -352,26 +350,26 @@ function workerpool(work!, allocate, inputs::Channel; ninputs::Int, ntasks::Int 
             end
         end
     else
-        progmeter = DECAESProgress(ninputs)
-        count = Threads.Atomic{Int}(0)
-
         @sync begin
+            counter = Threads.Atomic{Int}(0)
             for _ in 1:ntasks-1
-                Threads.@spawn consumer(() -> count[] += 1)
+                Threads.@spawn consumer() do
+                    counter[] += 1
+                end
             end
 
             dt = 5.0
             last_time = Ref(time())
+            progmeter = DECAESProgress(ninputs)
             consumer() do
-                count[] += 1
+                counter[] += 1
                 if (new_time = time()) > last_time[] + dt
-                    ProgressMeter.update!(progmeter, count[])
+                    ProgressMeter.update!(progmeter, counter[])
                     last_time[] = new_time
                 end
             end
+            ProgressMeter.finish!(progmeter)
         end
-
-        ProgressMeter.finish!(progmeter)
     end
 end
 
@@ -387,19 +385,7 @@ end
 function split_indices(len::Int, basesize::Int)
     len′ = Int64(len) # Avoid overflow on 32-bit machines
     np = max(1, div(len′, basesize))
-    return collect(Int(1 + ((i - 1) * len′) ÷ np) : Int((i * len′) ÷ np) for i in 1:np)
-end
-
-function split_indexable(r; basesize::Int, nbatches::Int)
-    if length(r) <= basesize
-        return [r]
-    elseif length(r) <= basesize * nbatches
-        indices = split_indices(length(r), basesize)
-        return [view(r, eachindex(r)[inds]) for inds in indices]
-    else
-        nodes = range(1, length(r); length = nbatches+1)
-        return [view(r, eachindex(r)[round(Int, nodes[i]) : round(Int, nodes[i+1])]) for i in 1:length(nodes)-1]
-    end
+    return [Int(1 + ((i - 1) * len′) ÷ np) : Int((i * len′) ÷ np) for i in 1:np]
 end
 
 ####

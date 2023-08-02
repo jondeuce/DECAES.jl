@@ -1,5 +1,7 @@
 module DECAES
 
+const VERSION = v"0.5.0"
+
 # Standard libraries
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
 
@@ -59,6 +61,7 @@ export main
 @compile_workload begin
     redirect_to_devnull() do
         main(["--help"])
+        main(["--version"])
     end
 end
 

@@ -3,7 +3,7 @@ module DECAESApp
 using DECAES
 
 """
-Entrypoint function for compiling DECAES into an executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
+Entrypoint function for compiling DECAES into an executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps.html).
 """
 function julia_main()::Cint
     try

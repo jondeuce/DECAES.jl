@@ -11,6 +11,8 @@ const CLI_SETTINGS = ArgParseSettings(
     error_on_conflict = false,
     exit_after_help = false,
     exc_handler = ArgParse.debug_handler,
+    add_version = true,
+    version = string(VERSION),
 )
 
 @add_arg_table! CLI_SETTINGS begin
@@ -222,7 +224,7 @@ function main(command_line_args::Vector{String} = ARGS)
 
     # Parse command line arguments
     opts = parse_cli(command_line_args)
-    opts === nothing && return nothing # Help message was triggered. Return nothing instead of exit(0)
+    opts === nothing && return nothing # exit was triggered; return nothing instead of exit(0)
 
     if opts[:compile]
         # Compile DECAES into a relocatable app
@@ -268,7 +270,7 @@ function main(file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
 
     # Starting message/starting time
     t_start = tic()
-    @info "Starting DECAES with $(Threads.nthreads()) threads"
+    @info "Starting DECAES v$(VERSION) using Julia v$(Base.VERSION) with $(Threads.nthreads()) threads"
 
     # Load image(s)
     image = @showtime(

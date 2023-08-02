@@ -1,9 +1,10 @@
 using Test
 using DECAES
 
-using DECAES.LinearAlgebra
-using DECAES.Random
-using DECAES.StaticArrays
+using LinearAlgebra
+using Random
+using TOML
+using StaticArrays
 
 using DECAES.NNLS
 using DECAES:
@@ -64,6 +65,7 @@ catch
     @warn sprint(showerror, e, catch_backtrace())
 end
 
+@testset "misc.jl"    verbose = true begin; include("misc.jl"); end
 @testset "nnls.jl"    verbose = true begin; include("nnls.jl"); end
 @testset "utils.jl"   verbose = true begin; include("utils.jl"); end
 @testset "splines.jl" verbose = true begin; include("splines.jl"); end
