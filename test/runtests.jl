@@ -57,9 +57,7 @@ end
 # Try running auto quality assurance tests
 try
     @eval using Aqua
-    @testset "aqua" begin
-        Aqua.test_all(DECAES; ambiguities = false)
-    end
+    @testset "aqua" Aqua.test_all(DECAES; ambiguities = false)
 catch e
     @warn "Failed to load Aqua.jl; skipping Aqua tests"
     @warn sprint(showerror, e, catch_backtrace())

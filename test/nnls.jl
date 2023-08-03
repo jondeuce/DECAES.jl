@@ -41,11 +41,13 @@ function verify_NNLS(m, n)
         @test work.zz[n₊+1:end] == work.b[n₊+1:end]
         @test NNLS.residualnorm(work) ≈ norm(A*x - b) rtol = 1e-12 atol = 1e-12
 
-        b₊ = rand(n₊)
-        U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, U, 1:n₊, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
-        L⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(L⁻¹b₊, U, 1:n₊, n₊, Val(true));  @test L⁻¹b₊ ≈ L\b₊
-        U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, work.A, work.idx, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
-        L⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(L⁻¹b₊, work.A, work.idx, n₊, Val(true));  @test L⁻¹b₊ ≈ L\b₊
+        if n₊ > 0
+            b₊ = rand(n₊)
+            U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, U, 1:n₊, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
+            L⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(L⁻¹b₊, U, 1:n₊, n₊, Val(true));  @test L⁻¹b₊ ≈ L\b₊
+            U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, work.A, work.idx, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
+            L⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(L⁻¹b₊, work.A, work.idx, n₊, Val(true));  @test L⁻¹b₊ ≈ L\b₊
+        end
 
         # Solution
         @test all(>(0), x₊)
@@ -189,6 +191,11 @@ function verify_NNLSTikhonovRegProblem(m, n)
 
     GC.@preserve work begin
         μ = 0.99
+        @test isnan(DECAES.mu(work))
+        @test DECAES.mu!(work, μ) == μ
+        @test DECAES.mu(work) == μ
+        @test all(>=(0), DECAES.solve!(work, μ))
+
         @test @allocated(DECAES.solve!(work, μ)) == 0
         @test @allocated(DECAES.mu(work)) == 0
 
@@ -255,7 +262,7 @@ function verify_NNLSTikhonovRegProblem(m, n)
             @test C̄_fun(μ) ≈ C̄
             @test C̄_fun(μ) ≈ C̄_menger(μ) rtol = 1e-3
         end
-    end
+    end # GC.@preserve
 end
 
 @testset "NNLSTikhonovRegProblem" begin
