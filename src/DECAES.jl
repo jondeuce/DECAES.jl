@@ -1,6 +1,6 @@
 module DECAES
 
-const VERSION = v"0.5.0"
+const VERSION = v"0.5.1"
 
 # Standard libraries
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random

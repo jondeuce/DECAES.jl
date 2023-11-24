@@ -1,6 +1,6 @@
 #!/bin/bash
 
-revisions="v0.5.0,master"
+revisions="v0.5.1,master"
 script="bench_cli.jl"
 output_dir="results"
 mkdir -p $output_dir

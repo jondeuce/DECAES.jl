@@ -21,7 +21,7 @@ parser = argparse.ArgumentParser(
 
             python decaes.py @/path/to/decaes_settings_file.txt
 
-    This version of decaes.sh was written for DECAES v0.5.0.
+    This version of decaes.sh was written for DECAES v0.5.1.
     """,
     formatter_class = argparse.RawDescriptionHelpFormatter,
 )
