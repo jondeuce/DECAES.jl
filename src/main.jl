@@ -514,19 +514,11 @@ function load_image(filename, ::Val{N}) where {N}
     elseif maybe_get_suffix(filename) ∈ (".nii", ".nii.gz")
         # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned:
         #   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
-        # Loaded data is coerced into an `N`-dimensional array
         data = NIfTI.niread(filename)
-        if data.header.scl_slope == 0
-            data = data.raw[ntuple(_ -> Colon(), N)...] # Return raw data
-        else
-            data = data[ntuple(_ -> Colon(), N)...] # Return scaled data (getindex from the NIfTI package handles scaling)
-        end
 
     elseif maybe_get_suffix(filename) ∈ (".par", ".xml", ".rec")
-        # Load PAR/REC or XML/REC file, coercing resulting data into an `N`-dimensional array
         rec = ParXRec.load(filename)
         data = parent(rec.data) # get underlying data wrapped by `AxisArray`
-        data = data[ntuple(_ -> Colon(), N)...]
 
     else
         error("Currently, only $ALLOWED_FILE_SUFFIXES_STRING files are supported")
@@ -534,8 +526,8 @@ function load_image(filename, ::Val{N}) where {N}
 
     # Currently, the pipeline is ~twice as fast on Float64 arrays than Float32 arrays (unclear why).
     # However, the MATLAB toolbox converts images to double as well, so here we simply do the same
-    image = zeros(Float64, ntuple(i -> size(data, i), N))
-    image .= Float64.(data)
+    sz = ntuple(i -> size(data, i), N)
+    image = copyto!(Array{Float64, N}(undef, sz), data)
 
     return image
 end
