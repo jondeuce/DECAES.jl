@@ -14,7 +14,8 @@ using DECAES:
     lcurve_corner
 
 # Environment flags
-RUN_MATLAB_TESTS = get(ENV, "DECAES_RUN_MATLAB_TESTS", "") != "0"
+is_ci() = lowercase(get(ENV, "CI", "false")) == "true"
+RUN_MATLAB_TESTS = !is_ci() && get(ENV, "DECAES_RUN_MATLAB_TESTS", "") != "0"
 MWI_TOOLBOX_PATH = get(ENV, "DECAES_MWI_TOOLBOX_PATH", "")
 RUN_MWI_TOOLBOX_TESTS = get(ENV, "DECAES_RUN_MWI_TOOLBOX_TESTS", "") != "0"
 
