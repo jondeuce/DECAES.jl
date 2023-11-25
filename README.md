@@ -19,7 +19,7 @@ If you use DECAES in your research, please [cite](CITATION.bib) our work.
 
 ## Installation
 
-In Julia v1.6 or later you can install DECAES from the Pkg REPL:
+In Julia v1.9 or later you can install DECAES from the Pkg REPL:
 ```
 pkg> add DECAES
 ```
