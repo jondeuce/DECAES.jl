@@ -72,6 +72,10 @@ end
     include("nnls.jl")
 end
 
+@testset "nhs.jl" verbose = true begin
+    include("nhs.jl")
+end
+
 @testset "utils.jl" verbose = true begin
     include("utils.jl")
 end
