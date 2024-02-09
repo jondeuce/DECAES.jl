@@ -3,7 +3,7 @@
 ####
 
 # Load the Julia package manager, which is itself a Julia package
-import Pkg
+using Pkg
 
 # Load the DaemonMode package
 try
@@ -24,15 +24,14 @@ const PORT = DaemonMode.PORT
 # Julia command for starting server.
 # Note: inherits current Julia environment - make sure number of threads
 #       are set before running this script!
-julia_cmd =
-    ```
-    $(Base.julia_cmd())
-    --project=$(Base.active_project())
-    --threads=$(Threads.nthreads())
-    --startup-file=no
-    --optimize=3
-    --quiet
-    ```;
+julia_cmd = ```
+            $(Base.julia_cmd())
+            --project=$(Base.active_project())
+            --threads=$(Threads.nthreads())
+            --startup-file=no
+            --optimize=3
+            --quiet
+            ```;
 
 # Convenience macro to write a Julia expression into a temporary script
 macro mktempscript(ex = nothing)
@@ -41,6 +40,7 @@ macro mktempscript(ex = nothing)
         open(fname; write = true) do io
             println(io, "const PORT = $PORT")
             println(io, $(string(ex)))
+            return nothing
         end
         fname
     end
@@ -72,7 +72,7 @@ function ping()
         using DaemonMode
         redirect_stdout(devnull) do
             redirect_stderr(devnull) do
-                runargs(PORT)
+                return runargs(PORT)
             end
         end
     end
@@ -113,7 +113,7 @@ end
 ####
 
 decaes_script = @mktempscript begin
-    import Pkg
+    using Pkg
     try
         @eval using DECAES
     catch e

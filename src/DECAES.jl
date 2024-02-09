@@ -4,24 +4,28 @@ const VERSION = v"0.5.1"
 
 # Standard libraries
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
-
-# Imported modules
-import ArgParse, Dierckx, DocStringExtensions, ForwardDiff, Logging, LoggingExtras, MAT, NIfTI, NLopt, ParXRec, Parameters, PolynomialRoots, PrecompileTools, ProgressMeter, SIMD, Scratch, StaticArrays, TupleTools, UnsafeArrays
-
-# Explicitly imported symbols
-using ArgParse: @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
 using Base.MathConstants: φ
-using DocStringExtensions: FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
-using ForwardDiff: DiffResults
-using Logging: ConsoleLogger, with_logger
-using LoggingExtras: FileLogger, TeeLogger, TransformerLogger
-using Parameters: @with_kw, @with_kw_noshow
-using PrecompileTools: @compile_workload, @setup_workload
-using ProgressMeter: Progress, BarGlyphs
-using SIMD: FloatingTypes, Vec, shufflevector
-using Scratch: @get_scratch!
-using StaticArrays: FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
-using UnsafeArrays: uview
+
+# External libraries
+using ArgParse: ArgParse, @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
+using Dierckx: Dierckx
+using DocStringExtensions: DocStringExtensions, FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
+using ForwardDiff: ForwardDiff, DiffResults
+using Logging: Logging, ConsoleLogger, with_logger
+using LoggingExtras: LoggingExtras, FileLogger, TeeLogger, TransformerLogger
+using MAT: MAT
+using NIfTI: NIfTI
+using NLopt: NLopt
+using ParXRec: ParXRec
+using Parameters: Parameters, @with_kw, @with_kw_noshow
+using PolynomialRoots: PolynomialRoots
+using PrecompileTools: PrecompileTools, @compile_workload, @setup_workload
+using ProgressMeter: ProgressMeter, Progress, BarGlyphs
+using SIMD: SIMD, FloatingTypes, Vec, shufflevector
+using Scratch: Scratch, @get_scratch!
+using StaticArrays: StaticArrays, FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
+using TupleTools: TupleTools
+using UnsafeArrays: UnsafeArrays, uview
 
 macro acc(ex)
     # Your inner loop should have the following properties to allow vectorization:
@@ -32,7 +36,7 @@ macro acc(ex)
     # With the ivdep flag:
     #   * There exists no loop-carried memory dependencies
     #   * No iteration ever waits on a previous iteration to make forward progress.
-    esc( :( @inbounds @simd ivdep $(ex) ) )
+    return esc(:(@inbounds @simd ivdep $(ex)))
 end
 
 include("NNLS.jl")
@@ -62,6 +66,7 @@ export main
     redirect_to_devnull() do
         main(["--help"])
         main(["--version"])
+        return nothing
     end
 end
 

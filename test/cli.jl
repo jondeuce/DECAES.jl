@@ -1,5 +1,5 @@
 # Arbitrary default required parameters used during testing
-default_paramdict = Dict{Symbol,Any}(
+default_paramdict = Dict{Symbol, Any}(
     :TE => 8e-3,
     :nT2 => 42,
     :T2Range => (12e-3, 1.8),
@@ -9,7 +9,7 @@ default_paramdict = Dict{Symbol,Any}(
 )
 
 # Legacy settings which previously had defaults
-legacy_default_paramdict = Dict{Symbol,Any}(
+legacy_default_paramdict = Dict{Symbol, Any}(
     :TE => 10e-3,
     :nT2 => 40,
     :T2Range => (15e-3, 2.0),
@@ -29,7 +29,7 @@ function write_image(filename, image)
 end
 
 function matlab_api_main(matlab_args, args)
-    mxcall(:decaes, 0, matlab_args..., args...)
+    return mxcall(:decaes, 0, matlab_args..., args...)
 end
 
 # Call main function on image file `image`
@@ -46,7 +46,7 @@ function run_main(image, args; make_settings_file::Bool)
     if make_settings_file
         settings_file = joinpath(outputpath, "settings.txt")
         open(settings_file, "w") do file
-            println(file, join(args, "\n"))
+            return println(file, join(args, "\n"))
         end
         main(["@" * settings_file])
     else
@@ -57,27 +57,27 @@ function run_main(image, args; make_settings_file::Bool)
     t2maps_file, t2dist_file, t2parts_file, settings_file = inputfilebasename .* (".t2maps.mat", ".t2dist.mat", ".t2parts.mat", ".settings.txt")
     T2map, T2part = ("--T2map" ∈ args), ("--T2part" ∈ args)
 
-    @test !xor(T2map,  isfile(t2maps_file))
-    @test !xor(T2map,  isfile(t2dist_file))
+    @test !xor(T2map, isfile(t2maps_file))
+    @test !xor(T2map, isfile(t2dist_file))
     @test !xor(T2part, isfile(t2parts_file))
     @test !xor(make_settings_file, isfile(settings_file))
 
-    t2maps  = T2map  ? DECAES.MAT.matread(t2maps_file) : nothing
-    t2dist  = T2map  ? DECAES.MAT.matread(t2dist_file)["dist"] : nothing
+    t2maps  = T2map ? DECAES.MAT.matread(t2maps_file) : nothing
+    t2dist  = T2map ? DECAES.MAT.matread(t2dist_file)["dist"] : nothing
     t2parts = T2part ? DECAES.MAT.matread(t2parts_file) : nothing
 
     return (; t2maps, t2dist, t2parts)
 end
 
 function construct_args(paramdict;
-        argstype,
-        inputfilename = nothing,
-        outputpath = nothing,
-        quiet::Bool = true,
-        legacy::Bool = false,
-        T2map::Bool = true,
-        T2part::Bool = true,
-    )
+    argstype,
+    inputfilename = nothing,
+    outputpath = nothing,
+    quiet::Bool = true,
+    legacy::Bool = false,
+    T2map::Bool = true,
+    T2part::Bool = true,
+)
 
     if legacy
         # Add legacy default options to paramdict
@@ -92,9 +92,9 @@ function construct_args(paramdict;
         #### CLI
 
         args = [inputfilename, rand(["--output", "-o"]), outputpath]
-        T2map  && push!(args, "--T2map")
+        T2map && push!(args, "--T2map")
         T2part && push!(args, "--T2part")
-        quiet  && push!(args, rand(["--quiet", "-q"]))
+        quiet && push!(args, rand(["--quiet", "-q"]))
         legacy && push!(args, "--legacy")
 
         for (param, paramval) in paramdict
@@ -104,7 +104,7 @@ function construct_args(paramdict;
                 append!(args,
                     paramval isa Tuple ? [string(x) for x in paramval] : # Pass each arg separately
                     paramval isa Bool  ? [] : # No arg necessary, flag only
-                    [string(paramval)] # Pass string
+                    [string(paramval)], # Pass string
                 )
             end
         end
@@ -115,15 +115,15 @@ function construct_args(paramdict;
         #### MATLAB
 
         @assert legacy
-        t2map_args  = T2map  ? Dict{Symbol,Any}() : nothing
-        t2part_args = T2part ? Dict{Symbol,Any}() : nothing
+        t2map_args  = T2map ? Dict{Symbol, Any}() : nothing
+        t2part_args = T2part ? Dict{Symbol, Any}() : nothing
 
         # Only these params are used within MATLAB (possibly spelled differently)
         mat_t2map_params  = [:Chi2Factor, :MinRefAngle, :nRefAngles, :nT2, :RefConAngle, :Reg, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
         mat_t2part_params = [:T2Range, :SPWin, :MPWin, :Sigmoid]
 
         for (param, paramval) in paramdict
-            T2map  && (param ∈ mat_t2map_params)  && jl_to_mat_param!(t2map_args,  param, paramval)
+            T2map && (param ∈ mat_t2map_params) && jl_to_mat_param!(t2map_args, param, paramval)
             T2part && (param ∈ mat_t2part_params) && jl_to_mat_param!(t2part_args, param, paramval)
         end
 
@@ -132,13 +132,13 @@ function construct_args(paramdict;
     elseif argstype === :jl
         #### Julia
 
-        t2map_args  = T2map  ? Dict{Symbol,Any}(:legacy => legacy) : nothing
-        t2part_args = T2part ? Dict{Symbol,Any}(:legacy => legacy) : nothing
+        t2map_args  = T2map ? Dict{Symbol, Any}(:legacy => legacy) : nothing
+        t2part_args = T2part ? Dict{Symbol, Any}(:legacy => legacy) : nothing
 
         t2map_fields = DECAES.fieldsof(T2mapOptions, Set)
         t2part_fields = DECAES.fieldsof(T2partOptions, Set)
         for (param, paramval) in paramdict
-            T2map  && (param ∈ t2map_fields)  && setindex!(t2map_args, paramval, param)
+            T2map && (param ∈ t2map_fields) && setindex!(t2map_args, paramval, param)
             T2part && (param ∈ t2part_fields) && setindex!(t2part_args, paramval, param)
         end
 
@@ -209,27 +209,27 @@ end
 #   -Each list should contain some non-default/edge case values
 function run_cli_tests()
     cli_params_perms = Any[
-        (:MPWin            .=> [(38e-3, 180e-3)],),
-        (:MinRefAngle      .=> [55.0],),
-        (:RefConAngle      .=> [172.0],),
+        (:MPWin .=> [(38e-3, 180e-3)],),
+        (:MinRefAngle .=> [55.0],),
+        (:RefConAngle .=> [172.0],),
         (
-            :Reg           .=> ["none", "chi2", "gcv", "lcurve"],
-            :Chi2Factor    .=> [nothing, 1.025, nothing, nothing],
+            :Reg        .=> ["none", "chi2", "gcv", "lcurve"],
+            :Chi2Factor .=> [nothing, 1.025, nothing, nothing],
         ),
-        (:SPWin            .=> [(13e-3, 37e-3)],),
+        (:SPWin .=> [(13e-3, 37e-3)],),
         (:SaveResidualNorm .=> [false, true],),
-        (:SaveDecayCurve   .=> [false, true],),
-        (:SaveNNLSBasis    .=> [false, true],),
-        (:SaveRegParam     .=> [false, true],),
-        (:SetFlipAngle     .=> [nothing, 170.0],),
-        (:Sigmoid          .=> [nothing, 1.0],),
-        (:T1               .=> [0.95],),
-        (:T2Range          .=> [(16e-3, 1.8)],),
-        (:TE               .=> [8e-3, 11e-3],),
-        (:Threshold        .=> [125_000.0, Inf],), # Include non-zero and infinite (i.e. either some or all voxels skipped)
-        (:nRefAngles       .=> [9, 10],), # Include odd number
-        (:nRefAnglesMin    .=> [4, 5],), # Include odd number
-        (:nT2              .=> [2, 47],), # Include odd number
+        (:SaveDecayCurve .=> [false, true],),
+        (:SaveNNLSBasis .=> [false, true],),
+        (:SaveRegParam .=> [false, true],),
+        (:SetFlipAngle .=> [nothing, 170.0],),
+        (:Sigmoid .=> [nothing, 1.0],),
+        (:T1 .=> [0.95],),
+        (:T2Range .=> [(16e-3, 1.8)],),
+        (:TE .=> [8e-3, 11e-3],),
+        (:Threshold .=> [125_000.0, Inf],), # Include non-zero and infinite (i.e. either some or all voxels skipped)
+        (:nRefAngles .=> [9, 10],), # Include odd number
+        (:nRefAnglesMin .=> [4, 5],), # Include odd number
+        (:nT2 .=> [2, 47],), # Include odd number
     ]
 
     make_settings_perms = [false, true]
@@ -245,17 +245,17 @@ function run_cli_tests()
             paramdict[param] = paramval
         end
 
-        image = DECAES.mock_image(nTE = rand(4:64))
-        settings_kwargs_jl = Dict{Symbol,Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
-        settings_kwargs_cli = Dict{Symbol,Any}(:argstype => :cli, :quiet => rand([true,false]), :legacy => legacy, :T2map => true, :T2part => true)
+        image = DECAES.mock_image(; nTE = rand(4:64))
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true, false]), :legacy => legacy, :T2map => true, :T2part => true)
+        settings_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => rand([true, false]), :legacy => legacy, :T2map => true, :T2part => true)
         jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
 
         # Run T2map and T2part through Julia API for comparison
         t2map, t2dist = DECAES.redirect_to_devnull() do
-            T2mapSEcorr(image; jl_t2map_kwargs...)
+            return T2mapSEcorr(image; jl_t2map_kwargs...)
         end
         t2part = DECAES.redirect_to_devnull() do
-            T2partSEcorr(t2dist; jl_t2part_kwargs...)
+            return T2partSEcorr(t2dist; jl_t2part_kwargs...)
         end
 
         # Run CLI with both --T2map and --T2part flags
@@ -272,7 +272,7 @@ function run_cli_tests()
             end
 
             t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_devnull() do
-                run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
+                return run_main(image, cli_t2map_args; make_settings_file = make_settings_file)
             end
             t2map_passed = test_compare_t2map((t2map, t2dist), (t2maps_cli, t2dist_cli); rtol = 1e-14)
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
@@ -295,7 +295,7 @@ function run_cli_tests()
             cli_t2part_args = construct_args(paramdict; settings_kwargs_cli...)
 
             t2maps_cli, t2dist_cli, t2parts_cli = DECAES.redirect_to_devnull() do
-                run_main(t2dist, cli_t2part_args; make_settings_file = make_settings_file)
+                return run_main(t2dist, cli_t2part_args; make_settings_file = make_settings_file)
             end
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !t2part_passed
@@ -337,39 +337,39 @@ mxT2partSEcorr(image; kwargs...) = MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, 
 function matlab_tests()
     # Arbitrary non-default T2mapSEcorr options for testing
     mat_t2map_params_perms = Any[
-        (:TE               .=> [9e-3],),
-        (:T1               .=> [1.1],),
-        (:Threshold        .=> [250.0],),
-        (:nT2              .=> [10, 59],), # Include odd number
-        (:T2Range          .=> [(8e-3, 1.0)],),
-        (:RefConAngle      .=> [175.0],),
-        (:MinRefAngle      .=> [60.0],),
-        (:nRefAngles       .=> [7, 12],),
+        (:TE .=> [9e-3],),
+        (:T1 .=> [1.1],),
+        (:Threshold .=> [250.0],),
+        (:nT2 .=> [10, 59],), # Include odd number
+        (:T2Range .=> [(8e-3, 1.0)],),
+        (:RefConAngle .=> [175.0],),
+        (:MinRefAngle .=> [60.0],),
+        (:nRefAngles .=> [7, 12],),
         (
-            :Reg           .=> ["none", "chi2", "lcurve", "gcv"],
-            :Chi2Factor    .=> [nothing, 1.03, nothing, nothing],
+            :Reg        .=> ["none", "chi2", "lcurve", "gcv"],
+            :Chi2Factor .=> [nothing, 1.03, nothing, nothing],
         ),
-        (:SetFlipAngle     .=> [178.0],),
+        (:SetFlipAngle .=> [178.0],),
         (:SaveResidualNorm .=> [false, true],),
-        (:SaveDecayCurve   .=> [false, true],),
-        (:SaveRegParam     .=> [false, true],),
-        (:SaveNNLSBasis    .=> [false, true],),
+        (:SaveDecayCurve .=> [false, true],),
+        (:SaveRegParam .=> [false, true],),
+        (:SaveNNLSBasis .=> [false, true],),
     ]
 
     # Arbitrary non-default T2partSEcorr options for testing
     mat_t2part_params_perms = Any[
-        (:T2Range    .=> [(11e-3, 1.5)],),
-        (:SPWin      .=> [(12e-3, 28e-3)],),
-        (:MPWin      .=> [(35e-3, 150e-3)],),
-        (:Sigmoid    .=> [1.5],),
+        (:T2Range .=> [(11e-3, 1.5)],),
+        (:SPWin .=> [(12e-3, 28e-3)],),
+        (:MPWin .=> [(35e-3, 150e-3)],),
+        (:Sigmoid .=> [1.5],),
     ]
 
     # Relative tolerance threshold for legacy algorithms to match MATLAB version
     default_rtol = 1e-10
 
     @testset "T2mapSEcorr" begin
-        settings_kwargs_jl = Dict{Symbol,Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
-        settings_kwargs_mat = Dict{Symbol,Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => true, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true, false]), :legacy => true, :T2map => true, :T2part => true)
+        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true, false]), :legacy => true, :T2map => true, :T2part => true)
 
         for param_val_lists in mat_t2map_params_perms, param_val_pairs in zip(param_val_lists...)
             rtol = default_rtol
@@ -402,16 +402,16 @@ function matlab_tests()
                 # rtol = 1e-3
             end
 
-            jl_t2map_kwargs,  _ = construct_args(paramdict; settings_kwargs_jl...)
+            jl_t2map_kwargs, _  = construct_args(paramdict; settings_kwargs_jl...)
             mat_t2map_kwargs, _ = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2mapSEcorr
-            image = DECAES.mock_image(nTE = rand(4:64))
+            image = DECAES.mock_image(; nTE = rand(4:64))
             t2map_out_jl = DECAES.redirect_to_devnull() do
-                T2mapSEcorr(image; jl_t2map_kwargs...)
+                return T2mapSEcorr(image; jl_t2map_kwargs...)
             end
             t2map_out_mat = DECAES.redirect_to_devnull() do
-                mxT2mapSEcorr(image; mat_t2map_kwargs...)
+                return mxT2mapSEcorr(image; mat_t2map_kwargs...)
             end
             allpassed = test_compare_t2map(t2map_out_jl, t2map_out_mat; rtol = rtol)
             if !allpassed
@@ -426,8 +426,8 @@ function matlab_tests()
     end
 
     @testset "T2partSEcorr" begin
-        settings_kwargs_jl = Dict{Symbol,Any}(:argstype => :jl, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
-        settings_kwargs_mat = Dict{Symbol,Any}(:argstype => :mat, :quiet => rand([true,false]), :legacy => true, :T2map => false, :T2part => true)
+        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true, false]), :legacy => true, :T2map => false, :T2part => true)
+        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true, false]), :legacy => true, :T2map => false, :T2part => true)
 
         for param_val_lists in mat_t2part_params_perms, param_val_pairs in zip(param_val_lists...)
             paramdict = deepcopy(legacy_default_paramdict)
@@ -439,12 +439,12 @@ function matlab_tests()
             _, mat_t2part_kwargs = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2partSEcorr
-            T2dist = DECAES.mock_T2_dist(nT2 = rand(4:64))
+            T2dist = DECAES.mock_T2_dist(; nT2 = rand(4:64))
             t2part_jl = DECAES.redirect_to_devnull() do
-                T2partSEcorr(T2dist; jl_t2part_kwargs...)
+                return T2partSEcorr(T2dist; jl_t2part_kwargs...)
             end
             t2part_mat = DECAES.redirect_to_devnull() do
-                mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
+                return mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
             end
             allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
             if !allpassed

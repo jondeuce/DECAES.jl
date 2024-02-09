@@ -12,7 +12,7 @@ end
 function NNLSProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
     nnls_work = NNLS.NNLSWorkspace(A, b)
-    NNLSProblem(A, b, m, n, nnls_work)
+    return NNLSProblem(A, b, m, n, nnls_work)
 end
 
 function solve!(work::NNLSProblem, A, b)
@@ -37,11 +37,13 @@ X = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2
 ```
 
 # Arguments
-- `A::AbstractMatrix`: Left hand side matrix acting on `x`
-- `b::AbstractVector`: Right hand side vector
+
+  - `A::AbstractMatrix`: Left hand side matrix acting on `x`
+  - `b::AbstractVector`: Right hand side vector
 
 # Outputs
-- `X::AbstractVector`: NNLS solution
+
+  - `X::AbstractVector`: NNLS solution
 """
 lsqnonneg(A, b) = lsqnonneg!(lsqnonneg_work(A, b))
 lsqnonneg_work(A, b) = NNLSProblem(A, b)
@@ -77,7 +79,7 @@ struct TikhonovPaddedMatrix{T, TA <: AbstractMatrix{T}} <: AbstractMatrix{T}
     μ::Base.RefValue{T}
 end
 TikhonovPaddedMatrix(A::AbstractMatrix, μ) = TikhonovPaddedMatrix(A, Ref(μ))
-Base.size(P::TikhonovPaddedMatrix) = ((m, n) = size(P.A); return (m+n, n))
+Base.size(P::TikhonovPaddedMatrix) = ((m, n) = size(P.A); return (m + n, n))
 Base.parent(P::TikhonovPaddedMatrix) = P.A
 mu(P::TikhonovPaddedMatrix) = P.μ[]
 mu!(P::TikhonovPaddedMatrix, μ) = P.μ[] = μ
@@ -88,29 +90,29 @@ function Base.copyto!(B::AbstractMatrix{T}, P::TikhonovPaddedMatrix{T}) where {T
     m, n = size(A)
     @inbounds for j in 1:n
         @acc for i in 1:m
-            B[i,j] = A[i,j]
+            B[i, j] = A[i, j]
         end
         @acc for i in m+1:m+n
-            B[i,j] = ifelse(i == m+j, μ, zero(T))
+            B[i, j] = ifelse(i == m + j, μ, zero(T))
         end
     end
     return B
 end
 
-lin_interp(x, x₁, x₂, y₁, y₂) = y₁ + (y₂ - y₁) * (x - x₁)  / (x₂ - x₁)
-exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x₁)  / (x₂ - x₁))
+lin_interp(x, x₁, x₂, y₁, y₂) = y₁ + (y₂ - y₁) * (x - x₁) / (x₂ - x₁)
+exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x₁) / (x₂ - x₁))
 
 ####
 #### Tikhonov regularized NNLS problem
 ####
 
 struct NNLSTikhonovRegProblem{
-        T,
-        TA <: AbstractMatrix{T},
-        Tb <: AbstractVector{T},
-        W <: NNLSProblem{T, TikhonovPaddedMatrix{T, TA}, PaddedVector{T, Tb}},
-        B,
-    }
+    T,
+    TA <: AbstractMatrix{T},
+    Tb <: AbstractVector{T},
+    W <: NNLSProblem{T, TikhonovPaddedMatrix{T, TA}, PaddedVector{T, Tb}},
+    B,
+}
     A::TA
     b::Tb
     m::Int
@@ -122,7 +124,7 @@ function NNLSTikhonovRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) wher
     m, n = size(A)
     nnls_prob = NNLSProblem(TikhonovPaddedMatrix(A, T(NaN)), PaddedVector(b, n))
     buffers = (x = zeros(T, n), y = zeros(T, n))
-    NNLSTikhonovRegProblem(A, b, m, n, nnls_prob, buffers)
+    return NNLSTikhonovRegProblem(A, b, m, n, nnls_prob, buffers)
 end
 
 mu(work::NNLSTikhonovRegProblem) = mu(work.nnls_prob.A)
@@ -232,7 +234,7 @@ struct NNLSTikhonovRegProblemCache{N, W <: NTuple{N}}
     cache::W
     idx::Base.RefValue{Int}
 end
-function NNLSTikhonovRegProblemCache(A::AbstractMatrix{T}, b::AbstractVector{T}, ::Val{N} = Val(5)) where {T,N}
+function NNLSTikhonovRegProblemCache(A::AbstractMatrix{T}, b::AbstractVector{T}, ::Val{N} = Val(5)) where {T, N}
     cache = ntuple(_ -> NNLSTikhonovRegProblem(A, b), N)
     idx = Ref(1)
     return NNLSTikhonovRegProblemCache(cache, idx)
@@ -269,7 +271,7 @@ function NNLSChi2RegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    NNLSChi2RegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache)
+    return NNLSChi2RegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache)
 end
 
 solution(work::NNLSChi2RegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
@@ -295,18 +297,20 @@ where ``\\mu`` is determined by approximating a solution to the nonlinear equati
 ```
 
 # Arguments
-- `A::AbstractMatrix`: Decay basis matrix
-- `b::AbstractVector`: Decay curve data
-- `Chi2Factor::Real`: Desired ``\\chi^2`` increase due to regularization
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
+  - `Chi2Factor::Real`: Desired ``\\chi^2`` increase due to regularization
 
 # Outputs
-- `X::AbstractVector`: Regularized NNLS solution
-- `mu::Real`: Resulting regularization parameter ``\\mu``
-- `Chi2Factor::Real`: Actual increase ``\\chi^2(\\mu)/\\chi^2_{min}``, which will be approximately equal to the input `Chi2Factor`
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\\mu``
+  - `Chi2Factor::Real`: Actual increase ``\\chi^2(\\mu)/\\chi^2_{min}``, which will be approximately equal to the input `Chi2Factor`
 """
 function lsqnonneg_chi2(A, b, Chi2Factor; kwargs...)
     work = lsqnonneg_chi2_work(A, b)
-    lsqnonneg_chi2!(work, Chi2Factor; kwargs...)
+    return lsqnonneg_chi2!(work, Chi2Factor; kwargs...)
 end
 lsqnonneg_chi2_work(A, b) = NNLSChi2RegProblem(A, b)
 
@@ -334,12 +338,12 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
 
     elseif bisection
         # Find bracketing interval containing root, then perform bisection search
-        f = CachedFunction{T,T}(0, isapprox) do logμ
+        f = CachedFunction{T, T}(0, isapprox) do logμ
             increment_cache_index!(work.nnls_prob_smooth_cache)
             return chi2factor_relerr!(get_cache(work.nnls_prob_smooth_cache), logμ; χ²target)
         end
         a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6)
-        bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor-1)/100)
+        bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor - 1) / 100)
 
         # Spline rootfinding on evaluated points to improve accuracy
         sort!(pairs(f.cache); by = ((x, f),) -> x)
@@ -360,7 +364,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
         # alg = :LN_SBPLX # local, gradient-free, subspace searching simplex method
         # alg = :LD_CCSAQ # local, first-order (rough ranking: [:LD_MMA, :LD_SLSQP, :LD_LBFGS, :LD_CCSAQ, :LD_AUGLAG])
 
-        opt = NLopt.Opt(alg, 1)
+        opt               = NLopt.Opt(alg, 1)
         opt.lower_bounds  = -8.0
         opt.upper_bounds  = 2.0
         opt.xtol_rel      = 0.05
@@ -377,7 +381,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
         chi2_final = chi2(get_cache(work.nnls_prob_smooth_cache))
     end
 
-    return (x = x_final, mu = mu_final, chi2factor = chi2_final/chi2_min)
+    return (x = x_final, mu = mu_final, chi2factor = chi2_final / chi2_min)
 end
 
 function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0); legacy = false) where {T}
@@ -434,7 +438,7 @@ function chi2factor_search_from_guess(f, χ²min::T, χ²fact::T, μ₀::T = T(1
 
     if χ²new > χ²target
         while μnew > μmin && !(μnew ≈ μmin)
-            μnew = max(μnew/μfact, μmin)
+            μnew = max(μnew / μfact, μmin)
             χ²new = f(μnew)
             pushfirst!(logμ_cache, log(μnew))
             pushfirst!(logχ²_cache, log(χ²new))
@@ -475,16 +479,16 @@ end
 #### The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 #### THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8*eps(one(float(real(first(xs))))), maxiters = 1000)
+function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8 * eps(one(float(real(first(xs))))), maxiters = 1000)
     if length(xs) == 1 # secant needs a, b; only a given
         a  = float(xs[1])
-        h  = eps(one(real(a)))^(1/3)
+        h  = eps(one(real(a)))^(1 / 3)
         da = h * oneunit(a) + abs(a) * h^2 # adjust for if eps(a) > h
         b  = a + da
     else
         a, b = promote(float(xs[1]), float(xs[2]))
     end
-    secant(f, a, b, f(a), f(b); xtol, xrtol, maxiters)
+    return secant(f, a, b, f(a), f(b); xtol, xrtol, maxiters)
 end
 
 function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), maxiters = 1000) where {T}
@@ -525,7 +529,7 @@ function bisection_method(f, a::Number, b::Number; xtol = nothing, xrtol = nothi
     xrtol = xrtol === nothing ? zero(one(T)) : T(xrtol)
     ftol = ftol === nothing ? zero(T) : T(ftol)
 
-    bisect(f, x₁, x₂, y₁, y₂; xtol, xrtol, ftol, maxiters)
+    return bisect(f, x₁, x₂, y₁, y₂; xtol, xrtol, ftol, maxiters)
 end
 
 function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = zero(one(T)), ftol = zero(T), maxiters = 1000) where {T}
@@ -538,7 +542,7 @@ function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = z
         x₁, x₂, y₁, y₂ = x₂, x₁, y₂, y₁
     end
 
-    xₘ = (x₁ + x₂)/2
+    xₘ = (x₁ + x₂) / 2
     yₘ = f(xₘ)
 
     cnt = 1
@@ -553,7 +557,7 @@ function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = z
             x₂, y₂ = xₘ, yₘ
         end
 
-        xₘ = (x₁ + x₂)/2
+        xₘ = (x₁ + x₂) / 2
         yₘ = f(xₘ)
 
         cnt += 1
@@ -604,12 +608,7 @@ end
 #### > The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 #### > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function brent(
-        f, x₁::T, x₂::T;
-        xrtol = sqrt(eps(T)),
-        xtol = eps(T),
-        maxiters::Int = 1_000,
-    ) where {T <: AbstractFloat}
+function brent(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xtol = eps(T), maxiters::Int = 1_000) where {T <: AbstractFloat}
     @assert x₁ <= x₂ "x₁ must be less than x₂"
 
     φ::T = (3 - sqrt(T(5))) / 2
@@ -626,10 +625,10 @@ function brent(
     while iteration < maxiters
         p = zero(T)
         q = zero(T)
-        xₘ = (x₂ + x₁)/2
+        xₘ = (x₂ + x₁) / 2
 
         Δx_tol = xrtol * abs(xᵒᵖᵗ) + xtol
-        if abs(xᵒᵖᵗ - xₘ) + (x₂ - x₁)/2 <= 2*Δx_tol
+        if abs(xᵒᵖᵗ - xₘ) + (x₂ - x₁) / 2 <= 2 * Δx_tol
             converged = true
             break
         end
@@ -644,7 +643,7 @@ function brent(
             r = (xᵒᵖᵗ - xᵒᵖᵗ_old) * (yᵒᵖᵗ - yᵒᵖᵗ_older)
             q = (xᵒᵖᵗ - xᵒᵖᵗ_older) * (yᵒᵖᵗ - yᵒᵖᵗ_old)
             p = (xᵒᵖᵗ - xᵒᵖᵗ_older) * q - (xᵒᵖᵗ - xᵒᵖᵗ_old) * r
-            q = 2*(q - r)
+            q = 2 * (q - r)
 
             if q > 0
                 p = -p
@@ -653,13 +652,13 @@ function brent(
             end
         end
 
-        if abs(p) < abs(q * Δx_old/2) && p < q * (x₂ - xᵒᵖᵗ) && p < q * (xᵒᵖᵗ - x₁)
+        if abs(p) < abs(q * Δx_old / 2) && p < q * (x₂ - xᵒᵖᵗ) && p < q * (xᵒᵖᵗ - x₁)
             Δx_old = Δx
-            Δx = p/q
+            Δx = p / q
 
             # The function must not be evaluated too close to x₂ or x₁
             x_tmp = xᵒᵖᵗ + Δx
-            if (x_tmp - x₁) < 2*Δx_tol || (x₂ - x_tmp) < 2*Δx_tol
+            if (x_tmp - x₁) < 2 * Δx_tol || (x₂ - x_tmp) < 2 * Δx_tol
                 Δx = (xᵒᵖᵗ < xₘ) ? Δx_tol : -Δx_tol
             end
         else
@@ -721,12 +720,12 @@ function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where 
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    lsqnonneg_lcurve_fun_cache = GrowableCache{T, SVector{2,T}}(64, isapprox)
+    lsqnonneg_lcurve_fun_cache = GrowableCache{T, SVector{2, T}}(64, isapprox)
     lcurve_corner_caches = (
         GrowableCache{T, LCurveCornerPoint{T}}(64, isapprox),
         GrowableCache{T, LCurveCornerState{T}}(64, isapprox),
     )
-    NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches)
+    return NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches)
 end
 
 solution(work::NNLSLCurveRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
@@ -746,21 +745,23 @@ Details of L-curve theory and the Generalized Cross-Validation (GCV) method can 
 [Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580](https://doi.org/10.1137/1034115)
 
 # Arguments
-- `A::AbstractMatrix`: Decay basis matrix
-- `b::AbstractVector`: Decay curve data
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
 
 # Outputs
-- `X::AbstractVector`: Regularized NNLS solution
-- `mu::Real`: Resulting regularization parameter ``\\mu``
-- `Chi2Factor::Real`: Resulting increase in ``\\chi^2`` relative to unregularized (``\\mu = 0``) solution
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\\mu``
+  - `Chi2Factor::Real`: Resulting increase in ``\\chi^2`` relative to unregularized (``\\mu = 0``) solution
 """
 function lsqnonneg_lcurve(A, b)
     work = lsqnonneg_lcurve_work(A, b)
-    lsqnonneg_lcurve!(work)
+    return lsqnonneg_lcurve!(work)
 end
 lsqnonneg_lcurve_work(A, b) = NNLSLCurveRegProblem(A, b)
 
-function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
+function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T, N}) where {T, N}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_prob_smooth_cache)
 
@@ -791,19 +792,19 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T,N}) where {T,N}
 end
 
 struct LCurveCornerState{T}
-    x⃗::SVector{4,T} # grid of regularization parameters
-    P⃗::SVector{4,SVector{2,T}} # points (residual norm, solution seminorm) evaluated at x⃗
+    x⃗::SVector{4, T} # grid of regularization parameters
+    P⃗::SVector{4, SVector{2, T}} # points (residual norm, solution seminorm) evaluated at x⃗
 end
 @inline Base.iterate(s::LCurveCornerState, args...) = iterate((s.x⃗, s.P⃗), args...)
 
 struct LCurveCornerPoint{T}
-    P::SVector{2,T} # grid point
+    P::SVector{2, T} # grid point
     C::T # curvature
 end
-LCurveCornerPoint(P::SVector{2,T}) where {T} = LCurveCornerPoint(P, T(-Inf))
+LCurveCornerPoint(P::SVector{2, T}) where {T} = LCurveCornerPoint(P, T(-Inf))
 @inline Base.iterate(p::LCurveCornerPoint, args...) = iterate((p.P, p.C), args...)
 
-struct LCurveCornerCachedFunction{T, F <: CachedFunction{T, SVector{2,T}}, C1 <: GrowableCache{T, LCurveCornerPoint{T}}, C2 <: GrowableCache{T, LCurveCornerState{T}}}
+struct LCurveCornerCachedFunction{T, F <: CachedFunction{T, SVector{2, T}}, C1 <: GrowableCache{T, LCurveCornerPoint{T}}, C2 <: GrowableCache{T, LCurveCornerState{T}}}
     f::F
     point_cache::C1
     state_cache::C2
@@ -844,7 +845,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         iter += 1
         if backtracking
             # Find state with minimum diameter which contains the current best estimate maximum curvature point
-            (x, (P, C)), _, _ = mapfindmax(T, ((x, (P, C),),) -> C, pairs(f.point_cache))
+            (x, (P, C)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
             for (_, s) in f.state_cache
                 if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
                     state = s
@@ -878,10 +879,10 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
 end
 
 function initial_state(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
-    x₂   = (T(φ) * x₁ + x₄) / (T(φ) + 1)
-    x₃   = x₁ + (x₄ - x₂)
-    x⃗    = SA[x₁, x₂, x₃, x₄]
-    P⃗    = SA[f(x₁), f(x₂), f(x₃), f(x₄)]
+    x₂ = (T(φ) * x₁ + x₄) / (T(φ) + 1)
+    x₃ = x₁ + (x₄ - x₂)
+    x⃗ = SA[x₁, x₂, x₃, x₄]
+    P⃗ = SA[f(x₁), f(x₂), f(x₃), f(x₄)]
     Base.Cartesian.@nexprs 4 i -> push!(f.point_cache, (x⃗[i], LCurveCornerPoint(P⃗[i])))
     return LCurveCornerState(x⃗, P⃗)
 end
@@ -890,14 +891,14 @@ is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x
 
 function move_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
     (; x⃗, P⃗) = state
-    x⃗ = SA[x⃗[1], (T(φ) * x⃗[1] + x⃗[3]) / (T(φ) + 1), x⃗[2], x⃗[3]]
+    x⃗ = SA[x⃗[1], (T(φ)*x⃗[1]+x⃗[3])/(T(φ)+1), x⃗[2], x⃗[3]]
     P⃗ = SA[P⃗[1], f(x⃗[2]), P⃗[2], P⃗[3]] # only P⃗[2] is recalculated
     return LCurveCornerState{T}(x⃗, P⃗)
 end
 
 function move_right(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
     (; x⃗, P⃗) = state
-    x⃗ = SA[x⃗[2], x⃗[3], x⃗[2] + (x⃗[4] - x⃗[3]), x⃗[4]]
+    x⃗ = SA[x⃗[2], x⃗[3], x⃗[2]+(x⃗[4]-x⃗[3]), x⃗[4]]
     P⃗ = SA[P⃗[2], P⃗[3], f(x⃗[3]), P⃗[4]] # only P⃗[3] is recalculated
     return LCurveCornerState(x⃗, P⃗)
 end
@@ -917,8 +918,8 @@ function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCorner
                 x₋, x₊ = T(-Inf), T(+Inf)
                 P₋, P₊ = P, P
                 for (_x, (_P, _)) in pairs(f.point_cache)
-                    (x₋ < _x < x ) && ((x₋, P₋) = (_x, _P))
-                    (x  < _x < x₊) && ((x₊, P₊) = (_x, _P))
+                    (x₋ < _x < x) && ((x₋, P₋) = (_x, _P))
+                    (x < _x < x₊) && ((x₊, P₊) = (_x, _P))
                 end
                 C = menger(P₋, P, P₊)
             end
@@ -944,9 +945,9 @@ function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}
     return Cₖ
 end
 
-function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2,T}}
+function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2, T}}
     if interp_uniform
-        h  = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / T(φ)
+        h = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / T(φ)
         h₋ = h₊ = h
         x₋, x₀, x₊ = xₖ - h, xₖ, xₖ + h
         P₀ = Pₖ
@@ -961,8 +962,8 @@ function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uni
     η₋, η₀, η₊ = P₋[2], P₀[2], P₊[2]
 
     if linear_deriv
-        ξ′  = (ξ₊ - ξ₋) / (h₊ + h₋)
-        η′  = (η₊ - η₋) / (h₊ + h₋)
+        ξ′ = (ξ₊ - ξ₋) / (h₊ + h₋)
+        η′ = (η₊ - η₋) / (h₊ + h₋)
     else
         ξ′ = (h₋^2 * ξ₊ + (h₊ + h₋) * (h₊ - h₋) * ξ₀ - h₊^2 * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
         η′ = (h₋^2 * η₊ + (h₊ + h₋) * (h₊ - h₋) * η₀ - h₊^2 * η₋) / (h₊ * h₋ * (h₊ + h₋))
@@ -976,16 +977,16 @@ end
 
 function menger(f; h = 1e-3)
     function menger_curvature_inner(x)
-        fⱼ, fₖ, fₗ = f(x-h), f(x), f(x+h)
-        Pⱼ, Pₖ, Pₗ = SA[x-h,fⱼ], SA[x,fₖ], SA[x+h,fₗ]
-        menger(Pⱼ, Pₖ, Pₗ)
+        fⱼ, fₖ, fₗ = f(x - h), f(x), f(x + h)
+        Pⱼ, Pₖ, Pₗ = SA[x-h, fⱼ], SA[x, fₖ], SA[x+h, fₗ]
+        return menger(Pⱼ, Pₖ, Pₗ)
     end
 end
 
 function menger(x, y; h = 1e-3)
     function menger_curvature_inner(t)
-        x₋, x₀, x₊ = x(t-h), x(t), x(t+h)
-        y₋, y₀, y₊ = y(t-h), y(t), y(t+h)
+        x₋, x₀, x₊ = x(t - h), x(t), x(t + h)
+        y₋, y₀, y₊ = y(t - h), y(t), y(t + h)
         x′, x′′ = (x₊ - x₋) / 2h, (x₊ - 2x₀ + x₋) / h^2
         y′, y′′ = (y₊ - y₋) / 2h, (y₊ - 2y₀ + y₋) / h^2
         return (x′ * y′′ - y′ * x′′) / √((x′^2 + y′^2)^3)
@@ -1013,7 +1014,7 @@ end
 function maximize_curvature(state::LCurveCornerState{T}) where {T}
     # Maximize curvature and transform back from t-space to x-space
     (; x⃗, P⃗) = state
-    t₁, t₂, t₃, t₄ = T(0), 1/T(3), 2/T(3), T(1)
+    t₁, t₂, t₃, t₄ = T(0), 1 / T(3), 2 / T(3), T(1)
     t_opt, P_opt, C_opt = maximize_curvature(P⃗...)
     x_opt =
         t₁ <= t_opt < t₂ ? lin_interp(t_opt, t₁, t₂, x⃗[1], x⃗[2]) :
@@ -1022,7 +1023,7 @@ function maximize_curvature(state::LCurveCornerState{T}) where {T}
     return x_opt
 end
 
-function maximize_curvature(P₁::V, P₂::V, P₃::V, P₄::V; bezier = true) where {T, V <: SVector{2,T}}
+function maximize_curvature(P₁::V, P₂::V, P₃::V, P₄::V; bezier = true) where {T, V <: SVector{2, T}}
     # Analytically maximize curvature of parametric cubic spline fit to data.
     #   see: https://cs.stackexchange.com/a/131032
     a, e = P₁[1], P₁[2]
@@ -1031,57 +1032,57 @@ function maximize_curvature(P₁::V, P₂::V, P₃::V, P₄::V; bezier = true) w
     d, h = P₄[1], P₄[2]
 
     if bezier
-        ξ = t -> a*(1-t)^3+3*b*(1-t)^2*t+3*c*(1-t)*t^2+d*t^3
-        η = t -> e*(1-t)^3+3*f*(1-t)^2*t+3*g*(1-t)*t^2+h*t^3
+        ξ = t -> a * (1 - t)^3 + 3 * b * (1 - t)^2 * t + 3 * c * (1 - t) * t^2 + d * t^3
+        η = t -> e * (1 - t)^3 + 3 * f * (1 - t)^2 * t + 3 * g * (1 - t) * t^2 + h * t^3
         P = t -> SA{T}[ξ(t), η(t)]
 
         # In order to keep the equations in a more compact form, introduce the following substitutions:
-        m = d-3*c+3*b-a
-        n = c-2*b+a
-        o = b-a
-        p = h-3*g+3*f-e
-        q = g-2*f+e
-        r = f-e
+        m = d - 3 * c + 3 * b - a
+        n = c - 2 * b + a
+        o = b - a
+        p = h - 3 * g + 3 * f - e
+        q = g - 2 * f + e
+        r = f - e
     else
-        ξ = t -> a*(t-1/3)*(t-2/3)*(t-1/1)/T((0/1-1/3)*(0/1-2/3)*(0/1-1/1)) + # (-9  * a * t^3)/2  + (+18 * a * t^2)/2 + (-11 * a * t)/2 + a
-                 b*(t-0/1)*(t-2/3)*(t-1/1)/T((1/3-0/1)*(1/3-2/3)*(1/3-1/1)) + # (+27 * b * t^3)/2  + (-45 * b * t^2)/2 + (+18 * b * t)/2 +
-                 c*(t-0/1)*(t-1/3)*(t-1/1)/T((2/3-0/1)*(2/3-1/3)*(2/3-1/1)) + # (-27 * c * t^3)/2  + (+36 * c * t^2)/2 + ( -9 * c * t)/2 +
-                 d*(t-0/1)*(t-1/3)*(t-2/3)/T((1/1-0/1)*(1/1-1/3)*(1/1-2/3))   # (+9  * d * t^3)/2  + ( -9 * d * t^2)/2 + ( +2 * d * t)/2
-        η = t -> e*(t-1/3)*(t-2/3)*(t-1/1)/T((0/1-1/3)*(0/1-2/3)*(0/1-1/1)) + # (-9  * e * t^3)/2  + (+18 * e * t^2)/2 + (-11 * e * t)/2 + e
-                 f*(t-0/1)*(t-2/3)*(t-1/1)/T((1/3-0/1)*(1/3-2/3)*(1/3-1/1)) + # (+27 * f * t^3)/2  + (-45 * f * t^2)/2 + (+18 * f * t)/2 +
-                 g*(t-0/1)*(t-1/3)*(t-1/1)/T((2/3-0/1)*(2/3-1/3)*(2/3-1/1)) + # (-27 * g * t^3)/2  + (+36 * g * t^2)/2 + ( -9 * g * t)/2 +
-                 h*(t-0/1)*(t-1/3)*(t-2/3)/T((1/1-0/1)*(1/1-1/3)*(1/1-2/3))   # (+9  * h * t^3)/2  + ( -9 * h * t^2)/2 + ( +2 * h * t)/2
+        ξ = t -> a * (t - 1 / 3) * (t - 2 / 3) * (t - 1 / 1) / T((0 / 1 - 1 / 3) * (0 / 1 - 2 / 3) * (0 / 1 - 1 / 1)) + # (-9  * a * t^3)/2  + (+18 * a * t^2)/2 + (-11 * a * t)/2 + a
+                 b * (t - 0 / 1) * (t - 2 / 3) * (t - 1 / 1) / T((1 / 3 - 0 / 1) * (1 / 3 - 2 / 3) * (1 / 3 - 1 / 1)) + # (+27 * b * t^3)/2  + (-45 * b * t^2)/2 + (+18 * b * t)/2 +
+                 c * (t - 0 / 1) * (t - 1 / 3) * (t - 1 / 1) / T((2 / 3 - 0 / 1) * (2 / 3 - 1 / 3) * (2 / 3 - 1 / 1)) + # (-27 * c * t^3)/2  + (+36 * c * t^2)/2 + ( -9 * c * t)/2 +
+                 d * (t - 0 / 1) * (t - 1 / 3) * (t - 2 / 3) / T((1 / 1 - 0 / 1) * (1 / 1 - 1 / 3) * (1 / 1 - 2 / 3))   # (+9  * d * t^3)/2  + ( -9 * d * t^2)/2 + ( +2 * d * t)/2
+        η = t -> e * (t - 1 / 3) * (t - 2 / 3) * (t - 1 / 1) / T((0 / 1 - 1 / 3) * (0 / 1 - 2 / 3) * (0 / 1 - 1 / 1)) + # (-9  * e * t^3)/2  + (+18 * e * t^2)/2 + (-11 * e * t)/2 + e
+                 f * (t - 0 / 1) * (t - 2 / 3) * (t - 1 / 1) / T((1 / 3 - 0 / 1) * (1 / 3 - 2 / 3) * (1 / 3 - 1 / 1)) + # (+27 * f * t^3)/2  + (-45 * f * t^2)/2 + (+18 * f * t)/2 +
+                 g * (t - 0 / 1) * (t - 1 / 3) * (t - 1 / 1) / T((2 / 3 - 0 / 1) * (2 / 3 - 1 / 3) * (2 / 3 - 1 / 1)) + # (-27 * g * t^3)/2  + (+36 * g * t^2)/2 + ( -9 * g * t)/2 +
+                 h * (t - 0 / 1) * (t - 1 / 3) * (t - 2 / 3) / T((1 / 1 - 0 / 1) * (1 / 1 - 1 / 3) * (1 / 1 - 2 / 3))   # (+9  * h * t^3)/2  + ( -9 * h * t^2)/2 + ( +2 * h * t)/2
         P = t -> SA{T}[ξ(t), η(t)]
 
         # In order to keep the equations in a more compact form, introduce the following substitutions:
-        m = ( -9 * a + 27 * b - 27 * c + 9 * d)/2
-        n = (+18 * a - 45 * b + 36 * c - 9 * d)/6
-        o = (-11 * a + 18 * b -  9 * c + 2 * d)/6
-        p = ( -9 * e + 27 * f - 27 * g + 9 * h)/2
-        q = (+18 * e - 45 * f + 36 * g - 9 * h)/6
-        r = (-11 * e + 18 * f -  9 * g + 2 * h)/6
+        m = (-9 * a + 27 * b - 27 * c + 9 * d) / 2
+        n = (+18 * a - 45 * b + 36 * c - 9 * d) / 6
+        o = (-11 * a + 18 * b - 9 * c + 2 * d) / 6
+        p = (-9 * e + 27 * f - 27 * g + 9 * h) / 2
+        q = (+18 * e - 45 * f + 36 * g - 9 * h) / 6
+        r = (-11 * e + 18 * f - 9 * g + 2 * h) / 6
     end
 
     # This leads to the following simplified derivatives:
-    ξ′  = t -> 3*(m*t^2+2*n*t+o)
-    ξ′′ = t -> 6*(m*t+n)
-    η′  = t -> 3*(p*t^2+2*q*t+r)
-    η′′ = t -> 6*(p*t+q)
+    ξ′  = t -> 3 * (m * t^2 + 2 * n * t + o)
+    ξ′′ = t -> 6 * (m * t + n)
+    η′  = t -> 3 * (p * t^2 + 2 * q * t + r)
+    η′′ = t -> 6 * (p * t + q)
 
     # Curvature and its derivative:
-    k  = t -> ((3*(m*t^2+2*n*t+o)) * (6*(p*t+q)) - (3*(p*t^2+2*q*t+r)) * (6*(m*t+n))) / ((3*(m*t^2+2*n*t+o))^2 + (3*(p*t^2+2*q*t+r))^2)^(3/2)
-    k′ = t -> (-18*m*(p*t^2+2*q*t+r)+18*p*(m*t^2+2*n*t+o)-18*(m*t+n)*(2*p*t+2*q)+18*(2*m*t+2*n)*(p*t+q))/(9*(p*t^2+2*q*t+r)^2+9*(m*t^2+2*n*t+o)^2)^(3/2)-(3*(18*(p*t+q)*(m*t^2+2*n*t+o)-18*(m*t+n)*(p*t^2+2*q*t+r))*(18*(2*p*t+2*q)*(p*t^2+2*q*t+r)+18*(2*m*t+2*n)*(m*t^2+2*n*t+o)))/(2*(9*(p*t^2+2*q*t+r)^2+9*(m*t^2+2*n*t+o)^2)^(5/2))
+    k  = t -> ((3 * (m * t^2 + 2 * n * t + o)) * (6 * (p * t + q)) - (3 * (p * t^2 + 2 * q * t + r)) * (6 * (m * t + n))) / ((3 * (m * t^2 + 2 * n * t + o))^2 + (3 * (p * t^2 + 2 * q * t + r))^2)^(3 / 2)
+    k′ = t -> (-18 * m * (p * t^2 + 2 * q * t + r) + 18 * p * (m * t^2 + 2 * n * t + o) - 18 * (m * t + n) * (2 * p * t + 2 * q) + 18 * (2 * m * t + 2 * n) * (p * t + q)) / (9 * (p * t^2 + 2 * q * t + r)^2 + 9 * (m * t^2 + 2 * n * t + o)^2)^(3 / 2) - (3 * (18 * (p * t + q) * (m * t^2 + 2 * n * t + o) - 18 * (m * t + n) * (p * t^2 + 2 * q * t + r)) * (18 * (2 * p * t + 2 * q) * (p * t^2 + 2 * q * t + r) + 18 * (2 * m * t + 2 * n) * (m * t^2 + 2 * n * t + o))) / (2 * (9 * (p * t^2 + 2 * q * t + r)^2 + 9 * (m * t^2 + 2 * n * t + o)^2)^(5 / 2))
 
     # Solve analytically
-    coeffs = MVector{6,Complex{T}}(
-        (1296*m*p^2+1296*m^3)*q-1296*n*p^3-1296*m^2*n*p,
-        (1620*m*p^2+1620*m^3)*r+3240*m*p*q^2+(3240*m^2*n-3240*n*p^2)*q-1620*o*p^3+((-1620*m^2*o)-3240*m*n^2)*p,
-        (5184*m*p*q+1296*n*p^2+6480*m^2*n)*r+1296*m*q^3-1296*n*p*q^2+((-6480*o*p^2)-1296*m^2*o+1296*m*n^2)*q+((-5184*m*n*o)-1296*n^3)*p,
-        1296*m*p*r^2+(1944*m*q^2+6480*n*p*q-1296*o*p^2+1296*m^2*o+8424*m*n^2)*r-8424*o*p*q^2-6480*m*n*o*q+((-1296*m*o^2)-1944*n^2*o)*p,
-        2592*n*p*r^2+(3888*n*q^2-2592*o*p*q+2592*m*n*o+3888*n^3)*r-3888*o*q^3+((-2592*m*o^2)-3888*n^2*o)*q,
-        -324*m*r^3+(1944*n*q+324*o*p)*r^2+((-1944*o*q^2)-324*m*o^2+1944*n^2*o)*r-1944*n*o^2*q+324*o^3*p,
+    coeffs = MVector{6, Complex{T}}(
+        (1296 * m * p^2 + 1296 * m^3) * q - 1296 * n * p^3 - 1296 * m^2 * n * p,
+        (1620 * m * p^2 + 1620 * m^3) * r + 3240 * m * p * q^2 + (3240 * m^2 * n - 3240 * n * p^2) * q - 1620 * o * p^3 + ((-1620 * m^2 * o) - 3240 * m * n^2) * p,
+        (5184 * m * p * q + 1296 * n * p^2 + 6480 * m^2 * n) * r + 1296 * m * q^3 - 1296 * n * p * q^2 + ((-6480 * o * p^2) - 1296 * m^2 * o + 1296 * m * n^2) * q + ((-5184 * m * n * o) - 1296 * n^3) * p,
+        1296 * m * p * r^2 + (1944 * m * q^2 + 6480 * n * p * q - 1296 * o * p^2 + 1296 * m^2 * o + 8424 * m * n^2) * r - 8424 * o * p * q^2 - 6480 * m * n * o * q + ((-1296 * m * o^2) - 1944 * n^2 * o) * p,
+        2592 * n * p * r^2 + (3888 * n * q^2 - 2592 * o * p * q + 2592 * m * n * o + 3888 * n^3) * r - 3888 * o * q^3 + ((-2592 * m * o^2) - 3888 * n^2 * o) * q,
+        -324 * m * r^3 + (1944 * n * q + 324 * o * p) * r^2 + ((-1944 * o * q^2) - 324 * m * o^2 + 1944 * n^2 * o) * r - 1944 * n * o^2 * q + 324 * o^3 * p,
     )
-    roots = MVector{6,Complex{T}}(undef)
+    roots = MVector{6, Complex{T}}(undef)
     PolynomialRoots.roots5!(roots, coeffs, eps(T), true)
 
     # Check roots and return maximum
@@ -1098,13 +1099,13 @@ function maximize_curvature(P₁::V, P₂::V, P₃::V, P₄::V; bezier = true) w
     return tmax, Pmax, kmax
 end
 
-function directed_angle(v₁::V, v₂::V) where {T, V <: SVector{2,T}}
+function directed_angle(v₁::V, v₂::V) where {T, V <: SVector{2, T}}
     α = atan(v₁[2], v₁[1]) - atan(v₂[2], v₂[1])
-    α < 0 ? 2*T(π) + α : α
+    return α < 0 ? 2 * T(π) + α : α
 end
 directed_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = directed_angle(Pⱼ - Pₖ, Pₗ - Pₖ)
 
-function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2,T}}
+function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2, T}}
     # Kahan's method for computing the angle between v₁ and v₂.
     #   see: https://scicomp.stackexchange.com/a/27694
     a, b, c = norm(v₁), norm(v₂), norm(v₁ - v₂)
@@ -1113,7 +1114,7 @@ function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2,T}}
     num = ((a - b) + c) * max(μ, zero(T))
     den = (a + (b + c)) * ((a - c) + b)
     α = 2 * atan(√(num / den))
-    v₁ × v₂ > 0 ? 2*T(π) - α : α
+    return v₁ × v₂ > 0 ? 2 * T(π) - α : α
 end
 kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(Pⱼ - Pₖ, Pₗ - Pₖ)
 
@@ -1141,7 +1142,7 @@ function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     AᵀA_buf = zeros(T, n, n)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    NNLSGCVRegProblem(A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf, nnls_prob, nnls_prob_smooth_cache)
+    return NNLSGCVRegProblem(A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf, nnls_prob, nnls_prob_smooth_cache)
 end
 
 solution(work::NNLSGCVRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
@@ -1161,27 +1162,29 @@ Details of the GCV method and L-curve theory can be can be found in:
 [Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580](https://doi.org/10.1137/1034115)
 
 # Arguments
-- `A::AbstractMatrix`: Decay basis matrix
-- `b::AbstractVector`: Decay curve data
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
 
 # Outputs
-- `X::AbstractVector`: Regularized NNLS solution
-- `mu::Real`: Resulting regularization parameter ``\\mu``
-- `Chi2Factor::Real`: Resulting increase in ``\\chi^2`` relative to unregularized (``\\mu = 0``) solution
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\\mu``
+  - `Chi2Factor::Real`: Resulting increase in ``\\chi^2`` relative to unregularized (``\\mu = 0``) solution
 """
 function lsqnonneg_gcv(A, b)
     work = lsqnonneg_gcv_work(A, b)
-    lsqnonneg_gcv!(work)
+    return lsqnonneg_gcv!(work)
 end
 lsqnonneg_gcv_work(A, b) = NNLSGCVRegProblem(A, b)
 
-function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T,N}; method = :brent) where {T,N}
+function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T, N}
     # Find μ by minimizing the function G(μ) (GCV method)
     reset_cache!(work.nnls_prob_smooth_cache)
 
     if method === :nlopt
         # opt = NLopt.Opt(:LN_COBYLA, 1) # local, gradient-free, linear approximation of objective
-        opt = NLopt.Opt(:LN_BOBYQA, 1) # local, gradient-free, quadratic approximation of objective
+        opt               = NLopt.Opt(:LN_BOBYQA, 1) # local, gradient-free, quadratic approximation of objective
         opt.lower_bounds  = -8.0
         opt.upper_bounds  = 2.0
         opt.xtol_rel      = 0.05
@@ -1189,7 +1192,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T,N}; method = :brent) where {T,
         minf, minx, ret   = NLopt.optimize(opt, [-4.0])
     elseif method === :brent
         minx, minf = brent(-8.0, 2.0; xrtol = T(0.05), xtol = T(1e-4), maxiters = 10) do logμ
-            log(gcv!(work, logμ))
+            return log(gcv!(work, logμ))
         end
     else
         error("Method must be one of :nlopt or :brent; got :$(method)")
@@ -1197,8 +1200,8 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T,N}; method = :brent) where {T,
 
     # Return the final regularized solution
     mu_final = exp(T(minx[1]))
-    x_final  = solve!(work.nnls_prob_smooth_cache, mu_final)
-    x_unreg  = solve!(work.nnls_prob)
+    x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
+    x_unreg = solve!(work.nnls_prob)
     chi2factor_final = chi2(get_cache(work.nnls_prob_smooth_cache)) / chi2(work.nnls_prob)
 
     return (x = x_final, mu = mu_final, chi2factor = chi2factor_final)
@@ -1242,7 +1245,7 @@ function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
     #   A: (m, n), Aμ: (m, m), At: (n, m), AtA: (n, n)
     mul!(AtA′, A′', A′) # A'A
     @acc for i in 1:n
-        AtA′[i,i] += μ^2 # A'A + μ^2*I
+        AtA′[i, i] += μ^2 # A'A + μ^2*I
     end
     ldiv!(At′, cholesky!(Symmetric(AtA′)), A′') # (A'A + μ^2*I)^-1 * A'
     mul!(Aμ, A′, At′) # A * (A'A + μ^2*I)^-1 * A'
@@ -1265,10 +1268,9 @@ end
 # singular values when L = identity, and size(A) = (m, n).
 function gcv_tr!(A, λ)
     m, n = size(A)
-    γ  = svdvals!(A)
-    γ .= λ.^2 ./ (γ.^2 .+ λ.^2)
-    max(m - n, 0) + sum(γ)
+    γ = svdvals!(A)
+    γ .= λ .^ 2 ./ (γ .^ 2 .+ λ .^ 2)
+    return max(m - n, 0) + sum(γ)
 end
 gcv_tr(A, λ) = gcv_tr!(copy(A), λ)
 gcv_tr_brute(A, λ) = tr(I - A * ((A'A + λ^2 * I) \ A'))
-

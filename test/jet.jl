@@ -14,7 +14,7 @@ function test_voxelwise_T2_distribution()
     dist = DECAES.T2Distributions(opts)
     thread_buffer = DECAES.thread_buffer_maker(opts)
     signal = rand(opts.nTE)
-    I = CartesianIndex(1,1,1)
+    I = CartesianIndex(1, 1, 1)
     DECAES.voxelwise_T2_distribution!(thread_buffer, maps, dist, signal, opts, I) # warmup run
     @report_opt DECAES.voxelwise_T2_distribution!(thread_buffer, maps, dist, signal, opts, I)
 end

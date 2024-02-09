@@ -5,7 +5,7 @@
 const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz", ".par", ".xml", ".rec")
 const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
 
-const CLI_SETTINGS = ArgParseSettings(
+const CLI_SETTINGS = ArgParseSettings(;
     prog = "",
     fromfile_prefix_chars = "@",
     error_on_conflict = false,
@@ -217,8 +217,9 @@ Entry point function for command line interface, parsing the command line argume
 See the [Arguments](@ref) section for available options.
 
 See also:
-* [`T2mapSEcorr`](@ref)
-* [`T2partSEcorr`](@ref)
+
+  - [`T2mapSEcorr`](@ref)
+  - [`T2partSEcorr`](@ref)
 """
 function main(command_line_args::Vector{String} = ARGS)
 
@@ -244,12 +245,12 @@ function main(command_line_args::Vector{String} = ARGS)
             map(filter(s -> startswith(s, "@"), command_line_args)) do settingsfile
                 src = settingsfile[2:end] # drop "@" character
                 dst = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * "." * basename(src))
-                cp(src, dst; force = true)
+                return cp(src, dst; force = true)
             end
         end
 
         # Main processing
-        tee_capture(
+        tee_capture(;
             logfile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".log"),
             suppress_terminal = opts[:quiet],
             suppress_logfile = opts[:dry],
@@ -266,7 +267,7 @@ function main(command_line_args::Vector{String} = ARGS)
     return nothing
 end
 
-function main(file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
+function main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
 
     # Starting message/starting time
     t_start = tic()
@@ -315,7 +316,7 @@ function main(file_info::Dict{Symbol,Any}, opts::Dict{Symbol,Any})
         if !opts[:dry]
             @showtime(
                 "Saving T2 distribution to file: $savefile",
-                MAT.matwrite(savefile, Dict{String,Any}("dist" => dist)),
+                MAT.matwrite(savefile, Dict{String, Any}("dist" => dist)),
             )
         end
 
@@ -368,7 +369,7 @@ function compile_decaes_app()
     # and build the relocatable executable app into the `build` subfolder
     scratch_app_builder = joinpath(scratch_app_dir, "app_builder.jl")
     cmd = `$(Base.julia_cmd()) --startup-file=no --threads=auto --project=$(scratch_app_dir) $(scratch_app_builder)`
-    run(cmd)
+    return run(cmd)
 end
 
 ####
@@ -406,21 +407,21 @@ function handle_renamed_cli_flag!(opts, oldnew::Pair)
     return opts
 end
 
-function t2map_options(image::Array, opts::Dict{Symbol,Any})
+function t2map_options(image::Array, opts::Dict{Symbol, Any})
     fields = fieldsof(T2mapOptions, Set)
-    kwargs = Dict{Symbol,Any}()
+    kwargs = Dict{Symbol, Any}()
     for (k, v) in opts
         (v === nothing) && continue # filter unset cli args
         (v isa AbstractVector && isempty(v)) && continue # filter unset cli args (empty vectors are unset cli varargs)
         (k ∉ fields) && continue # filter T2mapOptions fields
         kwargs[k] = v isa AbstractVector ? tuple(v...) : v
     end
-    T2mapOptions(image; kwargs...)
+    return T2mapOptions(image; kwargs...)
 end
 
-function t2part_options(dist::Array, opts::Dict{Symbol,Any})
+function t2part_options(dist::Array, opts::Dict{Symbol, Any})
     fields = fieldsof(T2partOptions, Set)
-    kwargs = Dict{Symbol,Any}()
+    kwargs = Dict{Symbol, Any}()
     for (k, v) in opts
         (v === nothing) && continue # filter unset cli args
         (v isa AbstractVector && isempty(v)) && continue # filter unset cli args (empty vectors are unset cli varargs)
@@ -428,10 +429,10 @@ function t2part_options(dist::Array, opts::Dict{Symbol,Any})
         (k ∉ fields) && continue # filter T2mapOptions fields
         kwargs[k] = v isa AbstractVector ? tuple(v...) : v
     end
-    T2partOptions(dist; kwargs...)
+    return T2partOptions(dist; kwargs...)
 end
 
-function get_file_infos(opts::Dict{Symbol,Any})
+function get_file_infos(opts::Dict{Symbol, Any})
     # Read in input files
     input = opts[:input]
     @assert !isempty(input) "At least one input file is required"
@@ -501,7 +502,7 @@ function load_image(filename, ::Val{N}) where {N}
     if maybe_get_suffix(filename) == ".mat"
         # Load first `N`-dimensional array which is found, or throw an error if none are found
         data = MAT.matread(filename)
-        array_keys = findall(x -> x isa AbstractArray{T,N} where {T}, data)
+        array_keys = findall(x -> x isa AbstractArray{T, N} where {T}, data)
         if isempty(array_keys)
             error("No $(N)-D array was found in the input file: $filename")
         end
@@ -543,7 +544,7 @@ function try_load_B1mapfile!(maps::T2Maps{T}, B1mapfile::String) where {T}
     return nothing
 end
 
-function try_apply_maskfile!(image::Array{T,4}, maskfile::String) where {T}
+function try_apply_maskfile!(image::Array{T, 4}, maskfile::String) where {T}
     try
         image .*= load_image(maskfile, Val(3))
     catch e
@@ -553,7 +554,7 @@ function try_apply_maskfile!(image::Array{T,4}, maskfile::String) where {T}
     return image
 end
 
-function try_apply_bet!(image::Array{T,4}, betpath::String, betargs::String) where {T}
+function try_apply_bet!(image::Array{T, 4}, betpath::String, betargs::String) where {T}
     try
         image .*= make_bet_mask(image, betpath, betargs)
     catch e
@@ -563,7 +564,7 @@ function try_apply_bet!(image::Array{T,4}, betpath::String, betargs::String) whe
     return image
 end
 
-function make_bet_mask(image::Array{T,3}, betpath::String, betargs::String) where {T}
+function make_bet_mask(image::Array{T, 3}, betpath::String, betargs::String) where {T}
     # Split betargs, and ensure that "-m" (make binary mask) is among args
     dlm = c -> isspace(c) || c == ','
     args = convert(Vector{String}, split(betargs, dlm; keepempty = false))
@@ -587,12 +588,12 @@ function make_bet_mask(image::Array{T,3}, betpath::String, betargs::String) wher
         # Find this file, ensure it is unique, then load and return it
         bet_maskfiles = filter!(file -> startswith(file, tempbase * ".bet_mask"), readdir(temppath))
         @assert length(bet_maskfiles) == 1 # ensure unique; this should never be false using a temp filename
-        load_image(joinpath(temppath, bet_maskfiles[1]), Val(3))
+        return load_image(joinpath(temppath, bet_maskfiles[1]), Val(3))
     end
 
     return mask
 end
-make_bet_mask(image::Array{T,4}, args...; kwargs...) where {T} = make_bet_mask(image[:,:,:,1], args...; kwargs...) # use first echo
+make_bet_mask(image::Array{T, 4}, args...; kwargs...) where {T} = make_bet_mask(image[:, :, :, 1], args...; kwargs...) # use first echo
 
 maybe_get_first(f, xs) = findfirst(f, xs) |> I -> I === nothing ? nothing : xs[I]
 maybe_get_suffix(filename) = maybe_get_first(ext -> endswith(lowercase(filename), ext), ALLOWED_FILE_SUFFIXES) # case-insensitive

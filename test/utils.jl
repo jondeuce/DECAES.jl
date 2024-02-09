@@ -26,7 +26,7 @@
 end
 
 @testset "GrowableCachePairs" begin
-    c = GrowableCache{Float64,Float64}()
+    c = GrowableCache{Float64, Float64}()
     p = pairs(c)
     @test p isa GrowableCachePairs
 

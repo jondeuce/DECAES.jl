@@ -1,10 +1,10 @@
-NNLS_SIZES = vec(collect(Iterators.product([1,2,5,8,16,32], [1,2,5,8,16,32])))
+NNLS_SIZES = vec(collect(Iterators.product([1, 2, 5, 8, 16, 32], [1, 2, 5, 8, 16, 32])))
 
 function rand_NNLS_data(m, n)
     # A strictly positive, unconstrained x has negative entries
     x = rand(MersenneTwister(0), n) .* ifelse.(isodd.(1:n), -1, 1)
     A = rand(MersenneTwister(0), m, n)
-    b = A*x
+    b = A * x
     return A, b
 end
 
@@ -25,7 +25,7 @@ function verify_NNLS(m, n)
         i₀ = work.idx[n₊+1:end]
         x₊, x₀ = x[i₊], x[i₀]
         w₀, w₋ = w[i₊], w[i₀]
-        A₊, A₀ = A[:,i₊], A[:,i₀]
+        A₊, A₀ = A[:, i₊], A[:, i₀]
 
         @test isperm(work.idx)
         @test NNLS.components(work) == i₊
@@ -39,14 +39,25 @@ function verify_NNLS(m, n)
         @test work.zz[1:n₊] == x₊
         @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋
         @test work.zz[n₊+1:end] == work.b[n₊+1:end]
-        @test NNLS.residualnorm(work) ≈ norm(A*x - b) rtol = 1e-12 atol = 1e-12
+        @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
 
         if n₊ > 0
             b₊ = rand(n₊)
-            U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, U, 1:n₊, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
-            L⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(L⁻¹b₊, U, 1:n₊, n₊, Val(true));  @test L⁻¹b₊ ≈ L\b₊
-            U⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(U⁻¹b₊, work.A, work.idx, n₊, Val(false)); @test U⁻¹b₊ ≈ U\b₊
-            L⁻¹b₊ = copy(b₊); NNLS.solve_triangular_system!(L⁻¹b₊, work.A, work.idx, n₊, Val(true));  @test L⁻¹b₊ ≈ L\b₊
+            U⁻¹b₊ = copy(b₊)
+            NNLS.solve_triangular_system!(U⁻¹b₊, U, 1:n₊, n₊, Val(false))
+            @test U⁻¹b₊ ≈ U \ b₊
+
+            L⁻¹b₊ = copy(b₊)
+            NNLS.solve_triangular_system!(L⁻¹b₊, U, 1:n₊, n₊, Val(true))
+            @test L⁻¹b₊ ≈ L \ b₊
+
+            U⁻¹b₊ = copy(b₊)
+            NNLS.solve_triangular_system!(U⁻¹b₊, work.A, work.idx, n₊, Val(false))
+            @test U⁻¹b₊ ≈ U \ b₊
+
+            L⁻¹b₊ = copy(b₊)
+            NNLS.solve_triangular_system!(L⁻¹b₊, work.A, work.idx, n₊, Val(true))
+            @test L⁻¹b₊ ≈ L \ b₊
         end
 
         # Solution
@@ -69,12 +80,14 @@ function verify_NNLS(m, n)
 
         # Cholesky factors
         @test A₊'A₊ ≈ U'U
-        @test A₊'A₊ ≈ L*L'
+        @test A₊'A₊ ≈ L * L'
 
         F = cholesky!(NormalEquation(), work)
         if n₊ > 0
-            x′ = rand(MersenneTwister(0), n₊); x′′ = copy(x′)
-            b′ = rand(MersenneTwister(0), n₊); b′′ = copy(b′)
+            x′ = rand(MersenneTwister(0), n₊)
+            x′′ = copy(x′)
+            b′ = rand(MersenneTwister(0), n₊)
+            b′′ = copy(b′)
             ldiv!(x′, F, b′)
             @test x′ ≈ (A₊'A₊) \ b′
             @test b′ ≈ b′′ && !(x′ ≈ x′′)
@@ -93,7 +106,7 @@ end
 
 function build_lcurve_corner_cached_fun(::Type{T} = Float64) where {T}
     # Mock lcurve function with (ξ(μ), η(μ)) = (μ, 1/μ)
-    f = CachedFunction(logμ -> SA[exp(logμ), exp(-logμ)], GrowableCache{T, SVector{2,T}}())
+    f = CachedFunction(logμ -> SA[exp(logμ), exp(-logμ)], GrowableCache{T, SVector{2, T}}())
     f = LCurveCornerCachedFunction(f, GrowableCache{T, LCurveCornerPoint{T}}(), GrowableCache{T, LCurveCornerState{T}}())
     return f
 end
@@ -117,11 +130,11 @@ end
 function mock_nnls_data(m, n)
     opts = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = m, nT2 = n)
     prob = DECAES.mock_surrogate_search_problem(Val(1), Val(m), opts)
-    (; A = prob.As[:,:,end], b = prob.b)
+    return (; A = prob.As[:, :, end], b = prob.b)
 end
 
-∇finitediff(f, x, h = 1e-8) = (f(x.+h) .- f(x.-h)) ./ (2h)
-∇²finitediff(f, x, h = 1e-4) = (f(x.+h) .- 2 .* f(x) .+ f(x.-h)) ./ h^2
+∇finitediff(f, x, h = 1e-8) = (f(x .+ h) .- f(x .- h)) ./ (2h)
+∇²finitediff(f, x, h = 1e-4) = (f(x .+ h) .- 2 .* f(x) .+ f(x .- h)) ./ h^2
 
 @testset "Least Squares Gradients" begin
     #=
@@ -147,7 +160,7 @@ end
     for (m, n) in NNLS_SIZES
         A, b = rand_NNLS_data(m, n)
         A_μ = μ -> [A; μ * LinearAlgebra.I]
-        B_μ = μ -> LinearAlgebra.cholesky!(LinearAlgebra.Symmetric(A'A + μ^2*I))
+        B_μ = μ -> LinearAlgebra.cholesky!(LinearAlgebra.Symmetric(A'A + μ^2 * I))
         x_μ = μ -> A_μ(μ) \ [b; zeros(n)]
 
         μ = 0.99
@@ -156,27 +169,27 @@ end
 
         # Derivative of solution x w.r.t. μ
         f = _μ -> x_μ(_μ)
-        dx_dμ = -2*μ*(B\x)
-        @test dx_dμ ≈ -2*μ*(B\(B\(A'b)))
+        dx_dμ = -2 * μ * (B \ x)
+        @test dx_dμ ≈ -2 * μ * (B \ (B \ (A'b)))
         @test dx_dμ ≈ ∇finitediff(f, μ) rtol = 1e-4
 
         # Derivative of A*x (or equivalently, A*x-b) w.r.t. μ
-        f = _μ -> A*x_μ(_μ)
-        dAx_dμ = A*dx_dμ
-        @test dAx_dμ ≈ -2*μ*(A*(B\(B\(A'b))))
+        f = _μ -> A * x_μ(_μ)
+        dAx_dμ = A * dx_dμ
+        @test dAx_dμ ≈ -2 * μ * (A * (B \ (B \ (A'b))))
         @test dAx_dμ ≈ ∇finitediff(f, μ) rtol = 1e-4
 
         # Derivative of solution l2-norm ||x||^2 w.r.t. μ
         f = _μ -> sum(abs2, x_μ(_μ))
         dx²_dμ = 2 * x'dx_dμ
-        @test dx²_dμ ≈ (-4*μ)*b'*(A*(B\(B\(B\(A'b)))))
+        @test dx²_dμ ≈ (-4 * μ) * b' * (A * (B \ (B \ (B \ (A'b)))))
         @test dx²_dμ ≈ ∇finitediff(f, μ) rtol = 1e-4
 
         # Derivative of residual l2-norm ||A*x-b||^2 w.r.t. μ
-        f = _μ -> sum(abs2, A*x_μ(_μ) - b)
+        f = _μ -> sum(abs2, A * x_μ(_μ) - b)
         dAxb_dμ = -2μ^2 * x'dx_dμ
-        @test dAxb_dμ ≈ 2*(A*x-b)'dAx_dμ
-        @test dAxb_dμ ≈ -4*μ*((A*x-b)'*(A*(B\(B\(A'b)))))
+        @test dAxb_dμ ≈ 2 * (A * x - b)'dAx_dμ
+        @test dAxb_dμ ≈ -4 * μ * ((A * x - b)' * (A * (B \ (B \ (A'b)))))
         @test dAxb_dμ ≈ ∇finitediff(f, μ) rtol = 1e-4
     end
 end

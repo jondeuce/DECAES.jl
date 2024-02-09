@@ -41,12 +41,12 @@ if RUN_MATLAB_TESTS && RUN_MWI_TOOLBOX_TESTS
         if !mfile_exists("T2map_SEcorr_nechoes_2019") || !mfile_exists("T2part_SEcorr_2019")
             global RUN_MWI_TOOLBOX_TESTS = false
             @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
-                "Modify your default MATLAB path to include these files, or set the DECAES_MWI_TOOLBOX_PATH environment variable.\n\n" *
-                "For example, on unix-like systems run" *
-                "\n\n    export DECAES_MWI_TOOLBOX_PATH=/path/to/MWI_NNLS_toolbox_0319\n\n" *
-                "before testing DECAES, or add a command such as" *
-                "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
-                "to your startup.m file in MATLAB."
+                  "Modify your default MATLAB path to include these files, or set the DECAES_MWI_TOOLBOX_PATH environment variable.\n\n" *
+                  "For example, on unix-like systems run" *
+                  "\n\n    export DECAES_MWI_TOOLBOX_PATH=/path/to/MWI_NNLS_toolbox_0319\n\n" *
+                  "before testing DECAES, or add a command such as" *
+                  "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
+                  "to your startup.m file in MATLAB."
         end
     catch e
         global RUN_MWI_TOOLBOX_TESTS = false
@@ -64,9 +64,26 @@ catch e
     @warn sprint(showerror, e, catch_backtrace())
 end
 
-@testset "misc.jl"    verbose = true begin; include("misc.jl"); end
-@testset "nnls.jl"    verbose = true begin; include("nnls.jl"); end
-@testset "utils.jl"   verbose = true begin; include("utils.jl"); end
-@testset "splines.jl" verbose = true begin; include("splines.jl"); end
-@testset "epg.jl"     verbose = true begin; include("epg.jl"); end
-@testset "cli.jl"     verbose = true begin; include("cli.jl"); end
+@testset "misc.jl" verbose = true begin
+    include("misc.jl")
+end
+
+@testset "nnls.jl" verbose = true begin
+    include("nnls.jl")
+end
+
+@testset "utils.jl" verbose = true begin
+    include("utils.jl")
+end
+
+@testset "splines.jl" verbose = true begin
+    include("splines.jl")
+end
+
+@testset "epg.jl" verbose = true begin
+    include("epg.jl")
+end
+
+@testset "cli.jl" verbose = true begin
+    include("cli.jl")
+end

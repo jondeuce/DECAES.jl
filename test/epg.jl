@@ -1,8 +1,8 @@
 function compare_epg(
-        work₁::DECAES.AbstractEPGWorkspace{T,ETL₁},
-        work₂::DECAES.AbstractEPGWorkspace{T,ETL₂};
-        verbose = false,
-    ) where {T,ETL₁,ETL₂}
+    work₁::DECAES.AbstractEPGWorkspace{T, ETL₁},
+    work₂::DECAES.AbstractEPGWorkspace{T, ETL₂};
+    verbose = false,
+) where {T, ETL₁, ETL₂}
     xs = (; α = T(11e-3), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0), β = T(163.0))
     θ₁ = DECAES.EPGOptions(xs, Val(ETL₁), T)
     θ₂ = DECAES.EPGOptions(xs, Val(ETL₂), T)
@@ -13,7 +13,7 @@ function compare_epg(
         @info "    max error:   $(maximum(abs, dc₁ .- dc₂))"
         @info "    diff vector: $(abs.(dc₁ .- dc₂)')"
     end
-    @test isapprox(dc₁, dc₂; rtol=√eps(T), atol=10*eps(T))
+    @test isapprox(dc₁, dc₂; rtol = √eps(T), atol = 10 * eps(T))
 end
 
 @testset "EPG algorithms" begin
@@ -23,7 +23,7 @@ end
     #   NOTE: Generated function approach is extremely slow to compile for large ETL (around 16)
     epg_algs = DECAES.EPG_Algorithms
     for T in [Float32, Float64]
-        for i in 1:length(epg_algs), ETL in [4,5,6,7]
+        for i in 1:length(epg_algs), ETL in [4, 5, 6, 7]
             j = rand([1:i-1; i+1:length(epg_algs)])
             algᵢ, algⱼ = epg_algs[i], epg_algs[j]
             compare_epg(algᵢ(T, ETL), algⱼ(T, ETL))

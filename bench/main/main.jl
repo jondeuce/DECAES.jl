@@ -2,7 +2,7 @@ using Dates
 using ArgParse
 
 function parse_commandline()
-    s = ArgParseSettings(
+    s = ArgParseSettings(;
         fromfile_prefix_chars = "@",
     )
 
@@ -80,13 +80,14 @@ function main()
     open(outpath("settings.txt"); write = true) do io
         for arg in ARGS
             startswith(arg, "@") ?
-                println(io, readchomp(arg[2:end])) :
-                println(io, arg)
+            println(io, readchomp(arg[2:end])) :
+            println(io, arg)
         end
     end
     open(outpath("run_benchmarks.jl"); write = true) do io
         println(io, "mkpath(\"$(outpath())\")")
         println(io, "run($cmd)")
+        return nothing
     end
     for jl in filter(endswith(".jl"), readdir(@__DIR__; join = true))
         cp(jl, outpath(basename(jl)); force = true)

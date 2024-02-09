@@ -68,7 +68,7 @@ end
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = choleskyfactor(work, Val(:U))'
 
 function NNLSWorkspace{T}(m, n) where {T}
-    NNLSWorkspace(
+    return NNLSWorkspace(
         zeros(T, m, n), # A
         zeros(T, m),    # b
         zeros(T, n),    # x
@@ -141,28 +141,30 @@ Solves non-negative least-squares problem by the active set method
 of Lawson & Hanson (1974).
 
 Optional arguments:
-    max_iter: maximum number of iterations (counts inner loop iterations)
+
+    - max_iter: maximum number of iterations (counts inner loop iterations)
 
 References:
-    Lawson, C.L. and R.J. Hanson, Solving Least-Squares Problems,
-    Prentice-Hall, Chapter 23, p. 161, 1974.
+
+    - Lawson, C.L. and R.J. Hanson, Solving Least-Squares Problems
+    - Prentice-Hall, Chapter 23, p. 161, 1974
 """
 function nnls(
-        A,
-        b::AbstractVector{T};
-        max_iter::Int = 3*size(A, 2)
-    ) where {T}
+    A,
+    b::AbstractVector{T};
+    max_iter::Int = 3 * size(A, 2),
+) where {T}
     work = NNLSWorkspace(A, b)
     nnls!(work, max_iter)
     return solution(work)
 end
 
 function nnls!(
-        work::NNLSWorkspace{T},
-        A::AbstractMatrix{T},
-        b::AbstractVector{T},
-        max_iter::Int = 3*size(A, 2)
-    ) where {T}
+    work::NNLSWorkspace{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    max_iter::Int = 3 * size(A, 2),
+) where {T}
     load!(work, A, b)
     nnls!(work, max_iter)
     return solution(work)
@@ -268,18 +270,18 @@ function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int
 end
 
 """
-   COMPUTE ORTHOGONAL ROTATION MATRIX..
+COMPUTE ORTHOGONAL ROTATION MATRIX..
 The original version of this code was developed by
 Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 1973 JUN 12, and published in the book
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 
-   COMPUTE.. MATRIX   (C, S) SO THAT (C, S)(A) = (SQRT(A**2+B**2))
-                      (-S,C)         (-S,C)(B)   (   0          )
-   COMPUTE SIG = SQRT(A**2+B**2)
-      SIG IS COMPUTED LAST TO ALLOW FOR THE POSSIBILITY THAT
-      SIG MAY BE IN THE SAME LOCATION AS A OR B .
+    COMPUTE.. MATRIX    (C, S) SO THAT (C, S)(A) = (SQRT(A**2+B**2))
+                        (-S,C)         (-S,C)(B)   (   0          )
+    COMPUTE SIG = SQRT(A**2+B**2)
+        SIG IS COMPUTED LAST TO ALLOW FOR THE POSSIBILITY THAT
+        SIG MAY BE IN THE SAME LOCATION AS A OR B .
 """
 @inline function orthogonal_rotmat(a::T, b::T) where {T}
     if abs(a) > abs(b)
@@ -322,7 +324,7 @@ function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, i
         @inbounds j = idx[nsetp]
         @inbounds zz[nsetp] /= A[nsetp, j]
         @inbounds for ip in nsetp-1:-1:1
-            zz1 = zz[ip + 1]
+            zz1 = zz[ip+1]
             @acc for l in 1:ip
                 zz[l] = zz[l] - A[l, j] * zz1
             end
@@ -361,7 +363,7 @@ function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, n
             i_wmax = ip
         end
     end
-    wmax, i_wmax
+    return wmax, i_wmax
 end
 
 """
@@ -375,12 +377,12 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
 
 GIVEN AN M BY N MATRIX, A, AND AN M-VECTOR, B,  COMPUTE AN
 N-VECTOR, X, THAT SOLVES THE LEAST SQUARES PROBLEM
-                 A * X = B  SUBJECT TO X .GE. 0
+A * X = B  SUBJECT TO X .GE. 0
 """
 function nnls!(
-        work::NNLSWorkspace{T},
-        max_iter::Int = 3*size(work.A, 2)
-    ) where {T}
+    work::NNLSWorkspace{T},
+    max_iter::Int = 3 * size(work.A, 2),
+) where {T}
 
     checkargs(work)
     (; A, b, x, w, zz, idx) = work
@@ -433,15 +435,15 @@ function nnls!(
             # THE SIGN OF W(J) IS OK FOR J TO BE MOVED TO SET P.
             # BEGIN THE TRANSFORMATION AND CHECK NEW DIAGONAL ELEMENT TO AVOID
             # NEAR LINEAR DEPENDENCE.
-            Asave = A[nsetp + 1, j_maxdual]
+            Asave = A[nsetp+1, j_maxdual]
             up = construct_householder!(uview(A, nsetp+1:m, j_maxdual), up)
 
-            if abs(A[nsetp + 1, j_maxdual]) > 0
+            if abs(A[nsetp+1, j_maxdual]) > 0
                 # COL J IS SUFFICIENTLY INDEPENDENT.  COPY B INTO ZZ, UPDATE ZZ
                 # AND SOLVE FOR ZTEST ( = PROPOSED NEW VALUE FOR X(J) ).
                 copyto!(zz, b)
                 apply_householder!(uview(A, nsetp+1:m, j_maxdual), up, uview(zz, nsetp+1:m))
-                ztest = zz[nsetp + 1] / A[nsetp + 1, j_maxdual]
+                ztest = zz[nsetp+1] / A[nsetp+1, j_maxdual]
 
                 # SEE IF ZTEST IS POSITIVE
                 if ztest > 0
@@ -452,7 +454,7 @@ function nnls!(
             # REJECT J AS A CANDIDATE TO BE MOVED FROM SET Z TO SET P.
             # RESTORE A(NPP1,J), SET W(J)=0., AND LOOP BACK TO TEST DUAL
             # COEFFS AGAIN.
-            A[nsetp + 1, j_maxdual] = Asave
+            A[nsetp+1, j_maxdual] = Asave
             w[j_maxdual] = zero(T)
         end
         if terminated
@@ -465,9 +467,9 @@ function nnls!(
         # COL J,  SET W(J)=0.
         copyto!(b, zz)
 
-        idx[i_maxdual] = idx[nsetp + 1]
-        idx[nsetp + 1] = j_maxdual
-        nsetp += 1
+        idx[i_maxdual] = idx[nsetp+1]
+        idx[nsetp+1]   = j_maxdual
+        nsetp          += 1
 
         if nsetp + 1 <= n
             apply_householder!(A, up, idx, nsetp, j_maxdual)
@@ -540,30 +542,30 @@ function nnls!(
 
                         cc, ss, sig = orthogonal_rotmat(A[ip-1, j], A[ip, j])
                         A[ip-1, j] = sig
-                        A[ip, j]   = zero(T)
+                        A[ip, j] = zero(T)
 
                         # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
                         @simd ivdep for l in 1:j-1
-                            tmp = A[ip-1, l]
-                            A[ip-1, l] =  cc * tmp + ss * A[ip, l]
-                            A[ip,   l] = -ss * tmp + cc * A[ip, l]
+                            tmp        = A[ip-1, l]
+                            A[ip-1, l] = cc * tmp + ss * A[ip, l]
+                            A[ip, l]   = -ss * tmp + cc * A[ip, l]
                         end
 
                         @simd ivdep for l in j+1:n
-                            tmp = A[ip-1, l]
-                            A[ip-1, l] =  cc * tmp + ss * A[ip, l]
-                            A[ip,   l] = -ss * tmp + cc * A[ip, l]
+                            tmp        = A[ip-1, l]
+                            A[ip-1, l] = cc * tmp + ss * A[ip, l]
+                            A[ip, l]   = -ss * tmp + cc * A[ip, l]
                         end
 
                         # Apply procedure G2 (CC,SS,B(J-1),B(J))
-                        tmp = b[ip-1]
-                        b[ip-1] =  cc * tmp + ss * b[ip]
+                        tmp     = b[ip-1]
+                        b[ip-1] = cc * tmp + ss * b[ip]
                         b[ip]   = -ss * tmp + cc * b[ip]
                     end
                 end
 
                 nsetp -= 1
-                idx[nsetp + 1] = j_curr
+                idx[nsetp+1] = j_curr
 
                 # SEE IF THE REMAINING COEFFS IN SET P ARE FEASIBLE.  THEY SHOULD
                 # BE BECAUSE OF THE WAY ALPHA WAS DETERMINED.

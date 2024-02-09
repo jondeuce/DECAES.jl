@@ -1,7 +1,7 @@
 """
 Lightweight polynomial type
 """
-struct Poly{T, A<:AbstractVector{T}}
+struct Poly{T, A <: AbstractVector{T}}
     c::A
 end
 Poly(c::Number...) = Poly(c)
@@ -16,7 +16,7 @@ add!(p::Poly, a::Number) = (p.c[1] += a; return p)
 sub!(p::Poly, a::Number) = (p.c[1] -= a; return p)
 
 # Recall: p(x) = Σᵢ cᵢ ⋅ xⁱ⁻¹
-derivative(p::Poly{T}) where {T} = Poly(T[(i-1) * coeffs(p)[i] for i in 2:degree(p)+1]) # ∂/∂x p(x) = Σᵢ (i-1) ⋅ cᵢ ⋅ xⁱ⁻²
+derivative(p::Poly{T}) where {T} = Poly(T[(i - 1) * coeffs(p)[i] for i in 2:degree(p)+1]) # ∂/∂x p(x) = Σᵢ (i-1) ⋅ cᵢ ⋅ xⁱ⁻²
 integral(p::Poly{T}) where {T} = Poly(T[i == 0 ? zero(T) : coeffs(p)[i] / i for i in 0:degree(p)+1]) # ∫₀ˣ p(x) = Σᵢ (cᵢ / i) ⋅ xⁱ
 PolynomialRoots.roots(p::Poly) = PolynomialRoots.roots(coeffs(p))
 Base.extrema(p::Poly) = PolynomialRoots.roots(derivative(p))
@@ -25,7 +25,7 @@ Base.extrema(p::Poly) = PolynomialRoots.roots(derivative(p))
 #### Spline utils
 ####
 
-function make_spline(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1))
+function make_spline(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1))
     @assert length(X) == length(Y) && length(X) > 1
     return Dierckx.Spline1D(X, Y; k = deg_spline, bc = "extrapolate")
 end
@@ -33,7 +33,7 @@ end
 function build_polynomials(spl::Dierckx.Spline1D, knots = Dierckx.get_knots(spl))
     k = spl.k
     @inbounds t = knots[1:end-1]
-    coeffs = zeros(k+1, length(t))
+    coeffs = zeros(k + 1, length(t))
     @inbounds coeffs[1, :] .= spl(t)
     @inbounds for m in 1:k
         coeffs[m+1, :] .= Dierckx.derivative(spl, t, m) ./ factorial(m)
@@ -42,7 +42,7 @@ function build_polynomials(spl::Dierckx.Spline1D, knots = Dierckx.get_knots(spl)
 end
 
 function build_polynomial!(coeffs, spl::Dierckx.Spline1D, t)
-    @assert length(coeffs) == spl.k+1
+    @assert length(coeffs) == spl.k + 1
     mfact = 1
     @inbounds coeffs[1] = spl(t)
     @inbounds for m in 1:spl.k
@@ -53,7 +53,7 @@ function build_polynomial!(coeffs, spl::Dierckx.Spline1D, t)
 end
 
 # Fit a spline to data `(X, Y)` and minimize `spl(x)`
-function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1))
+function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1))
     @assert length(X) == length(Y) "X and Y must have the same length"
     @assert 0 < deg_spline <= 3 "Degree of spline must be 1, 2, or 3"
     if deg_spline == 1
@@ -83,7 +83,7 @@ function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, le
 end
 
 # Fit a spline to data `(X, Y)` and solve `spl(x) = value`
-function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X)-1))
+function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X) - 1))
     x = eltype(X)(NaN)
     if deg_spline == 1
         # Linear spline has at most one root in each section
@@ -143,7 +143,7 @@ function spline_opt_legacy(spl::Dierckx.Spline1D)
 
     return (; x, y)
 end
-spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = spline_opt_legacy(make_spline(X, Y; deg_spline))
+spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1)) = spline_opt_legacy(make_spline(X, Y; deg_spline))
 
 # Similar to above, but removes the extra trick and instead performs
 # exactly what the MATLAB implementation does
@@ -158,7 +158,7 @@ function spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     end
     return (; x, y)
 end
-spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X)-1)) = spline_opt_legacy_slow(make_spline(X, Y; deg_spline))
+spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1)) = spline_opt_legacy_slow(make_spline(X, Y; deg_spline))
 
 # Brute force root finding through fitting a spline to data (X, Y):
 # MATLAB implementation of spline root finding performs root finding by sampling the
@@ -179,7 +179,7 @@ function spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
 
     return x
 end
-spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = spline_root_legacy(make_spline(X, Y; deg_spline), value)
+spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X) - 1)) = spline_root_legacy(make_spline(X, Y; deg_spline), value)
 
 # Similar to above, but removes the extra trick and instead performs
 # exactly what the MATLAB implementation does
@@ -194,28 +194,28 @@ function spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     end
     return x
 end
-spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X)-1)) = spline_root_legacy_slow(make_spline(X, Y; deg_spline), value)
+spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X) - 1)) = spline_root_legacy_slow(make_spline(X, Y; deg_spline), value)
 
 ####
 #### Surrogate functions over discrete grids
 ####
 
-abstract type AbstractSurrogate{D,T} end
+abstract type AbstractSurrogate{D, T} end
 
 gridwidths(surr::AbstractSurrogate) = Tuple(abs.(last(surr.grid) - first(surr.grid)))
 gridspacings(surr::AbstractSurrogate) = gridwidths(surr) ./ size(surr.grid)
 
-struct CubicSplineSurrogate{T,F} <: AbstractSurrogate{1,T}
+struct CubicSplineSurrogate{T, F} <: AbstractSurrogate{1, T}
     f::F
-    grid::Vector{SVector{1,T}}
-    p::Vector{SVector{1,T}}
+    grid::Vector{SVector{1, T}}
+    p::Vector{SVector{1, T}}
     u::Vector{T}
     npts::Base.RefValue{Int}
     legacy::Bool
 end
 
-function CubicSplineSurrogate(f, grid::Vector{SVector{1,T}}; legacy = false) where {T}
-    CubicSplineSurrogate(f, grid, SVector{1,T}[], T[], Ref(0), legacy)
+function CubicSplineSurrogate(f, grid::Vector{SVector{1, T}}; legacy = false) where {T}
+    return CubicSplineSurrogate(f, grid, SVector{1, T}[], T[], Ref(0), legacy)
 end
 
 function update!(surr::CubicSplineSurrogate, I::CartesianIndex{1})
@@ -225,8 +225,8 @@ function update!(surr::CubicSplineSurrogate, I::CartesianIndex{1})
         (p[1] <= surr.p[i][1]) && (pos = i; break)
     end
     u = surr.f(I)
-    insertat!(surr.p, pos, p, surr.npts[]+1)
-    insertat!(surr.u, pos, u, surr.npts[]+1)
+    insertat!(surr.p, pos, p, surr.npts[] + 1)
+    insertat!(surr.u, pos, u, surr.npts[] + 1)
     surr.npts[] += 1
     return surr
 end
@@ -252,27 +252,27 @@ function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
     ps = reinterpret(T, view(surr.p, 1:npts))
     us = view(surr.u, 1:npts)
     p, u = surr.legacy ? spline_opt_legacy_slow(ps, us) : spline_opt(ps, us)
-    return SVector{1,T}(p), T(u)
+    return SVector{1, T}(p), T(u)
 end
 
-struct HermiteSplineSurrogate{D,T,F,RK} <: AbstractSurrogate{D,T}
+struct HermiteSplineSurrogate{D, T, F, RK} <: AbstractSurrogate{D, T}
     fg::F
-    grid::Array{SVector{D,T},D}
-    ugrid::Array{T,D}
-    spl::NormalHermiteSplines.ElasticNormalSpline{D,T,RK}
+    grid::Array{SVector{D, T}, D}
+    ugrid::Array{T, D}
+    spl::NormalHermiteSplines.ElasticNormalSpline{D, T, RK}
 end
 
-function HermiteSplineSurrogate(fg, grid::Array{SVector{D,T},D}, kernel = RK_H1(one(T))) where {D,T}
+function HermiteSplineSurrogate(fg, grid::Array{SVector{D, T}, D}, kernel = RK_H1(one(T))) where {D, T}
     spl = NormalHermiteSplines.ElasticNormalSpline(first(grid), last(grid), maximum(size(grid)), kernel)
-    HermiteSplineSurrogate(fg, grid, zeros(T, size(grid)), spl)
+    return HermiteSplineSurrogate(fg, grid, zeros(T, size(grid)), spl)
 end
 
-function update!(surr::HermiteSplineSurrogate{D,T}, I::CartesianIndex{D}) where {D,T}
+function update!(surr::HermiteSplineSurrogate{D, T}, I::CartesianIndex{D}) where {D, T}
     u, ∇u = surr.fg(I)
     @inbounds p = surr.grid[I]
     insert!(surr.spl, p, u)
     @inbounds for i in 1:D
-        eᵢ = basisvector(SVector{D,T}, i)
+        eᵢ = basisvector(SVector{D, T}, i)
         insert!(surr.spl, p, eᵢ, ∇u[i])
     end
     return surr
@@ -283,7 +283,7 @@ function Base.empty!(surr::HermiteSplineSurrogate)
     return surr
 end
 
-function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
+function suggest_point(surr::HermiteSplineSurrogate{D, T}) where {D, T}
     _, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
     @inbounds p = surr.grid[I]
     p, u = local_search(surr, p)
@@ -291,7 +291,7 @@ function suggest_point(surr::HermiteSplineSurrogate{D,T}) where {D,T}
 end
 
 # Specialize the 1D case to use the faster and more robust Brent-Dekker method
-function suggest_point(surr::HermiteSplineSurrogate{1,T}) where {T}
+function suggest_point(surr::HermiteSplineSurrogate{1, T}) where {T}
     u₀, I = findmin(evaluate!(surr.ugrid, surr.spl, surr.grid))
     @inbounds p₀ = surr.grid[I]
 
@@ -331,23 +331,23 @@ end
 #### Bounding box for multi-dimensional bisection search
 ####
 
-struct BoundingBox{D,S,N}
-    bounds::NTuple{D,NTuple{2,Int}}
-    corners::SArray{S,CartesianIndex{D},D,N}
+struct BoundingBox{D, S, N}
+    bounds::NTuple{D, NTuple{2, Int}}
+    corners::SArray{S, CartesianIndex{D}, D, N}
 end
 corners(box::BoundingBox) = box.corners
 bounds(box::BoundingBox) = box.bounds
 widths(box::BoundingBox{D}) where {D} = ntuple(d -> abs(box.bounds[d][2] - box.bounds[d][1]), D)
 Base.show(io::IO, ::MIME"text/plain", box::BoundingBox{D}) where {D} = print(io, "$D-D BoundingBox with dimensions: " * join(bounds(box), " × "))
 
-BoundingBox(widths::NTuple{D,Int}) where {D} = BoundingBox(tuple.(1, widths))
-BoundingBox(bounds::NTuple{D,NTuple{2,Int}}) where {D} = BoundingBox(bounds, corners(bounds))
+BoundingBox(widths::NTuple{D, Int}) where {D} = BoundingBox(tuple.(1, widths))
+BoundingBox(bounds::NTuple{D, NTuple{2, Int}}) where {D} = BoundingBox(bounds, corners(bounds))
 
-@generated function corners(bounds::NTuple{D,NTuple{2,Int}}) where {D}
+@generated function corners(bounds::NTuple{D, NTuple{2, Int}}) where {D}
     corners = Iterators.product([(true, false) for d in 1:D]...)
     S = Tuple{ntuple(d -> 2, D)...}
     vals = [:(CartesianIndex($(ntuple(d -> I[d] ? :(bounds[$d][1]) : :(bounds[$d][2]), D)...))) for I in corners]
-    :(Base.@_inline_meta; SArray{$S, CartesianIndex{$D}, $D, $(2^D)}(tuple($(vals...))))
+    return :(Base.@_inline_meta; SArray{$S, CartesianIndex{$D}, $D, $(2^D)}(tuple($(vals...))))
 end
 
 function opposite_corner(box::BoundingBox{D}, I::CartesianIndex{D}) where {D}
@@ -358,10 +358,10 @@ end
 function bisect(box::BoundingBox{D}) where {D}
     _, i = findmax(widths(box))
     left_bounds = ntuple(D) do d
-        i !== d ? box.bounds[d] : (box.bounds[i][1], (box.bounds[i][1] + box.bounds[i][2]) ÷ 2)
+        return i !== d ? box.bounds[d] : (box.bounds[i][1], (box.bounds[i][1] + box.bounds[i][2]) ÷ 2)
     end
     right_bounds = ntuple(D) do d
-        i !== d ? box.bounds[d] : ((box.bounds[i][1] + box.bounds[i][2]) ÷ 2, box.bounds[i][2])
+        return i !== d ? box.bounds[d] : ((box.bounds[i][1] + box.bounds[i][2]) ÷ 2, box.bounds[i][2])
     end
     return BoundingBox(left_bounds), BoundingBox(right_bounds)
 end
@@ -373,14 +373,14 @@ splittable(box::BoundingBox{D}) where {D} = any(widths(box) .> 1)
 ####
 
 struct DiscreteSurrogateSearcher{D, T}
-    grid::Array{SVector{D,T},D}
-    seen::Array{Bool,D}
+    grid::Array{SVector{D, T}, D}
+    seen::Array{Bool, D}
     numeval::Base.RefValue{Int}
 end
 function DiscreteSurrogateSearcher(surr::AbstractSurrogate; mineval::Int, maxeval::Int)
     @assert mineval <= maxeval
     state = DiscreteSurrogateSearcher(surr.grid, fill(false, size(surr.grid)), Ref(0))
-    initialize!(surr, state; mineval = mineval, maxeval = maxeval)
+    return initialize!(surr, state; mineval = mineval, maxeval = maxeval)
 end
 
 function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}; mineval::Int, maxeval::Int) where {D}
@@ -398,8 +398,9 @@ function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearche
     evaluate_box!(surr, state, box; maxeval = maxeval)
     state.numeval[] ≥ mineval && return state
     left, right = bisect(box)
-    initialize!(surr, state, left, depth-1; mineval = mineval, maxeval = maxeval)
-    initialize!(surr, state, right, depth-1; mineval = mineval, maxeval = maxeval)
+    initialize!(surr, state, left, depth - 1; mineval = mineval, maxeval = maxeval)
+    initialize!(surr, state, right, depth - 1; mineval = mineval, maxeval = maxeval)
+    return state
 end
 
 function update!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}, I::CartesianIndex{D}; maxeval::Int) where {D}
@@ -417,10 +418,10 @@ end
 ####
 
 function bisection_search(
-        surr::AbstractSurrogate{D,T},
-        state::DiscreteSurrogateSearcher{D,T};
-        maxeval::Int,
-    ) where {D,T}
+    surr::AbstractSurrogate{D, T},
+    state::DiscreteSurrogateSearcher{D, T};
+    maxeval::Int,
+) where {D, T}
 
     # Algorithm:
     #   0. Get initial optimum suggestion from surrogate
@@ -445,9 +446,9 @@ end
 
 # Update observed evaluations, returning true if converged
 function minimal_bounding_box(
-        state::DiscreteSurrogateSearcher{D,T},
-        x::SVector{D,T},
-    ) where {D,T}
+    state::DiscreteSurrogateSearcher{D, T},
+    x::SVector{D, T},
+) where {D, T}
 
     box = BoundingBox(size(state.grid))
     while true
@@ -469,12 +470,12 @@ function minimal_bounding_box(
 end
 
 function evaluate_box!(
-        surr::AbstractSurrogate{D,T},
-        state::DiscreteSurrogateSearcher{D,T},
-        box::BoundingBox{D},
-        x::Union{Nothing, SVector{D,T}} = nothing;
-        maxeval::Int,
-    ) where {D,T}
+    surr::AbstractSurrogate{D, T},
+    state::DiscreteSurrogateSearcher{D, T},
+    box::BoundingBox{D},
+    x::Union{Nothing, SVector{D, T}} = nothing;
+    maxeval::Int,
+) where {D, T}
     cs = x === nothing ? corners(box) : sorted_corners(state, box, x)
     @inbounds for I in cs
         is_evaluated(state, box) && break # box sufficiently evaluated
@@ -485,54 +486,54 @@ end
 
 function is_evaluated(state::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D}
     # Box is considered sufficiently evaluated when all of the corners have been evaluted
-    count(I -> @inbounds(state.seen[I]), corners(box)) >= 2^D
+    return count(I -> @inbounds(state.seen[I]), corners(box)) >= 2^D
 end
 
 function converged(::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D}
     # Convergence is defined as: bounding box has at least one side of length <= 1
-    any(widths(box) .<= 1)
+    return any(widths(box) .<= 1)
 end
 
-function centre(state::DiscreteSurrogateSearcher{D,T}, box::BoundingBox{D}) where {D,T}
+function centre(state::DiscreteSurrogateSearcher{D, T}, box::BoundingBox{D}) where {D, T}
     @inbounds lo = state.grid[first(corners(box))]
     @inbounds hi = state.grid[last(corners(box))]
-    (lo + hi)/2
+    return (lo + hi) / 2
 end
 
-function sorted_corners(state::DiscreteSurrogateSearcher{D,T}, box::BoundingBox{D}, x::SVector{D,T}) where {D,T}
+function sorted_corners(state::DiscreteSurrogateSearcher{D, T}, box::BoundingBox{D}, x::SVector{D, T}) where {D, T}
     dist²(I) = @inbounds sum(abs2.(state.grid[I] - x))
     cs = corners(box)
-    typeof(cs)(TupleTools.sort(Tuple(cs); by = dist²))
+    return typeof(cs)(TupleTools.sort(Tuple(cs); by = dist²))
 end
 
-function contains(state::DiscreteSurrogateSearcher{D,T}, box::BoundingBox{D}, x::SVector{D,T}) where {D,T}
+function contains(state::DiscreteSurrogateSearcher{D, T}, box::BoundingBox{D}, x::SVector{D, T}) where {D, T}
     @inbounds lo = state.grid[first(corners(box))]
     @inbounds hi = state.grid[last(corners(box))]
-    all(lo .<= x .<= hi)
+    return all(lo .<= x .<= hi)
 end
 
-function is_inside(grid::AbstractArray{SVector{D,T},D}, x::SVector{D,T}) where {D,T}
+function is_inside(grid::AbstractArray{SVector{D, T}, D}, x::SVector{D, T}) where {D, T}
     @inbounds lo = first(grid)
     @inbounds hi = last(grid)
-    all(lo .< x .< hi)
+    return all(lo .< x .< hi)
 end
-is_inside(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T}) where {D,T} = is_inside(state.grid, x)
+is_inside(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T} = is_inside(state.grid, x)
 
 ####
 #### Local optimization using surrogate functions
 ####
 
 function local_search(
-        surr::HermiteSplineSurrogate{D,T},
-        x₀::SVector{D,T},
-        state::Union{Nothing, DiscreteSurrogateSearcher{D,T}} = nothing;
-        maxiter::Int = 100,
-        maxeval::Int = maxiter,
-        xtol_rel = 1e-4,
-        xtol_abs = 1e-4,
-        initial_step = maximum(gridwidths(surr)) / 100,
-        xeval_radius = √sum(abs2, gridspacings(surr)) - sqrt(eps(T)),
-    ) where {D,T}
+    surr::HermiteSplineSurrogate{D, T},
+    x₀::SVector{D, T},
+    state::Union{Nothing, DiscreteSurrogateSearcher{D, T}} = nothing;
+    maxiter::Int = 100,
+    maxeval::Int = maxiter,
+    xtol_rel = 1e-4,
+    xtol_abs = 1e-4,
+    initial_step = maximum(gridwidths(surr)) / 100,
+    xeval_radius = √sum(abs2, gridspacings(surr)) - sqrt(eps(T)),
+) where {D, T}
 
     if state !== nothing
         # Initialize surrogate with domain corners
@@ -544,14 +545,14 @@ function local_search(
 
     x, xlast = x₀, x₀
     xlo, xhi = first(surr.grid), last(surr.grid)
-    opt = ADAM{D,T}(initial_step)
+    opt = ADAM{D, T}(initial_step)
 
     for _ in 1:maxiter
         if state !== nothing
             # Find nearest gridpoint to `x` and update surrogate
             I, xI = nearest_gridpoint(state, x)
             dmin = minimum(NormalHermiteSplines._get_nodes(surr.spl)) do p
-                norm(xI - NormalHermiteSplines._unnormalize(surr.spl, p))
+                return norm(xI - NormalHermiteSplines._unnormalize(surr.spl, p))
             end
             if dmin > xeval_radius
                 update!(surr, state, I; maxeval = maxeval)
@@ -608,7 +609,7 @@ function local_search(
 end
 =#
 
-function nearest_gridpoint(grid::AbstractArray{SVector{D,T},D}, x::SVector{D,T}) where {D,T}
+function nearest_gridpoint(grid::AbstractArray{SVector{D, T}, D}, x::SVector{D, T}) where {D, T}
     @inbounds xlo, xhi = first(grid), last(grid)
     @inbounds Ilo, Ihi = first(CartesianIndices(grid)), last(CartesianIndices(grid))
     lo, hi = SVector(Tuple(Ilo)), SVector(Tuple(Ihi))
@@ -617,15 +618,15 @@ function nearest_gridpoint(grid::AbstractArray{SVector{D,T},D}, x::SVector{D,T})
     xI = @inbounds grid[I]
     return I, xI
 end
-nearest_gridpoint(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T}) where {D,T} = nearest_gridpoint(state.grid, x)
+nearest_gridpoint(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T} = nearest_gridpoint(state.grid, x)
 
-function nearest_interior_gridpoint(grid::AbstractArray{SVector{D,T},D}, x::SVector{D,T}) where {D,T}
+function nearest_interior_gridpoint(grid::AbstractArray{SVector{D, T}, D}, x::SVector{D, T}) where {D, T}
     R = CartesianIndices(grid)
     One = CartesianIndex(ntuple(d -> 1, D))
     Ilo, Ihi = first(R) + One, last(R) - One
     return nearest_gridpoint(@views(grid[Ilo:Ihi]), x)
 end
-nearest_interior_gridpoint(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T}) where {D,T} = nearest_interior_gridpoint(state.grid, x)
+nearest_interior_gridpoint(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T} = nearest_interior_gridpoint(state.grid, x)
 
 ####
 #### Global optimization for NNLS problem
@@ -634,9 +635,9 @@ nearest_interior_gridpoint(state::DiscreteSurrogateSearcher{D,T}, x::SVector{D,T
 struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tb <: AbstractVector{T}, W}
     As::TA
     ∇As::TdA
-    αs::Array{SVector{D,T},D}
+    αs::Array{SVector{D, T}, D}
     b::Tb
-    u::Array{T,D}
+    u::Array{T, D}
     ∂Ax⁺::Vector{T}
     Ax⁺b::Vector{T}
     nnls_work::W
@@ -644,29 +645,29 @@ struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: Abstract
 end
 
 function NNLSDiscreteSurrogateSearch(
-        As::AbstractArray{T},  # size(As)  = (M, N, P1..., PD)
-        ∇As::AbstractArray{T}, # size(∇As) = (M, N, D, P1..., PD)
-        αs::NTuple{D},         # size(αs)  = (P1..., PD)
-        b::AbstractVector{T};  # size(b)   = (M,)
-        legacy::Bool = false,
-    ) where {D,T}
+    As::AbstractArray{T},  # size(As)  = (M, N, P1..., PD)
+    ∇As::AbstractArray{T}, # size(∇As) = (M, N, D, P1..., PD)
+    αs::NTuple{D},         # size(αs)  = (P1..., PD)
+    b::AbstractVector{T};  # size(b)   = (M,)
+    legacy::Bool = false,
+) where {D, T}
     M, N = size(As, 1), size(As, 2)
     @assert ndims(As) == 2 + D && ndims(∇As) == 3 + D # ∇As has extra dimension for parameter gradients
     @assert size(∇As)[1:3] == (M, N, D) # matrix dimensions must match, and gradient dimension must equal number of parameters
     @assert size(As)[3:end] == size(∇As)[4:end] == length.(αs) # dimension size must match parameters lengths
     @assert size(b) == (M,)
 
-    αs   = meshgrid(SVector{D,T}, αs...)
-    u    = zeros(T, size(αs))
+    αs = meshgrid(SVector{D, T}, αs...)
+    u = zeros(T, size(αs))
     ∂Ax⁺ = zeros(T, M)
     Ax⁺b = zeros(T, M)
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
-    NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, ∂Ax⁺, Ax⁺b, nnls_work, legacy)
+    return NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, ∂Ax⁺, Ax⁺b, nnls_work, legacy)
 end
 
-load!(prob::NNLSDiscreteSurrogateSearch{D,T}, b::AbstractVector{T}) where {D,T} = copyto!(prob.b, b)
+load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T} = copyto!(prob.b, b)
 
-function loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
+function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; As, b, nnls_work) = prob
     solve!(nnls_work, uview(As, :, :, I), b)
     ℓ = chi2(nnls_work)
@@ -674,10 +675,10 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) whe
     return u
 end
 
-function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) where {D,T}
+function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; As, ∇As, b, ∂Ax⁺, Ax⁺b, nnls_work) = prob
     ℓ = chi2(nnls_work)
-    ℓ <= eps(T) && return zero(SVector{D,T}) # loss capped at eps(T) from below; return zero gradient
+    ℓ <= eps(T) && return zero(SVector{D, T}) # loss capped at eps(T) from below; return zero gradient
     x = solution(nnls_work)
     @inbounds @. Ax⁺b = -b
     @inbounds for j in 1:size(As, 2)
@@ -692,19 +693,19 @@ function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D,T}, I::CartesianIndex{D}) 
         ∂u = prob.legacy ? ∂ℓ : ∂ℓ / ℓ
         return ∂u
     end
-    return SVector{D,T}(∇u)
+    return SVector{D, T}(∇u)
 end
 
-function CubicSplineSurrogate(prehook!, prob::NNLSDiscreteSurrogateSearch{1,T}; legacy = false) where {T}
+function CubicSplineSurrogate(prehook!, prob::NNLSDiscreteSurrogateSearch{1, T}; legacy = false) where {T}
     function f(I)
         prehook!(I)
-        loss!(prob, I)
+        return loss!(prob, I)
     end
-    CubicSplineSurrogate(f, prob.αs, SVector{1,T}[], T[], Ref(0), legacy)
+    return CubicSplineSurrogate(f, prob.αs, SVector{1, T}[], T[], Ref(0), legacy)
 end
 CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch; kwargs...) = CubicSplineSurrogate(I -> nothing, prob; kwargs...)
 
-function HermiteSplineSurrogate(prehook!, prob::NNLSDiscreteSurrogateSearch{D,T}) where {D,T}
+function HermiteSplineSurrogate(prehook!, prob::NNLSDiscreteSurrogateSearch{D, T}) where {D, T}
     function fg(I)
         prehook!(I)
         u = loss!(prob, I)
@@ -716,25 +717,25 @@ end
 HermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch) = HermiteSplineSurrogate(I -> nothing, prob)
 
 function surrogate_spline_opt(
-        prob::NNLSDiscreteSurrogateSearch{D},
-        surr::AbstractSurrogate{D};
-        mineval::Int = min(2^D, length(prob.αs)),
-        maxeval::Int = length(prob.αs),
-    ) where {D}
+    prob::NNLSDiscreteSurrogateSearch{D},
+    surr::AbstractSurrogate{D};
+    mineval::Int = min(2^D, length(prob.αs)),
+    maxeval::Int = length(prob.αs),
+) where {D}
     state = DiscreteSurrogateSearcher(surr; mineval = mineval, maxeval = maxeval)
-    bisection_search(surr, state; maxeval = maxeval)
+    return bisection_search(surr, state; maxeval = maxeval)
 end
 
 function spline_opt(
-        spl::NormalSpline{D,T},
-        prob::NNLSDiscreteSurrogateSearch{D,T};
-        # alg = :LN_COBYLA,        # local, gradient-free, linear approximation of objective
-        # alg = :LN_BOBYQA,        # local, gradient-free, quadratic approximation of objective
-        # alg = :GN_ORIG_DIRECT_L, # global, gradient-free, systematically divides search space into smaller hyper-rectangles via a branch-and-bound technique, systematic division of the search domain into smaller and smaller hyperrectangles, "more biased towards local search"
-        # alg = :GN_AGS,           # global, gradient-free, employs the Hilbert curve to reduce the source problem to the univariate one.
-        # alg = :GD_STOGO,         # global, with-gradient, systematically divides search space into smaller hyper-rectangles via a branch-and-bound technique, and searching them by a gradient-based local-search algorithm (a BFGS variant)
-        alg = :LD_SLSQP,         # local, with-gradient, "Sequential Least-Squares Quadratic Programming"; uses dense-matrix methods (ordinary BFGS, not low-storage BFGS)
-    ) where {D,T}
+    spl::NormalSpline{D, T},
+    prob::NNLSDiscreteSurrogateSearch{D, T};
+    # alg = :LN_COBYLA,        # local, gradient-free, linear approximation of objective
+    # alg = :LN_BOBYQA,        # local, gradient-free, quadratic approximation of objective
+    # alg = :GN_ORIG_DIRECT_L, # global, gradient-free, systematically divides search space into smaller hyper-rectangles via a branch-and-bound technique, systematic division of the search domain into smaller and smaller hyperrectangles, "more biased towards local search"
+    # alg = :GN_AGS,           # global, gradient-free, employs the Hilbert curve to reduce the source problem to the univariate one.
+    # alg = :GD_STOGO,         # global, with-gradient, systematically divides search space into smaller hyper-rectangles via a branch-and-bound technique, and searching them by a gradient-based local-search algorithm (a BFGS variant)
+    alg = :LD_SLSQP,         # local, with-gradient, "Sequential Least-Squares Quadratic Programming"; uses dense-matrix methods (ordinary BFGS, not low-storage BFGS)
+) where {D, T}
 
     evaluate!(prob.u, spl, prob.αs)
     _, i = findmin(prob.u)
@@ -751,18 +752,18 @@ function spline_opt(
         @inbounds Float64(evaluate(spl, x[1]))
     end
     minf, minx, ret = NLopt.optimize(opt, Vector{Float64}(α₀))
-    x, f = SVector{D,T}(minx), T(minf)
+    x, f = SVector{D, T}(minx), T(minf)
     return x, f
 end
 
 function mock_surrogate_search_problem(
-        b::AbstractVector{T},
-        opts::T2mapOptions{T},
-        ::Val{D},
-        ::Val{ETL};
-        alphas = range(50, 180, length = opts.nRefAngles),
-        betas = range(50, 180, length = opts.nRefAngles),
-    ) where {D, T, ETL}
+    b::AbstractVector{T},
+    opts::T2mapOptions{T},
+    ::Val{D},
+    ::Val{ETL};
+    alphas = range(50, 180; length = opts.nRefAngles),
+    betas = range(50, 180; length = opts.nRefAngles),
+) where {D, T, ETL}
 
     # Mock CPMG image
     @assert opts.nTE == ETL
@@ -778,19 +779,19 @@ function mock_surrogate_search_problem(
     for Iαs in Rαs
         @inbounds for j in 1:opts.nT2
             θαs = D == 1 ?
-                restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]],)) :
-                restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]], β = alphas[Iαs[2]]))
+                  restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]])) :
+                  restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]], β = alphas[Iαs[2]]))
             j!(uview(∇As, :, j, :, Iαs), uview(As, :, j, Iαs), θαs)
         end
     end
 
     return NNLSDiscreteSurrogateSearch(As, ∇As, opt_ranges, b)
 end
-function mock_surrogate_search_problem(::Val{D}, ::Val{ETL}, opts = mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = ETL); kwargs...) where {D,ETL}
+function mock_surrogate_search_problem(::Val{D}, ::Val{ETL}, opts = mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = ETL); kwargs...) where {D, ETL}
     b = vec(mock_image(opts))
-    mock_surrogate_search_problem(b, opts, Val(D), Val(ETL); kwargs...)
+    return mock_surrogate_search_problem(b, opts, Val(D), Val(ETL); kwargs...)
 end
 function mock_surrogate_search_problem(b::AbstractVector, opts::T2mapOptions, ::Val{D}; kwargs...) where {D}
     @assert length(b) == opts.nTE
-    mock_surrogate_search_problem(b, opts, Val(D), Val(length(b)); kwargs...)
+    return mock_surrogate_search_problem(b, opts, Val(D), Val(length(b)); kwargs...)
 end

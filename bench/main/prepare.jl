@@ -9,10 +9,10 @@ function prepare_project(julia_version::String, pkg_spec::String)
     else
         Pkg.activate(mkpath(project_folder))
         try
-            Pkg.add(Pkg.PackageSpec(name = "DECAES", version = pkg_spec))
+            Pkg.add(Pkg.PackageSpec(; name = "DECAES", version = pkg_spec))
         catch e1
             try
-                Pkg.add(Pkg.PackageSpec(name = "DECAES", rev = pkg_spec))
+                Pkg.add(Pkg.PackageSpec(; name = "DECAES", rev = pkg_spec))
             catch e2
                 @warn sprint(showerror, e1, catch_backtrace())
                 @warn sprint(showerror, e2, catch_backtrace())

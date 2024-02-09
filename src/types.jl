@@ -16,7 +16,7 @@ This struct collects keyword arguments passed to `T2mapSEcorr`, performs checks 
 See also:
 * [`T2mapSEcorr`](@ref)
 """
-@with_kw_noshow struct T2mapOptions{T<:Real}
+@with_kw_noshow struct T2mapOptions{T <: Real}
     "Perform T2-mapping using legacy algorithms."
     legacy::Bool = false
 
@@ -24,7 +24,7 @@ See also:
     Threaded::Bool = Threads.nthreads() > 1
 
     "Size of first 3 dimensions of input 4D image. This argument has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`."
-    MatrixSize::NTuple{3,Int}
+    MatrixSize::NTuple{3, Int}
     @assert all(MatrixSize .>= 1)
 
     "Number of echoes in input signal. This argument is has no default, but is inferred automatically as `size(image, 4)` when calling `T2mapSEcorr(image; kwargs...)`."
@@ -40,7 +40,7 @@ See also:
     @assert nT2 >= 2
 
     "Tuple of min and max T2 values (Units: seconds). This argument has no default."
-    T2Range::NTuple{2,T} # seconds
+    T2Range::NTuple{2, T} # seconds
     @assert 0.0 < T2Range[1] < T2Range[2]
 
     "Assumed value of T1 (Units: seconds)."
@@ -68,7 +68,7 @@ See also:
     @assert Reg ∈ ("none", "chi2", "gcv", "lcurve")
 
     "Constraint on ``\\chi^2`` used for regularization when `Reg == \"chi2\"`."
-    Chi2Factor::Union{T,Nothing} = nothing
+    Chi2Factor::Union{T, Nothing} = nothing
     @assert (Reg == "chi2" && Chi2Factor !== nothing && Chi2Factor > 1.0) || Reg != "chi2"
 
     "Refocusing pulse control angle (Units: degrees)."
@@ -76,7 +76,7 @@ See also:
     @assert 0.0 <= RefConAngle <= 180.0
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
-    SetFlipAngle::Union{T,Nothing} = nothing
+    SetFlipAngle::Union{T, Nothing} = nothing
     @assert SetFlipAngle === nothing || 0.0 <= SetFlipAngle <= 180.0
 
     "Boolean flag to include a 3D array of the ``\\ell^2``-norms of the residuals from the NNLS fits in the output maps dictionary."
@@ -95,7 +95,7 @@ See also:
     Silent::Bool = false
 end
 T2mapOptions(args...; kwargs...) = T2mapOptions{Float64}(args...; kwargs...)
-T2mapOptions(image::Array{T,4}; kwargs...) where {T} = T2mapOptions{T}(; kwargs..., MatrixSize = size(image)[1:3], nTE = size(image)[4])
+T2mapOptions(image::Array{T, 4}; kwargs...) where {T} = T2mapOptions{T}(; kwargs..., MatrixSize = size(image)[1:3], nTE = size(image)[4])
 
 t2_times(o::T2mapOptions{T}) where {T} = logrange(o.T2Range..., o.nT2)
 flip_angles(o::T2mapOptions{T}) where {T} = o.SetFlipAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetFlipAngle]
@@ -128,7 +128,7 @@ This struct collects keyword arguments passed to `T2partSEcorr`, performs checks
 See also:
 * [`T2partSEcorr`](@ref)
 """
-@with_kw_noshow struct T2partOptions{T<:Real}
+@with_kw_noshow struct T2partOptions{T <: Real}
     "Calculate T2-parts using legacy algorithms."
     legacy::Bool = false
 
@@ -136,7 +136,7 @@ See also:
     Threaded::Bool = Threads.nthreads() > 1
 
     "Size of first 3 dimensions of input 4D T2 distribution. This argument is has no default, but is inferred automatically as `size(t2dist)[1:3]` when calling `T2partSEcorr(t2dist; kwargs...)`."
-    MatrixSize::NTuple{3,Int}
+    MatrixSize::NTuple{3, Int}
     @assert all(MatrixSize .>= 1)
 
     "Number of T2 times to use. This argument has no default."
@@ -144,29 +144,29 @@ See also:
     @assert nT2 >= 2
 
     "Tuple of min and max T2 values (Units: seconds). This argument has no default."
-    T2Range::NTuple{2,T} # seconds
+    T2Range::NTuple{2, T} # seconds
     @assert 0.0 < T2Range[1] < T2Range[2]
 
     "Tuple of min and max T2 values of the short peak window (Units: seconds). This argument has no default."
-    SPWin::NTuple{2,T} # seconds
+    SPWin::NTuple{2, T} # seconds
     @assert SPWin[1] < SPWin[2]
 
     "Tuple of min and max T2 values of the middle peak window (Units: seconds). This argument has no default."
-    MPWin::NTuple{2,T} # seconds
+    MPWin::NTuple{2, T} # seconds
     @assert MPWin[1] < MPWin[2]
 
     "Apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small peak window cutoff time. `Sigmoid` is the delta-T2 parameter, which is the distance in seconds on either side of the `SPWin` upper limit where the sigmoid curve reaches 10% and 90% (Units: seconds)."
-    Sigmoid::Union{T,Nothing} = nothing
+    Sigmoid::Union{T, Nothing} = nothing
     @assert Sigmoid === nothing || Sigmoid > 0
 
     "Suppress printing to the console."
     Silent::Bool = false
 end
 T2partOptions(args...; kwargs...) = T2partOptions{Float64}(args...; kwargs...)
-T2partOptions(t2dist::Array{T,4}; kwargs...) where {T} = T2partOptions{T}(; kwargs..., MatrixSize = size(t2dist)[1:3], nT2 = size(t2dist)[4])
+T2partOptions(t2dist::Array{T, 4}; kwargs...) where {T} = T2partOptions{T}(; kwargs..., MatrixSize = size(t2dist)[1:3], nT2 = size(t2dist)[4])
 
 function T2partOptions(o::T2mapOptions{T}; kwargs...) where {T}
-    T2partOptions{T}(;
+    return T2partOptions{T}(;
         legacy = o.legacy,
         Threaded = o.Threaded,
         MatrixSize = o.MatrixSize,

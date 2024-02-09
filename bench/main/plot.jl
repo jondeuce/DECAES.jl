@@ -2,7 +2,7 @@ using Dates
 using DataFrames
 using JSON
 using StatsPlots
-pyplot(size = (1600,1200))
+pyplot(; size = (1600, 1200))
 
 dateformat() = "yyyy-mm-dd-T-HH-MM-SS"
 getnow() = Dates.format(Dates.now(), dateformat())
@@ -33,8 +33,8 @@ function plot_results(df; compare_version = "v0.3")
     gd = groupby(df, [:dataset, :threads])
     ptimes = []
     pspeedups = []
-    for (k,g) in zip(keys(gd), gd)
-        groupkeystr = join(["$k = $v" for (k,v) in pairs(k)], ", ")
+    for (k, g) in zip(keys(gd), gd)
+        groupkeystr = join(["$k = $v" for (k, v) in pairs(k)], ", ")
 
         ptime = @df g scatter(
             :version, :time, group = :julia,
@@ -49,14 +49,14 @@ function plot_results(df; compare_version = "v0.3")
             grel = DataFrame()
             for gsub in groupby(deepcopy(g), [:julia, :threads, :optlevel])
                 if compare_version ∈ gsub.version
-                    gsub.time .= only(gsub.time[gsub.version .== compare_version]) ./ gsub.time
+                    gsub.time .= only(gsub.time[gsub.version.==compare_version]) ./ gsub.time
                     append!(grel, gsub)
                 end
             end
         else
             # Times relative to minimum `compare_version` time
             grel = deepcopy(g)
-            grel.time .= minimum(grel[grel.version .== compare_version, :time]) ./ grel.time
+            grel.time .= minimum(grel[grel.version.==compare_version, :time]) ./ grel.time
         end
         pspeedup = @df grel scatter(
             :version, :time, group = :julia,
@@ -68,6 +68,7 @@ function plot_results(df; compare_version = "v0.3")
     end
     plot(ptimes...) |> display
     plot(pspeedups...) |> display
+    return nothing
 end
 
 df = load_results()

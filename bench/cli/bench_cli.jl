@@ -10,10 +10,10 @@ for (i, settings) in enumerate(SETTINGS_FILES)
     args = ["@" * settings, "--quiet"]
     if i == 1
         # Measure overhead of first run
-        suite["main (first run)"] = @benchmarkable DECAES.main($args) samples=1 evals=1
+        suite["main (first run)"] = @benchmarkable DECAES.main($args) samples = 1 evals = 1
     end
     # Measure performance of runs after compilation
-    suite["main"] = @benchmarkable DECAES.main($args) samples=3 evals=1 seconds=3600
+    suite["main"] = @benchmarkable DECAES.main($args) samples = 5 evals = 1 seconds = 3600
 end
 
 if isinteractive()

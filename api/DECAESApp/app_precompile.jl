@@ -10,4 +10,6 @@ DECAES.redirect_to_devnull() do
     # Run test suite, excluding Matlab MWI Toolbox compatibility tests
     ENV["DECAES_RUN_MWI_TOOLBOX_TESTS"] = "0"
     include(joinpath(pkgdir(DECAES), "test", "runtests.jl"))
+
+    return nothing
 end
