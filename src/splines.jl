@@ -53,25 +53,27 @@ end
 # Fit a spline to data `(X, Y)` and minimize `spl(x)`
 function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1))
     @assert length(X) == length(Y) "X and Y must have the same length"
+    @assert length(X) > 1 "X and Y must have at least 2 elements"
     @assert 0 < deg_spline <= 3 "Degree of spline must be 1, 2, or 3"
     if deg_spline == 1
         # Linear spline achievies minimum at one of the nodes
         y, i = findmin(Y)
-        return (; x = X[i], y)
+        return @inbounds (; x = X[i], y)
     end
     spl = make_spline(X, Y; deg_spline)
     knots = Dierckx.get_knots(spl)
     polys = build_polynomials(spl, knots)
-    x, y = knots[1], polys[1](0) # initial lefthand point
+    x, y = @inbounds knots[1], polys[1](0) # initial lefthand point
+    atol = @inbounds 100 * eps(eltype(knots)) * (knots[end] - knots[1]) # tolerance for real roots
     @inbounds for (i, p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
         _x, _y = x₁, p(x₁ - x₀) # check right endpoint
         (_y < y) && (x = _x; y = _y)
         for rᵢ in extrema(p) # extrema(p) returns the zeros of derivative(p)
-            if imag(rᵢ) ≈ 0 # real roots only
+            if abs(imag(rᵢ)) <= atol # real roots only
                 xᵢ = x₀ + real(rᵢ)
-                if x₀ <= xᵢ <= x₁ # filter roots within range
-                    _x, _y = xᵢ, p(real(rᵢ))
+                if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
+                    _x, _y = clamp(xᵢ, x₀, x₁), p(real(rᵢ))
                     (_y < y) && (x = _x; y = _y)
                 end
             end
@@ -87,11 +89,12 @@ function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; de
         # Linear spline has at most one root in each section
         @inbounds for i in 1:length(X)-1
             x₀, y₀, x₁, y₁ = X[i], Y[i], X[i+1], Y[i+1]
-            if y₀ <= value <= y₁
-                slope = (value - y₀) / (y₁ - y₀)
-                x = y₀ ≈ value ? x₀ :
-                    y₁ ≈ value ? x₁ :
-                    x₀ + (x₁ - x₀) * (isfinite(slope) ? slope : zero(slope))
+            if y₀ <= value <= y₁ || y₁ <= value <= y₀
+                if y₀ == y₁
+                    x = x₀
+                else
+                    x = y₀ ≈ value ? x₀ : y₁ ≈ value ? x₁ : clamp(x₀ + (x₁ - x₀) * ((value - y₀) / (y₁ - y₀)), x₀, x₁)
+                end
                 break
             end
         end
@@ -99,17 +102,20 @@ function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; de
         spl = make_spline(X, Y; deg_spline)
         knots = Dierckx.get_knots(spl)
         polys = build_polynomials(spl)
+        atol = @inbounds 100 * eps(eltype(knots)) * (knots[end] - knots[1]) # tolerance for real roots
         @inbounds for (i, p) in enumerate(polys)
-            x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
             # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
+            x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
             for rᵢ in PolynomialRoots.roots(sub!(p, value))
-                if imag(rᵢ) ≈ 0 # real roots only
+                if abs(imag(rᵢ)) <= atol # real roots only
                     xᵢ = x₀ + real(rᵢ)
-                    if x₀ <= xᵢ <= x₁ # filter roots within range
-                        x = isnan(x) ? xᵢ : min(x, xᵢ)
+                    if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
+                        _x = clamp(xᵢ, x₀, x₁)
+                        x = isnan(x) ? _x : min(x, _x)
                     end
                 end
             end
+            !isnan(x) && break # found a root
         end
     end
     return x

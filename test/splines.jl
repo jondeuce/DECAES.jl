@@ -1,18 +1,19 @@
 function test_cubic_splines()
-    X = sort(rand(10))
-    Y = rand(10)
+    for npts in 2:5, deg_spline in 1:min(npts - 1, 3)
+        X = sort!(randn(npts))
+        Y = randn(npts)
 
-    for deg_spline in 1:3
         spl = DECAES.make_spline(X, Y; deg_spline)
         (; x, y) = DECAES.spline_opt(X, Y; deg_spline)
-        @assert X[1] <= x <= X[end]
-        @assert spl(x) ≈ y
-        @assert minimum(spl, range(X[1], X[end]; length = 100)) >= y
+        ŷ = minimum(spl, range(X[1], X[end]; length = 100))
+        @test X[1] <= x <= X[end]
+        @test spl(x) ≈ y
+        @test ŷ >= y - 100 * eps()
 
         ȳ = (maximum(Y) + minimum(Y)) / 2
         x̄ = DECAES.spline_root(X, Y, ȳ; deg_spline)
-        @assert X[1] <= x̄ <= X[end]
-        @assert spl(x̄) ≈ ȳ
+        @test X[1] <= x̄ <= X[end]
+        @test spl(x̄) ≈ ȳ
     end
 end
 

@@ -493,21 +493,22 @@ end
 #### Generate (moderately) realistic mock images
 ####
 
-function mock_t2map_opts(::Type{T} = Float64; nsignals = nothing, kwargs...) where {T}
+function mock_t2map_opts(::Type{T} = Float64; NumVoxels = nothing, kwargs...) where {T}
     return T2mapOptions{T}(;
-        MatrixSize = nsignals === nothing ? (2, 2, 2) : (nsignals, 1, 1),
+        MatrixSize = NumVoxels === nothing ? (2, 2, 2) : (NumVoxels, 1, 1),
         TE = 10e-3,
         nTE = 32,
         T2Range = (10e-3, 2.0),
         nT2 = 40,
         Reg = "lcurve",
+        Chi2Factor = 1.02,
         kwargs...,
     )
 end
 
-function mock_t2parts_opts(::Type{T} = Float64; nsignals = nothing, kwargs...) where {T}
+function mock_t2parts_opts(::Type{T} = Float64; NumVoxels = nothing, kwargs...) where {T}
     return T2partOptions{T}(;
-        MatrixSize = nsignals === nothing ? (2, 2, 2) : (nsignals, 1, 1),
+        MatrixSize = NumVoxels === nothing ? (2, 2, 2) : (NumVoxels, 1, 1),
         nT2 = 40,
         T2Range = (10e-3, 2.0),
         SPWin = (10e-3, 40e-3),
@@ -564,20 +565,14 @@ function mock_T2_dist(o::T2mapOptions = mock_t2map_opts(Float64); kwargs...)
     return T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]
 end
 
-# Simple benchmarks
-function bench_mock_image(::Type{T} = Float64; nsignals = 100 * 1024, kwargs...) where {T}
-    # Main.@btime mock_image($T; nsignals = $nsignals)
-    @time mock_image(T; nsignals, kwargs...)
-end
-
-function bench_mock_t2map(; nsignals = 100 * 1024, kwargs...)
-    t2map_opts = mock_t2map_opts(; nsignals, kwargs...)
+# Full mock T2 pipeline
+function mock_T2_pipeline(; NumVoxels = 1024, kwargs...)
+    t2map_opts = mock_t2map_opts(; NumVoxels, kwargs...)
     t2part_opts = T2partOptions(t2map_opts; SPWin = (t2map_opts.T2Range[1], 40e-3), MPWin = (40e-3, t2map_opts.T2Range[2]))
 
     image = mock_image(t2map_opts)
-    # t2maps, t2dist = Main.@btime T2mapSEcorr($image, $t2map_opts)
-    t2maps, t2dist = @time T2mapSEcorr(image, t2map_opts)
-    t2part = @time T2partSEcorr(t2dist, t2part_opts)
+    t2maps, t2dist = T2mapSEcorr(image, t2map_opts)
+    t2part = T2partSEcorr(t2dist, t2part_opts)
 
     return t2maps, t2dist, t2part
 end
