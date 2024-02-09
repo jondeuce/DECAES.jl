@@ -17,6 +17,7 @@ makedocs(;
         "Home" => "index.md",
         "cli.md",
         "ref.md",
+        "internals.md",
     ],
 )
 

@@ -1,6 +1,4 @@
-"""
-Lightweight polynomial type
-"""
+# Lightweight polynomial type
 struct Poly{T, A <: AbstractVector{T}}
     c::A
 end

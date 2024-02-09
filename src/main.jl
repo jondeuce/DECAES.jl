@@ -356,9 +356,7 @@ function main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
     return nothing
 end
 
-"""
-Build DECAES into a relocatable executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
-"""
+# Build DECAES into a relocatable executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
 function compile_decaes_app()
     # Copy DECAES app into a temporary directory
     app_dir = pkgdir(DECAES, "api", "DECAESApp")

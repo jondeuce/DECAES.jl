@@ -224,12 +224,10 @@ function chi2factor_loss!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = nothin
     return loss
 end
 
-"""
-Helper struct which wraps `N` caches of `NNLSTikhonovRegProblem` workspaces.
-Useful for optimization problems where the last function call may not be
-the optimium, but perhaps it was one or two calls previous and is still in the
-`NNLSTikhonovRegProblemCache` and a recomputation can be avoided.
-"""
+# Helper struct which wraps `N` caches of `NNLSTikhonovRegProblem` workspaces.
+# Useful for optimization problems where the last function call may not be
+# the optimium, but perhaps it was one or two calls previous and is still in the
+# `NNLSTikhonovRegProblemCache` and a recomputation can be avoided.
 struct NNLSTikhonovRegProblemCache{N, W <: NTuple{N}}
     cache::W
     idx::Base.RefValue{Int}

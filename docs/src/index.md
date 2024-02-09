@@ -9,6 +9,7 @@ Pages = [
     "t2part.md",
     "cli.md",
     "ref.md",
+    "internals.md",
 ]
 Depth = 2
 ```

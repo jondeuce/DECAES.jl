@@ -18,6 +18,12 @@ T2partOptions
 T2partSEcorr
 ```
 
+## [Main entrypoint function](@id main)
+
+```@docs
+main
+```
+
 ## [NNLS analysis](@id nnls)
 
 ```@docs
@@ -32,10 +38,4 @@ lcurve_corner
 
 ```@docs
 EPGdecaycurve
-```
-
-## [Main entrypoint function](@id main)
-
-```@docs
-main
 ```

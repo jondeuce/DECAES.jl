@@ -5,7 +5,7 @@
 # This NNLS submodule is modified version of the corresponding NNLS module from
 # the forked NonNegLeastSquares.jl repository:
 #
-#   https://github.com/jondeuce/NonNegLeastSquares.jl/blob/a122bf7acb498efcaf140b719133691e7c4cd03d/src/nnls.jl#L1
+#   https://github.com/jondeuce/NonNegLeastSquares.jl/blob/a122bf7acb498efcaf140b719133691e7c4cd03d/src/nnls.jl
 #
 # The original MIT licence from NonNegLeastSquares.jl is included below:
 #
