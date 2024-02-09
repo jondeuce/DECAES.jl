@@ -65,10 +65,10 @@ function Base.copyto!(y::AbstractVector{T}, x::PaddedVector{T}) where {T}
     @assert size(x) == size(y)
     (; b, pad) = x
     m = length(b)
-    @acc for i in 1:m
+    @inbounds @simd for i in 1:m
         y[i] = b[i]
     end
-    @acc for i in m+1:m+pad
+    @inbounds @simd for i in m+1:m+pad
         y[i] = zero(T)
     end
     return y
@@ -89,10 +89,10 @@ function Base.copyto!(B::AbstractMatrix{T}, P::TikhonovPaddedMatrix{T}) where {T
     A, μ = parent(P), mu(P)
     m, n = size(A)
     @inbounds for j in 1:n
-        @acc for i in 1:m
+        @simd for i in 1:m
             B[i, j] = A[i, j]
         end
-        @acc for i in m+1:m+n
+        @simd for i in m+1:m+n
             B[i, j] = ifelse(i == m + j, μ, zero(T))
         end
     end
@@ -1244,7 +1244,7 @@ function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
     # where the matrices have sizes
     #   A: (m, n), Aμ: (m, m), At: (n, m), AtA: (n, n)
     mul!(AtA′, A′', A′) # A'A
-    @acc for i in 1:n
+    @inbounds @simd for i in 1:n
         AtA′[i, i] += μ^2 # A'A + μ^2*I
     end
     ldiv!(At′, cholesky!(Symmetric(AtA′)), A′') # (A'A + μ^2*I)^-1 * A'

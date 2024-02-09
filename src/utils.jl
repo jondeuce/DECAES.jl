@@ -56,14 +56,14 @@ function with_random_seed(f, rng = Random.default_rng(); seed::Int = 0)
 end
 
 function set_diag!(A::AbstractMatrix, val)
-    @acc for i in 1:min(size(A)...)
+    @inbounds @simd for i in 1:min(size(A)...)
         A[i, i] = val
     end
     return A
 end
 
 function set_top!(A::AbstractArray, B::AbstractArray)
-    @acc for I in CartesianIndices(B)
+    @inbounds @simd for I in CartesianIndices(B)
         A[I] = B[I]
     end
     return A
@@ -205,7 +205,8 @@ Base.setindex!(::MappedArray, v, i...) = error("MappedArray's are read only")
 
 function mapfind(finder, m::MappedArray)
     y, i = finder(m)
-    return @inbounds(m.x[i]), y, i
+    x = @inbounds m.x[i]
+    return x, y, i
 end
 @inline mapfindmax(m::MappedArray) = mapfind(findmax, m)
 @inline mapfindmin(m::MappedArray) = mapfind(findmin, m)
@@ -305,15 +306,15 @@ function tforeach(work!, allocate, x::AbstractArray; blocksize::Int = default_bl
     if nt > 1 && len > blocksize
         @sync for p in split_indices(len, blocksize)
             Threads.@spawn allocate() do resource
-                @simd ivdep for i in p
-                    @inbounds work!(x[i], resource)
+                @inbounds @simd for i in p
+                    work!(x[i], resource)
                 end
             end
         end
     else
         allocate() do resource
-            @simd ivdep for i in eachindex(x)
-                @inbounds work!(x[i], resource)
+            @inbounds @simd for i in eachindex(x)
+                work!(x[i], resource)
             end
         end
     end
@@ -541,7 +542,7 @@ function mock_image(o::T2mapOptions{T}; SNR = 50) where {T}
         @inbounds begin
             m .= sfr .* dc1 .+ (1 - sfr) .* dc2 # bi-exponential signal with EPG correction
             σM = m[1] * σ
-            for k in 1:nTE
+            @simd for k in 1:nTE
                 zR, zI = σM * randn(T), σM * randn(T)
                 m[k] = √((m[k] + zR)^2 + zI^2)
             end

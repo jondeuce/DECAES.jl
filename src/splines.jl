@@ -32,7 +32,7 @@ end
 
 function build_polynomials(spl::Dierckx.Spline1D, knots = Dierckx.get_knots(spl))
     k = spl.k
-    @inbounds t = knots[1:end-1]
+    t = knots[1:end-1]
     coeffs = zeros(k + 1, length(t))
     @inbounds coeffs[1, :] .= spl(t)
     @inbounds for m in 1:k

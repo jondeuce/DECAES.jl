@@ -515,7 +515,12 @@ function load_image(filename, ::Val{N}) where {N}
     elseif maybe_get_suffix(filename) ∈ (".nii", ".nii.gz")
         # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned:
         #   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
-        data = NIfTI.niread(filename)
+        nii = NIfTI.niread(filename)
+        scl_slope, scl_inter = nii.header.scl_slope, nii.header.scl_inter
+        if scl_slope == 0
+            scl_slope, scl_inter = one(scl_slope), zero(scl_inter)
+        end
+        data = nii.raw .* scl_slope .+ scl_inter
 
     elseif maybe_get_suffix(filename) ∈ (".par", ".xml", ".rec")
         rec = ParXRec.load(filename)

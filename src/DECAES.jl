@@ -21,23 +21,11 @@ using Parameters: Parameters, @with_kw, @with_kw_noshow
 using PolynomialRoots: PolynomialRoots
 using PrecompileTools: PrecompileTools, @compile_workload, @setup_workload
 using ProgressMeter: ProgressMeter, Progress, BarGlyphs
-using SIMD: SIMD, FloatingTypes, Vec, shufflevector
+# using SIMD: SIMD, FloatingTypes, Vec, shufflevector
 using Scratch: Scratch, @get_scratch!
 using StaticArrays: StaticArrays, FieldVector, SA, SArray, SVector, SMatrix, SizedVector, MVector
 using TupleTools: TupleTools
 using UnsafeArrays: UnsafeArrays, uview
-
-macro acc(ex)
-    # Your inner loop should have the following properties to allow vectorization:
-    #   * The loop must be an innermost loop
-    #   * The loop body must be straight-line code. Therefore, [`@inbounds`](@ref) is currently needed for all array accesses. The compiler can sometimes turn short `&&`, `||`, and `?:` expressions into straight-line code if it is safe to evaluate all operands unconditionally. Consider using the [`ifelse`](@ref) function instead of `?:` in the loop if it is safe to do so.
-    #   * Accesses must have a stride pattern and cannot be "gathers" (random-index reads) or "scatters" (random-index writes).
-    #   * The stride should be unit stride.
-    # With the ivdep flag:
-    #   * There exists no loop-carried memory dependencies
-    #   * No iteration ever waits on a previous iteration to make forward progress.
-    return esc(:(@inbounds @simd ivdep $(ex)))
-end
 
 include("NNLS.jl")
 using .NNLS

@@ -101,7 +101,7 @@ abstract type AbstractEPGWorkspace{T, ETL} end
 
 @inline EPGdecaycurve_work(::EPGParameterization{T, ETL}) where {T, ETL} = EPGdecaycurve_work(T, ETL)
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
-@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
+# @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
 
 """
     EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real)
@@ -402,7 +402,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T, ETL}, θ:
 
         # inner loop
         jup = min(i, ETL - i)
-        @simd for j in 2:jup
+        for j in 2:jup
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
             MPSV[j]        = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
@@ -424,6 +424,7 @@ end
 #### EPGWork_ReIm_Generated
 ####
 
+#=
 struct EPGWork_ReIm_Generated{T, ETL, MPSVType <: AbstractVector{SVector{3, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
     MPSV::MPSVType
     dc::DCType
@@ -508,6 +509,7 @@ end
 @generated function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_Generated{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
     return epg_decay_curve_impl!(dc, work, θ)
 end
+=#
 
 ####
 #### EPGWork_ReIm_DualVector
@@ -839,6 +841,7 @@ end
 #### EPGWork_ReIm_DualPaddedMVector_Vec_Split
 ####
 
+#=
 struct EPGWork_ReIm_DualPaddedMVector_Vec_Split{T, ETL, MPSVType <: AbstractVector{Vec{4, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
     MPSV₁::MPSVType
     MPSV₂::MPSVType
@@ -916,6 +919,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMV
 
     return dc
 end
+=#
 
 ####
 #### EPGWork_ReIm_DualPaddedVector_Split
@@ -1007,6 +1011,7 @@ end
 # As this function is called many times during T2mapSEcorr, the micro-optimizations are worth the loss of code readability.
 # See `EPGWork_Basic_Cplx` for a more readable, mathematically identicaly implementation.
 
+#=
 struct EPGWork_Vec{T, ETL, MPSVType <: AbstractVector{Vec{2, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
     MPSV::MPSVType
     dc::DCType
@@ -1066,7 +1071,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T, ETL}, θ::
 
         ###########################
         # flipmat + relaxmat loop
-        @inbounds for j in 4:3:3*min(i - 1, ETL)
+        for j in 4:3:3*min(i - 1, ETL)
             Vx, Vy, Vz = MPSV[j], MPSV[j+1], MPSV[j+2]
             b1z        = shufflevector(b1F * Vz, Val((1, 0)))
             MPSV[j]    = Mz4 # relaxmat: assign forward, j -> j+3
@@ -1098,6 +1103,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T, ETL}, θ::
 
     return dc
 end
+=#
 
 ####
 #### Algorithm list
@@ -1105,13 +1111,13 @@ end
 
 const EPG_Algorithms = Any[
     EPGWork_Basic_Cplx,
-    EPGWork_Vec,
+    # EPGWork_Vec,
     EPGWork_ReIm,
     EPGWork_ReIm_DualVector,
     EPGWork_ReIm_DualVector_Split,
     EPGWork_ReIm_DualVector_Split_Dynamic,
     EPGWork_ReIm_DualMVector_Split,
-    EPGWork_ReIm_DualPaddedMVector_Vec_Split,
+    # EPGWork_ReIm_DualPaddedMVector_Vec_Split,
     EPGWork_ReIm_DualPaddedVector_Split,
-    EPGWork_ReIm_Generated,
+    # EPGWork_ReIm_Generated,
 ]
