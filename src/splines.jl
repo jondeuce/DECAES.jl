@@ -64,7 +64,7 @@ function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, le
     knots = Dierckx.get_knots(spl)
     polys = build_polynomials(spl, knots)
     x, y = @inbounds knots[1], polys[1](0) # initial lefthand point
-    atol = @inbounds 100 * eps(eltype(knots)) * (knots[end] - knots[1]) # tolerance for real roots
+    atol = 100 * eps(eltype(knots)) # tolerance for real roots
     @inbounds for (i, p) in enumerate(polys)
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
         _x, _y = x₁, p(x₁ - x₀) # check right endpoint
@@ -90,11 +90,10 @@ function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; de
         @inbounds for i in 1:length(X)-1
             x₀, y₀, x₁, y₁ = X[i], Y[i], X[i+1], Y[i+1]
             if y₀ <= value <= y₁ || y₁ <= value <= y₀
-                if y₀ == y₁
-                    x = x₀
-                else
-                    x = y₀ ≈ value ? x₀ : y₁ ≈ value ? x₁ : clamp(x₀ + (x₁ - x₀) * ((value - y₀) / (y₁ - y₀)), x₀, x₁)
-                end
+                x = y₀ == y₁ ? x₀ :
+                    y₀ ≈ value ? x₀ :
+                    y₁ ≈ value ? x₁ :
+                    clamp(x₀ + (x₁ - x₀) * ((value - y₀) / (y₁ - y₀)), x₀, x₁)
                 break
             end
         end
@@ -102,7 +101,7 @@ function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; de
         spl = make_spline(X, Y; deg_spline)
         knots = Dierckx.get_knots(spl)
         polys = build_polynomials(spl)
-        atol = @inbounds 100 * eps(eltype(knots)) * (knots[end] - knots[1]) # tolerance for real roots
+        atol = 100 * eps(eltype(knots)) # tolerance for real roots
         @inbounds for (i, p) in enumerate(polys)
             # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
             x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
@@ -110,8 +109,8 @@ function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; de
                 if abs(imag(rᵢ)) <= atol # real roots only
                     xᵢ = x₀ + real(rᵢ)
                     if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
-                        _x = clamp(xᵢ, x₀, x₁)
-                        x = isnan(x) ? _x : min(x, _x)
+                        xᵢ = clamp(xᵢ, x₀, x₁)
+                        x = isnan(x) ? xᵢ : min(x, xᵢ) # find the leftmost root
                     end
                 end
             end
@@ -776,8 +775,8 @@ function mock_surrogate_search_problem(
     As = zeros(T, ETL, opts.nT2, length.(opt_ranges)...)
     ∇As = zeros(T, ETL, opts.nT2, D, length.(opt_ranges)...)
     T2s = logrange(opts.T2Range..., opts.nT2)
-    θ = EPGOptions((; α = T(165.0), TE = opts.TE, T2 = zero(T), T1 = opts.T1, β = T(180.0)), Val(ETL), T)
-    j! = EPGJacobianFunctor(θ, opt_vars)
+    θ = EPGOptions((; ETL, α = T(165.0), TE = opts.TE, T2 = zero(T), T1 = opts.T1, β = T(180.0)))
+    j! = EPGJacobianFunctor(θ, Val(opt_vars))
 
     _, Rαs = SplitCartesianIndices(As, Val(2))
     for Iαs in Rαs

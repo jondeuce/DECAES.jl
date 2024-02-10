@@ -59,7 +59,7 @@ function plot_bisection_search(
            DECAES.HermiteSplineSurrogate(prob)
     f_true = function (x...)
         α, β = length(x) == 1 ? (x[1], opts.RefConAngle) : (x[1], x[2])
-        θ = DECAES.EPGOptions((; α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β), Val(ETL), T)
+        θ = DECAES.EPGOptions((; ETL, α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β))
         A = DECAES.epg_decay_basis(θ, DECAES.logrange(opts.T2Range..., opts.nT2))
         nnls_prob = DECAES.NNLSProblem(A, prob.b)
         DECAES.solve!(nnls_prob, A, prob.b)

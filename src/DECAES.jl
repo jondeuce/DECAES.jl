@@ -1,6 +1,6 @@
 module DECAES
 
-const VERSION = v"0.5.1"
+const VERSION = v"0.5.2-DEV"
 
 # Standard libraries
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
@@ -54,7 +54,10 @@ export main
     redirect_to_devnull() do
         main(["--help"])
         main(["--version"])
-        return nothing
+        for Reg in ["lcurve", "gcv", "chi2"]
+            NumVoxels = max(4, Threads.nthreads()) * default_blocksize()
+            mock_T2_pipeline(; NumVoxels, Reg)
+        end
     end
 end
 

@@ -1,11 +1,11 @@
 function compare_epg(
-    work₁::DECAES.AbstractEPGWorkspace{T, ETL₁},
-    work₂::DECAES.AbstractEPGWorkspace{T, ETL₂};
+    work₁::DECAES.AbstractEPGWorkspace{T},
+    work₂::DECAES.AbstractEPGWorkspace{T};
     verbose = false,
-) where {T, ETL₁, ETL₂}
+) where {T}
     xs = (; α = T(11e-3), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0), β = T(163.0))
-    θ₁ = DECAES.EPGOptions(xs, Val(ETL₁), T)
-    θ₂ = DECAES.EPGOptions(xs, Val(ETL₂), T)
+    θ₁ = DECAES.EPGOptions((; ETL = DECAES.echotrainlength(work₁), xs...))
+    θ₂ = DECAES.EPGOptions((; ETL = DECAES.echotrainlength(work₂), xs...))
     dc₁ = DECAES.EPGdecaycurve!(work₁, θ₁)
     dc₂ = DECAES.EPGdecaycurve!(work₂, θ₂)
     if verbose && !(dc₁ ≈ dc₂)

@@ -1,18 +1,9 @@
 # Internal convenience container for holding T2 maps outputs
-@with_kw_noshow struct T2Maps{
-    T,
-    A1 <: Union{T, Vector{T}},
-    A2 <: Union{Matrix{T}, Array{T, 3}},
-    A3 <: Union{Nothing, Array{T, 3}},
-    A4 <: Union{Nothing, Array{T, 4}},
-    A5 <: Union{Nothing, Array{T, 3}},
-    A6 <: Union{Nothing, Array{T, 3}},
-    A7 <: Union{Nothing, Matrix{T}, Array{T, 5}},
-}
+@with_kw_noshow struct T2Maps{T}
     echotimes::Vector{T}
     t2times::Vector{T}
-    refangleset::A1
-    decaybasisset::A2
+    refangleset::Union{T, Vector{T}}
+    decaybasisset::Union{Matrix{T}, Array{T, 3}}
     gdn::Array{T, 3}
     ggm::Array{T, 3}
     gva::Array{T, 3}
@@ -20,11 +11,11 @@
     snr::Array{T, 3}
     alpha::Array{T, 3}
     is_alpha_provided::Base.RefValue{Bool}
-    resnorm::A3
-    decaycurve::A4
-    mu::A5
-    chi2factor::A6
-    decaybasis::A7
+    resnorm::Union{Nothing, Array{T, 3}}
+    decaycurve::Union{Nothing, Array{T, 4}}
+    mu::Union{Nothing, Array{T, 3}}
+    chi2factor::Union{Nothing, Array{T, 3}}
+    decaybasis::Union{Nothing, Matrix{T}, Array{T, 5}}
 end
 
 Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldnames(T2Maps) if getfield(maps, f) isa Array])
@@ -236,36 +227,35 @@ struct EPGBasisSetFunctor{
     T,
     ETL,
     opt_vars,
-    Tθ <: EPGParameterization{T, ETL},
-    W <: AbstractEPGWorkspace{T, ETL},
-    F, # <: EPGFunctor{T, ETL, opt_vars}
-    J, # <: EPGJacobianFunctor{T, ETL, opt_vars}
+    Tθ <: EPGParameterization{T},
+    W <: AbstractEPGWorkspace{T},
+    F <: EPGFunctor{T, ETL, opt_vars},
+    J <: EPGJacobianFunctor{T, ETL, opt_vars},
 }
     θ::Tθ
+    opt_vars::Val{opt_vars} #TODO SymbolVector{opt_vars}
     T2_times::Vector{T}
     epg_work::W
     epg_functor!::F
     epg_jac_functor!::J
 end
 
-function EPGBasisSetFunctor(o::T2mapOptions{T}, θ::EPGParameterization{T, ETL}, ::Val{opt_vars}) where {T, ETL, opt_vars}
+function EPGBasisSetFunctor(o::T2mapOptions{T}, θ::EPGParameterization{T}, opt_vars::Val) where {T}
     epg_work = EPGdecaycurve_work(θ)
     epg_functor! = EPGFunctor(θ, opt_vars)
     epg_jac_functor! = EPGJacobianFunctor(θ, opt_vars)
-    return EPGBasisSetFunctor{T, ETL, opt_vars, typeof(θ), typeof(epg_work), typeof(epg_functor!), typeof(epg_jac_functor!)}(
-        θ, t2_times(o), epg_work, epg_functor!, epg_jac_functor!,
-    )
+    return EPGBasisSetFunctor(θ, opt_vars, t2_times(o), epg_work, epg_functor!, epg_jac_functor!)
 end
 
 #### EPG basis set
 
-function epg_decay_basis!(f::EPGBasisSetFunctor{T, ETL}, decay_basis::AbstractMatrix{T}, θ::EPGParameterization{T, ETL}) where {T, ETL}
+function epg_decay_basis!(f::EPGBasisSetFunctor{T}, decay_basis::AbstractMatrix{T}, θ::EPGParameterization{T}) where {T}
     return epg_decay_basis!(decay_basis, f.epg_work, θ, f.T2_times)
 end
-epg_decay_basis!(f::EPGBasisSetFunctor{T, ETL}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}, ::Val{opt_vars}) where {D, T, ETL, opt_vars} = epg_decay_basis!(f, decay_basis, restructure(f.θ, x, Val(opt_vars)))
-epg_decay_basis!(f::EPGBasisSetFunctor{T, ETL, opt_vars}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}) where {D, T, ETL, opt_vars} = epg_decay_basis!(f, decay_basis, restructure(f.θ, x, Val(opt_vars)))
+epg_decay_basis!(f::EPGBasisSetFunctor{T}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}, opt_vars::Val) where {D, T} = epg_decay_basis!(f, decay_basis, restructure(f.θ, x, opt_vars))
+epg_decay_basis!(f::EPGBasisSetFunctor{T}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}) where {D, T} = epg_decay_basis!(f, decay_basis, restructure(f.θ, x, f.opt_vars))
 
-function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::AbstractEPGWorkspace{T, ETL}, θ::EPGParameterization{T, ETL}, T2_times::AbstractVector) where {T, ETL}
+function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}, T2_times::AbstractVector) where {T}
     # Compute the NNLS basis over T2 space
     @inbounds for j in 1:length(T2_times)
         decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is a bit faster than `Base.view`
@@ -275,21 +265,21 @@ function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::Abst
     return decay_basis
 end
 
-function epg_decay_basis(θ::EPGParameterization{T, ETL}, T2_times::AbstractVector) where {T, ETL}
-    decay_basis = zeros(T, ETL, length(T2_times))
+function epg_decay_basis(θ::EPGParameterization{T}, T2_times::AbstractVector) where {T}
+    decay_basis = zeros(T, echotrainlength(θ), length(T2_times))
     decay_curve_work = EPGdecaycurve_work(θ)
     return epg_decay_basis!(decay_basis, decay_curve_work, θ, T2_times)
 end
 
 #### Jacobian of EPG basis set
 
-function ∇epg_decay_basis!(f::EPGBasisSetFunctor{T, ETL}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, θ::EPGParameterization{T, ETL}) where {T, ETL}
+function ∇epg_decay_basis!(f::EPGBasisSetFunctor{T}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, θ::EPGParameterization{T}) where {T}
     return ∇epg_decay_basis!(∇decay_basis, decay_basis, f.epg_jac_functor!, θ, f.T2_times)
 end
-∇epg_decay_basis!(f::EPGBasisSetFunctor{T, ETL}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}, ::Val{opt_vars}) where {D, T, ETL, opt_vars} = ∇epg_decay_basis!(f, ∇decay_basis, decay_basis, restructure(f.θ, x, Val(opt_vars)))
-∇epg_decay_basis!(f::EPGBasisSetFunctor{T, ETL, opt_vars}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}) where {D, T, ETL, opt_vars} = ∇epg_decay_basis!(f, ∇decay_basis, decay_basis, restructure(f.θ, x, Val(opt_vars)))
+∇epg_decay_basis!(f::EPGBasisSetFunctor{T}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}, opt_vars::Val) where {D, T} = ∇epg_decay_basis!(f, ∇decay_basis, decay_basis, restructure(f.θ, x, opt_vars))
+∇epg_decay_basis!(f::EPGBasisSetFunctor{T}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}) where {D, T} = ∇epg_decay_basis!(f, ∇decay_basis, decay_basis, restructure(f.θ, x, f.opt_vars))
 
-function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T, ETL}, θ::EPGParameterization{T, ETL}, T2_times::AbstractVector) where {T, ETL}
+function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T}, θ::EPGParameterization{T}, T2_times::AbstractVector) where {T}
     # Compute the NNLS basis over T2 space
     @inbounds for j in 1:length(T2_times)
         decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is a bit faster than `Base.view`
@@ -300,9 +290,10 @@ function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T, 3}, decay_basis::A
     return ∇decay_basis
 end
 
-function ∇epg_decay_basis(θ::EPGParameterization{T, ETL}, T2_times::AbstractVector, Fs::NTuple{N, Symbol}) where {T, ETL, N}
-    decay_basis = zeros(T, ETL, length(T2_times))
-    ∇decay_basis = zeros(T, ETL, length(T2_times), N)
+function ∇epg_decay_basis(θ::EPGParameterization{T}, T2_times::AbstractVector, Fs::NTuple{N, Symbol}) where {T, N}
+    nTE, nT2 = echotrainlength(θ), length(T2_times)
+    decay_basis = zeros(T, nTE, nT2)
+    ∇decay_basis = zeros(T, nTE, nT2, N)
     decay_curve_jac! = EPGJacobianFunctor(θ, Fs)
     ∇epg_decay_basis!(∇decay_basis, decay_basis, decay_curve_jac!, θ, T2_times)
     return decay_basis, ∇decay_basis
@@ -318,79 +309,67 @@ struct EPGBasisSetEnsemble{
     opt_vars,
     A1 <: AbstractArray{T},
     A2 <: AbstractArray{T},
-    F, # <: EPGBasisSetFunctor{T, ETL, opt_vars},
-    P, # <: NNLSDiscreteSurrogateSearch{D, T},
+    F <: EPGBasisSetFunctor{T, ETL, opt_vars},
+    P <: NNLSDiscreteSurrogateSearch{D, T},
 }
+    opt_vars::Val{opt_vars} #TODO SymbolVector{opt_vars}
     decay_basis_set::A1
     ∇decay_basis_set::A2
     epg_basis_functor!::F
     nnls_search_prob::P
 end
 
-function EPGBasisSetEnsemble(o::T2mapOptions{T}, θ::EPGOptions{T, ETL}, ::Val{opt_vars}, decay_data::AbstractVector{T}) where {T, ETL, opt_vars}
-    D = length(opt_vars)
-    opt_ranges = ntuple(D) do i
-        return opt_vars[i] === :α ? flip_angles(o) :
-               error("Optimization variable must be the flip angle :α")
-    end
-    decay_basis_set = zeros(T, ETL, o.nT2, length.(opt_ranges)...)
-    ∇decay_basis_set = zeros(T, ETL, o.nT2, D, length.(opt_ranges)...)
-    epg_basis_functor! = EPGBasisSetFunctor(o, θ, Val(opt_vars))
+function EPGBasisSetEnsemble(o::T2mapOptions{T}, θ::EPGOptions{T}, opt_vars::Val, decay_data::AbstractVector{T}) where {T}
+    @assert opt_vars === Val((:α,)) "Optimization variable must be the flip angle :α" #TODO: generalize?
+    D = 1 # length(opt_vars)
+    opt_ranges = (flip_angles(o),)
+    decay_basis_set = zeros(T, o.nTE, o.nT2, length.(opt_ranges)...)
+    ∇decay_basis_set = zeros(T, o.nTE, o.nT2, D, length.(opt_ranges)...)
+    epg_basis_functor! = EPGBasisSetFunctor(o, θ, opt_vars)
     nnls_search_prob = NNLSDiscreteSurrogateSearch(decay_basis_set, ∇decay_basis_set, opt_ranges, decay_data; legacy = o.legacy)
-    return EPGBasisSetEnsemble{D, T, ETL, opt_vars, typeof(decay_basis_set), typeof(∇decay_basis_set), typeof(epg_basis_functor!), typeof(nnls_search_prob)}(
-        decay_basis_set, ∇decay_basis_set, epg_basis_functor!, nnls_search_prob,
-    )
+    return EPGBasisSetEnsemble(opt_vars, decay_basis_set, ∇decay_basis_set, epg_basis_functor!, nnls_search_prob)
 end
 
-function epg_decay_basis!(work::EPGBasisSetEnsemble{D, T, ETL, opt_vars}, θ::EPGParameterization{T, ETL}) where {D, T, ETL, opt_vars}
+function epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, θ::EPGParameterization{T}) where {D, T}
     @inbounds for I in CartesianIndices(work.nnls_search_prob.αs)
         x = work.nnls_search_prob.αs[I]
-        θ = restructure(θ, x, Val(opt_vars))
+        θ = restructure(θ, x, work.opt_vars)
         decay_basis = uview(work.decay_basis_set, :, :, I)
         epg_decay_basis!(work.epg_basis_functor!, decay_basis, θ)
     end
     return work
 end
-epg_decay_basis!(work::EPGBasisSetEnsemble{D, T, ETL}, x::SVector{D, T}, ::Val{opt_vars}) where {D, T, ETL, opt_vars} = epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, Val(opt_vars)))
-epg_decay_basis!(work::EPGBasisSetEnsemble{D, T, ETL, opt_vars}, x::SVector{D, T}) where {D, T, ETL, opt_vars} = epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, Val(opt_vars)))
+epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}, opt_vars::Val) where {D, T} = epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, opt_vars))
+epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}) where {D, T} = epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, work.opt_vars))
 
-function ∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T, ETL, opt_vars}, θ::EPGParameterization{T, ETL}) where {D, T, ETL, opt_vars}
+function ∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, θ::EPGParameterization{T}) where {D, T}
     @inbounds for I in CartesianIndices(work.nnls_search_prob.αs)
         x = work.nnls_search_prob.αs[I]
-        θ = restructure(θ, x, Val(opt_vars))
+        θ = restructure(θ, x, work.opt_vars)
         decay_basis = uview(work.decay_basis_set, :, :, I)
         ∇decay_basis = uview(work.∇decay_basis_set, :, :, :, I)
         ∇epg_decay_basis!(work.epg_basis_functor!, ∇decay_basis, decay_basis, θ)
     end
     return work
 end
-∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T, ETL}, x::SVector{D, T}, ::Val{opt_vars}) where {D, T, ETL, opt_vars} = ∇epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, Val(opt_vars)))
-∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T, ETL, opt_vars}, x::SVector{D, T}) where {D, T, ETL, opt_vars} = ∇epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, Val(opt_vars)))
+∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}, opt_vars::Val) where {D, T} = ∇epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, opt_vars))
+∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}) where {D, T} = ∇epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, work.opt_vars))
 
 # =========================================================
 # Flip angle optimization
 # =========================================================
-struct FlipAngleOptimizationWorkspace{
-    T,
-    ETL,
-    M <: AbstractMatrix{T},
-    V <: AbstractVector{T},
-    B, # <: EPGBasisSetFunctor{T,ETL},
-    E, # <: Union{Nothing, EPGBasisSetEnsemble{1, T, ETL}},
-    S, # <: Union{Nothing, AbstractSurrogate{1, T}},
-}
+struct FlipAngleOptimizationWorkspace{T, M <: AbstractMatrix{T}, V <: AbstractVector{T}, B, E, S}
     decay_basis::M
     decay_data::V
-    decay_basis_set::B
-    decay_basis_set_ensemble::E
+    decay_basis_set::B # B <: EPGBasisSetFunctor{T, ETL}
+    decay_basis_set_ensemble::E # E <: Union{Nothing, EPGBasisSetEnsemble{1, T, ETL}}
     α::Base.RefValue{T}
-    α_surrogate::S
+    α_surrogate::S # S <: Union{Nothing, AbstractSurrogate{1, T}}
 end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
-    ETL = o.nTE
     α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
-    θ = EPGOptions((; α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle), Val(ETL))
+    θ = EPGOptions((; ETL = o.nTE, α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle))
     decay_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
 
     if o.SetFlipAngle !== nothing
@@ -407,9 +386,7 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Abstrac
                       HermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
     end
 
-    return FlipAngleOptimizationWorkspace{T, ETL, typeof(decay_basis), typeof(decay_data), typeof(decay_basis_set), typeof(decay_basis_set_ensemble), typeof(α_surrogate)}(
-        decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate,
-    )
+    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate)
 end
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
@@ -485,7 +462,7 @@ solution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
 # =========================================================
 # Save thread local results to output maps
 # =========================================================
-function save_results!(thread_buffer, maps::T2Maps, dist::T2Distributions, o::T2mapOptions, I::CartesianIndex)
+function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T}, o::T2mapOptions{T}, I::CartesianIndex) where {T}
     (; T2_dist_work, flip_angle_work, logT2_times, decay_data, decay_basis, decay_calc, residuals, gva_buf) = thread_buffer
     T2_dist = solution(T2_dist_work)
 
@@ -510,26 +487,30 @@ function save_results!(thread_buffer, maps::T2Maps, dist::T2Distributions, o::T2
 
     # Optionally save regularization parameters
     if maps.mu !== nothing && maps.chi2factor !== nothing # o.SaveRegParam == true
-        @inbounds maps.mu[I], maps.chi2factor[I] = T2_dist_work.μ[], T2_dist_work.χ²fact[]
+        local mu::Array{T, 3}, chi2factor::Array{T, 3} = maps.mu, maps.chi2factor
+        @inbounds mu[I], chi2factor[I] = T2_dist_work.μ[], T2_dist_work.χ²fact[]
     end
 
     # Optionally save ℓ²-norm of residuals
     if maps.resnorm !== nothing # o.SaveResidualNorm == true
-        @inbounds maps.resnorm[I] = sqrt(sum(abs2, residuals))
+        local resnorm::Array{T, 3} = maps.resnorm
+        @inbounds resnorm[I] = sqrt(sum(abs2, residuals))
     end
 
     # Optionally save signal decay curve from fit
     if maps.decaycurve !== nothing # o.SaveDecayCurve == true
+        local decaycurve::Array{T, 4} = maps.decaycurve
         @inbounds for j in 1:o.nTE
-            maps.decaycurve[I, j] = decay_calc[j]
+            decaycurve[I, j] = decay_calc[j]
         end
     end
 
     # Optionally save NNLS basis
     if maps.decaybasis !== nothing # o.SaveNNLSBasis == true
         if o.SetFlipAngle === nothing
+            local decaybasis::Array{T, 5} = maps.decaybasis
             @inbounds for J in CartesianIndices((o.nTE, o.nT2))
-                maps.decaybasis[I, J] = decay_basis[J]
+                decaybasis[I, J] = decay_basis[J]
             end
         end
     end

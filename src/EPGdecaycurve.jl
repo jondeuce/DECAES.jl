@@ -12,51 +12,56 @@
 ####
 ####
 
-####
-# EPG parameterization interface
-# For each parameterization, define:
-#   - struct MyParameterization{T,ETL} <: FieldVector{N,T}
-#   - restructure(::MyParameterization, ::NTuple{N,T})
-#   - parameter getters
-
-struct EPGOptions{T, ETL} <: FieldVector{5, T}
+struct EPGOptions{T, ETL}
+    ETL::ETL
     α::T
     TE::T
     T2::T
     T1::T
     β::T
+    EPGOptions{T, ETL}(etl, α, TE, T2, T1, β) where {T, ETL} = new{T, ETL}(ETL(etl), T(α), T(TE), T(T2), T(T1), T(β))
+    function EPGOptions(etl, α, TE, T2, T1, β)
+        α, TE, T2, T1, β = promote(float(α), float(TE), float(T2), float(T1), float(β))
+        return new{typeof(α), typeof(etl)}(etl, α, TE, T2, T1, β)
+    end
 end
-Base.NamedTuple(θ::EPGOptions) = NamedTuple{(:α, :TE, :T2, :T1, :β)}(Tuple(θ))
-@inline EPGOptions(xs::NamedTuple{(:α, :TE, :T2, :T1, :β)}, ::Val{ETL}, ::Type{T} = floattype(xs)) where {T, ETL} = EPGOptions{T, ETL}(Tuple(xs))
-@inline restructure(::EPGOptions{<:Any, ETL}, xs::NTuple{5, T}) where {T, ETL} = EPGOptions{T, ETL}(xs)
+@inline Base.Tuple(θ::EPGOptions) = (θ.ETL, θ.α, θ.TE, θ.T2, θ.T1, θ.β)
+@inline Base.NamedTuple(θ::EPGOptions) = NamedTuple{(:ETL, :α, :TE, :T2, :T1, :β)}(Tuple(θ))
+@inline EPGOptions(θ::NamedTuple{(:ETL, :α, :TE, :T2, :T1, :β)}) = EPGOptions(Tuple(θ)...)
 
 @inline Base.eltype(::EPGOptions{T}) where {T} = T
-@inline echotrainlength(::EPGOptions{T, ETL}) where {T, ETL} = ETL
+@inline echotrainlength(θ::EPGOptions) = θ.ETL
 @inline B1correction(θ::EPGOptions{T}) where {T} = T(θ.α / 180) # Multiplicative FA correction: A = α/180
 @inline flipangle(θ::EPGOptions{T}, i::Int) where {T} = ifelse(i == 0, T(90), ifelse(i == 1, T(180), θ.β)) # Pulse sequence: 90, 180, β, β, ...
-@inline echotime(θ::EPGOptions{T}) where {T} = θ.TE
-@inline T2time(θ::EPGOptions{T}) where {T} = θ.T2
-@inline T1time(θ::EPGOptions{T}) where {T} = θ.T1
+@inline echotime(θ::EPGOptions) = θ.TE
+@inline T2time(θ::EPGOptions) = θ.T2
+@inline T1time(θ::EPGOptions) = θ.T1
 
-struct EPGIncreasingFlipAnglesOptions{T, ETL} <: FieldVector{6, T}
+struct EPGIncreasingFlipAnglesOptions{T, ETL}
+    ETL::ETL
     α::T
     α1::T
     α2::T
     TE::T
     T2::T
     T1::T
+    EPGIncreasingFlipAnglesOptions{T, ETL}(etl, α, α1, α2, TE, T2, T1) where {T, ETL} = new{T, ETL}(ETL(etl), T(α), T(α1), T(α2), T(TE), T(T2), T(T1))
+    function EPGIncreasingFlipAnglesOptions(etl, α, α1, α2, TE, T2, T1)
+        α, α1, α2, TE, T2, T1 = promote(float(α), float(α1), float(α2), float(TE), float(T2), float(T1))
+        return new{typeof(α), typeof(etl)}(etl, α, α1, α2, TE, T2, T1)
+    end
 end
-Base.NamedTuple(θ::EPGIncreasingFlipAnglesOptions) = NamedTuple{(:α, :α1, :α2, :TE, :T2, :T1)}(Tuple(θ))
-@inline EPGIncreasingFlipAnglesOptions(xs::NamedTuple{(:α, :α1, :α2, :TE, :T2, :T1)}, ::Val{ETL}, ::Type{T} = floattype(xs)) where {T, ETL} = EPGIncreasingFlipAnglesOptions{T, ETL}(Tuple(xs))
-@inline restructure(::EPGIncreasingFlipAnglesOptions{<:Any, ETL}, xs::NTuple{6, T}) where {T, ETL} = EPGIncreasingFlipAnglesOptions{T, ETL}(xs)
+@inline Base.Tuple(θ::EPGIncreasingFlipAnglesOptions) = (θ.ETL, θ.α, θ.α1, θ.α2, θ.TE, θ.T2, θ.T1)
+@inline Base.NamedTuple(θ::EPGIncreasingFlipAnglesOptions) = NamedTuple{(:ETL, :α, :α1, :α2, :TE, :T2, :T1)}(Tuple(θ))
+@inline EPGIncreasingFlipAnglesOptions(θ::NamedTuple{(:ETL, :α, :α1, :α2, :TE, :T2, :T1)}) = EPGIncreasingFlipAnglesOptions(Tuple(θ)...)
 
 @inline Base.eltype(::EPGIncreasingFlipAnglesOptions{T}) where {T} = T
-@inline echotrainlength(::EPGIncreasingFlipAnglesOptions{T, ETL}) where {T, ETL} = ETL
+@inline echotrainlength(θ::EPGIncreasingFlipAnglesOptions) = θ.ETL
 @inline B1correction(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = T(θ.α / 180) # Multiplicative FA correction: A = α/180
 @inline flipangle(θ::EPGIncreasingFlipAnglesOptions{T}, i::Int) where {T} = ifelse(i == 0, T(90), ifelse(i == 1, θ.α1, ifelse(i == 2, θ.α2, T(180)))) # Pulse sequence: 90, α1, α2, 180, 180, ...
-@inline echotime(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = θ.TE
-@inline T2time(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = θ.T2
-@inline T1time(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = θ.T1
+@inline echotime(θ::EPGIncreasingFlipAnglesOptions) = θ.TE
+@inline T2time(θ::EPGIncreasingFlipAnglesOptions) = θ.T2
+@inline T1time(θ::EPGIncreasingFlipAnglesOptions) = θ.T1
 
 const EPGParameterization{T, ETL} = Union{
     EPGOptions{T, ETL},
@@ -65,28 +70,34 @@ const EPGParameterization{T, ETL} = Union{
 
 #### Destructuring/restructuring to/from vectors
 
+struct SymbolVector{Fs} <: AbstractVector{Symbol}
+    fields::Val{Fs}
+end
+@inline Base.Tuple(::SymbolVector{Fs}) where {Fs} = Fs
+@inline Base.length(::SymbolVector{Fs}) where {Fs} = length(Fs)
+@inline Base.size(::SymbolVector{Fs}) where {Fs} = (length(Fs),)
+@inline Base.getindex(::SymbolVector{Fs}, i::Int) where {Fs} = Fs[i] #TODO uncomment
+
+@generated function constructorof(::Type{T}) where {T}
+    return getfield(parentmodule(T), nameof(T))
+end
+@inline constructorof(θ) = constructorof(typeof(θ))
+
+@inline restructure(θ, xs::Tuple) = constructorof(θ)(xs...)
+@inline restructure(θ, xs::NamedTuple{Fs}) where {Fs} = restructure(θ, Tuple(xs), Val(Fs))
+
+@generated function restructure(θ, xs, ::Val{Fs}) where {Fs}
+    idxmap = NamedTuple{Fs}(ntuple(i -> i, length(Fs)))
+    vals   = [F ∈ Fs ? :(@inbounds(xs[$(getproperty(idxmap, F))])) : :(getproperty(θ, $(QuoteNode(F)))) for F in fieldsof(θ)]
+    return :(Base.@_inline_meta; restructure(θ, tuple($(vals...))))
+end
+@inline restructure(θ, xs, Fs::SymbolVector) = restructure(θ, xs, Fs.fields)
+
 @generated function destructure(θ, ::Val{Fs}) where {Fs}
     vals = [:(getproperty(θ, $(QuoteNode(F)))) for F in Fs]
     return :(Base.@_inline_meta; SVector{$(length(Fs)), $(eltype(θ))}(tuple($(vals...))))
 end
-destructure(θ, Fs::NTuple{N, Symbol}) where {N} = SVector{N, eltype(θ)}(map(F -> getproperty(θ, F), Fs))
-
-@generated function restructure(θ, x::AbstractVector{T}, ::Val{Fs}) where {T, Fs}
-    idxmap = NamedTuple{Fs}(ntuple(i -> i, length(Fs)))
-    vals   = [F ∈ Fs ? :(@inbounds(x[$(getproperty(idxmap, F))])) : :($T(getproperty(θ, $(QuoteNode(F))))) for F in fieldsof(θ)]
-    return :(Base.@_inline_meta; restructure(θ, tuple($(vals...))))
-end
-function restructure(θ, x::AbstractVector{T}, Fs::NTuple{N, Symbol}) where {T, N}
-    fields = fieldsof(typeof(θ))
-    vals   = ntuple(length(θ)) do i
-        @inbounds for j in 1:N
-            (Fs[j] == fields[i]) && return x[j]
-        end
-        @inbounds T(getproperty(θ, fields[i]))
-    end
-    return restructure(θ, vals)
-end
-restructure(θ, x::NamedTuple{Fs}) where {Fs} = restructure(θ, SVector(Tuple(x)), Val(Fs))
+@inline destructure(θ, Fs::SymbolVector) = destructure(θ, Fs.fields)
 
 ####
 #### Abstract Interface
@@ -95,13 +106,12 @@ restructure(θ, x::NamedTuple{Fs}) where {Fs} = restructure(θ, SVector(Tuple(x)
 abstract type AbstractEPGWorkspace{T, ETL} end
 
 @inline Base.eltype(::AbstractEPGWorkspace{T}) where {T} = T
-@inline echotrainlength(::AbstractEPGWorkspace{T, ETL}) where {T, ETL} = ETL
-@inline mpsv(work::AbstractEPGWorkspace) = work.MPSV
+@inline echotrainlength(work::AbstractEPGWorkspace{T}) where {T} = work.ETL
 @inline decaycurve(work::AbstractEPGWorkspace) = work.dc
 
-@inline EPGdecaycurve_work(::EPGParameterization{T, ETL}) where {T, ETL} = EPGdecaycurve_work(T, ETL)
-@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, ETL) # fallback
-# @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T <: FloatingTypes} = EPGWork_ReIm_DualMVector_Split(T, ETL) # default for T <: SIMD.FloatingTypes
+@inline EPGdecaycurve_work(θ::EPGParameterization{T}) where {T} = EPGdecaycurve_work(T, θ.ETL)
+@inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualVector_Split_Dynamic(T, ETL) # default for dynamic `ETL`
+@inline EPGdecaycurve_work(::Type{T}, ::Val{ETL}) where {T, ETL} = EPGWork_ReIm_DualMVector_Split(T, Val(ETL)) # default for static `ETL`
 
 """
     EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real)
@@ -130,74 +140,47 @@ pulse sequence.
 
   - `decay_curve::AbstractVector`: normalized echo decay curve with length `ETL`
 """
-@inline EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions{floattype((α, TE, T2, T1, β)), ETL}((α, TE, T2, T1, β)))
-@inline EPGdecaycurve(θ::EPGParameterization{T, ETL}) where {T, ETL} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
-@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T, ETL}, args::Real...) where {T, ETL} = EPGdecaycurve!(decaycurve(work), work, EPGParameterization{T, ETL}(args...))
-@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T, ETL}, θ::EPGParameterization{T, ETL}) where {T, ETL} = EPGdecaycurve!(decaycurve(work), work, θ)
-@inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T, ETL}, θ::EPGParameterization{T, ETL}) where {T, ETL} = epg_decay_curve!(dc, work, θ)
+@inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions((; ETL, α, TE, T2, T1, β)))
+@inline EPGdecaycurve(θ::EPGParameterization{T}) where {T} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
+@inline EPGdecaycurve!(work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}) where {T} = EPGdecaycurve!(decaycurve(work), work, θ)
+@inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}) where {T} = epg_decay_curve!(dc, work, θ)
 
 ####
-#### Jacobian utilities (currently hardcoded for `EPGWork_ReIm_DualMVector_Split`)
+#### Jacobian utilities (currently hardcoded for `EPGWork_ReIm_DualVector_Split_Dynamic`)
 ####
 
 struct EPGWorkCacheDict{ETL} <: AbstractDict{DataType, Any}
+    ETL::ETL
     dict::Dict{DataType, Any}
-    EPGWorkCacheDict{ETL}() where {ETL} = new{ETL}(Dict{DataType, Any}())
 end
+EPGWorkCacheDict(ETL) = EPGWorkCacheDict(ETL, Dict{DataType, Any}())
+
 @inline Base.keys(caches::EPGWorkCacheDict) = Base.keys(caches.dict)
 @inline Base.values(caches::EPGWorkCacheDict) = Base.values(caches.dict)
 @inline Base.length(caches::EPGWorkCacheDict) = Base.length(caches.dict)
 @inline Base.iterate(caches::EPGWorkCacheDict, state...) = Base.iterate(caches.dict, state...)
 
-@inline function Base.getindex(caches::EPGWorkCacheDict{ETL}, ::Type{T}) where {T, ETL}
+@inline function Base.getindex(caches::EPGWorkCacheDict, ::Type{T}) where {T}
     R = cachetype(caches, T)
     get!(caches.dict, T) do
-        return EPGWork_ReIm_DualMVector_Split(T, ETL)::R
+        return EPGWork_ReIm_DualVector_Split_Dynamic(T, caches.ETL)::R
     end::R
 end
-@inline cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T, ETL} = EPGWork_ReIm_DualMVector_Split{T, ETL, MVector{ETL, SVector{3, T}}, MVector{ETL, T}}
+@inline cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T, ETL} = EPGWork_ReIm_DualVector_Split_Dynamic{T, ETL, Vector{SVector{3, T}}, Vector{T}}
 
-#=
-struct EPGWorkDualCache{T, D}
-    work::T
-    dual_work::D
-end
-
-function EPGWorkDualCache(::Type{T}, ::Val{ETL}, ::Val{chunk_size}) where {T, ETL, chunk_size}
-    D = ForwardDiff.Dual{nothing, T, chunk_size}
-    work = EPGWork_ReIm_DualVector_Split(T, ETL)
-    dual_work = EPGWork_ReIm_DualVector_Split(D, ETL)
-    EPGWorkDualCache(work, dual_work)
-end
-
-getindex(c::EPGWorkDualCache, ::Type{T}) where {T} = c.work
-getindex(c::EPGWorkDualCache, ::Type{D}) where {D <: ForwardDiff.Dual} = remake(c.dual_work, D)
-
-remake(x::Array, ::Type{T}) where {T} = x
-remake(x::Array, ::Type{D}) where {D <: ForwardDiff.Dual} = reinterpret(D, x)
-
-@inline function remake(work::EPGWork_ReIm_DualVector_Split{<:Any, ETL}, ::Type{D}) where {D <: ForwardDiff.Dual, ETL}
-    MPSV₁ = reinterpret(SVector{3,D}, work.MPSV₁.data)
-    MPSV₁ = SizedVector{ETL,SVector{3,D},typeof(MPSV₁)}(MPSV₁)
-    MPSV₂ = reinterpret(SVector{3,D}, work.MPSV₂.data)
-    MPSV₂ = SizedVector{ETL,SVector{3,D},typeof(MPSV₂)}(MPSV₂)
-    dc    = reinterpret(D, work.dc.data)
-    dc    = SizedVector{ETL,D,typeof(dc)}(dc)
-    EPGWork_ReIm_DualVector_Split{D,ETL,typeof(MPSV₁),typeof(dc)}(MPSV₁, MPSV₂, dc)
-end
-=#
-
-struct EPGFunctor{T, ETL, Fs, Tθ <: EPGParameterization{T, ETL}}
-    caches::EPGWorkCacheDict{ETL}
+struct EPGFunctor{T, ETL, Fs, TC <: EPGWorkCacheDict{ETL}, Tθ <: EPGParameterization{T, ETL}}
     θ::Tθ
+    fields::SymbolVector{Fs}
+    caches::TC
 end
-EPGFunctor(θ::EPGParameterization{T, ETL}, Fs::NTuple{N, Symbol}) where {T, ETL, N} = EPGFunctor{T, ETL, Fs, typeof(θ)}(EPGWorkCacheDict{ETL}(), θ)
-EPGFunctor(f!::EPGFunctor{T, ETL, Fs}, θ::EPGParameterization{T, ETL}) where {T, ETL, Fs} = EPGFunctor{T, ETL, Fs, typeof(θ)}(f!.caches, θ)
+EPGFunctor(θ::EPGParameterization, fields::SymbolVector) = EPGFunctor(θ, fields, EPGWorkCacheDict(echotrainlength(θ)))
+EPGFunctor(θ::EPGParameterization, fields::Val) = EPGFunctor(θ, SymbolVector(fields))
+EPGFunctor(f!::EPGFunctor, θ::EPGParameterization) = EPGFunctor(θ, f!.fields, f!.caches)
 
 @inline parameters(f!::EPGFunctor) = f!.θ
-@inline optfields(::EPGFunctor{T, ETL, Fs}) where {T, ETL, Fs} = Val(Fs)
+@inline optfields(f!::EPGFunctor) = f!.fields
 
-function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D, ETL}, x::AbstractVector{D}) where {D, ETL}
+function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D}, x::AbstractVector{D}) where {D}
     θ = restructure(parameters(f!), x, optfields(f!))
     return EPGdecaycurve!(y, epg_work, θ)
 end
@@ -209,37 +192,40 @@ struct EPGJacobianFunctor{T, ETL, Fs, F <: EPGFunctor{T, ETL, Fs}, R <: DiffResu
     res::R
     cfg::C
 end
-function EPGJacobianFunctor(θ::EPGParameterization{T, ETL}, Fs::NTuple{N, Symbol}) where {T, ETL, N}
-    f!  = EPGFunctor(θ, Fs)
+function EPGJacobianFunctor(θ::EPGParameterization{T}, fields::SymbolVector) where {T}
+    ETL, N = echotrainlength(θ), length(fields)
+    f! = EPGFunctor(θ, fields)
     res = DiffResults.JacobianResult(zeros(T, ETL), zeros(T, N))
-    cfg = ForwardDiff.JacobianConfig(f!, zeros(T, ETL), zeros(T, N), ForwardDiff.Chunk(N))
+    cfg = ForwardDiff.JacobianConfig(nothing, zeros(T, ETL), zeros(T, N), ForwardDiff.Chunk{N}())
     return EPGJacobianFunctor(f!, res, cfg)
 end
+EPGJacobianFunctor(θ::EPGParameterization, fields::Val) = EPGJacobianFunctor(θ, SymbolVector(fields))
 
 @inline parameters(j!::EPGJacobianFunctor) = parameters(j!.f!)
 @inline optfields(j!::EPGJacobianFunctor) = optfields(j!.f!)
 
-function (j!::EPGJacobianFunctor{T, ETL})(J::Union{AbstractMatrix, DiffResults.DiffResult}, y::AbstractVector{T}, θ::EPGParameterization{T, ETL}) where {T, ETL}
+function (j!::EPGJacobianFunctor{T})(J::Union{AbstractMatrix, DiffResults.DiffResult}, y::AbstractVector{T}, θ::EPGParameterization{T}) where {T}
     (; f!, cfg) = j!
     f! = EPGFunctor(f!, θ)
     x = destructure(parameters(f!), optfields(f!))
     ForwardDiff.jacobian!(J, f!, y, x, cfg)
     return J isa AbstractMatrix ? J : DiffResults.jacobian(J)
 end
-(j!::EPGJacobianFunctor{T, ETL})(y::AbstractVector{T}, θ::EPGParameterization{T, ETL}) where {T, ETL} = j!(j!.res, y, θ)
+(j!::EPGJacobianFunctor{T})(y::AbstractVector{T}, θ::EPGParameterization{T}) where {T} = j!(j!.res, y, θ)
 
 ####
 #### EPGWork_Basic_Cplx
 ####
 
 struct EPGWork_Basic_Cplx{T, ETL, MPSVType <: AbstractVector{SVector{3, Complex{T}}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV::MPSVType
     dc::DCType
 end
-function EPGWork_Basic_Cplx(T, ETL::Int)
-    MSPV = SizedVector{ETL, SVector{3, Complex{T}}}(undef)
-    dc   = SizedVector{ETL, T}(undef)
-    return EPGWork_Basic_Cplx{T, ETL, typeof(MSPV), typeof(dc)}(MSPV, dc)
+function EPGWork_Basic_Cplx(::Type{T}, ETL::Int) where {T}
+    MSPV = zeros(SVector{3, Complex{T}}, ETL)
+    dc   = zeros(T, ETL)
+    return EPGWork_Basic_Cplx(ETL, MSPV, dc)
 end
 
 # Compute a basis function under the extended phase graph algorithm. The magnetization phase state vector (MPSV) is
@@ -248,7 +234,9 @@ end
 # See the appendix in Prasloski (2012) for details:
 #    https://doi.org/10.1002/mrm.23157
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ::EPGOptions{T}) where {T}
+    ETL = length(dc)
+
     # Unpack workspace
     (; MPSV) = work
     A = B1correction(θ)
@@ -299,7 +287,9 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T, ETL
     return dc
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T, ETL}, θ::EPGIncreasingFlipAnglesOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ::EPGIncreasingFlipAnglesOptions{T}) where {T}
+    ETL = length(dc)
+
     # Unpack workspace
     (; MPSV) = work
     A = B1correction(θ)
@@ -351,16 +341,19 @@ end
 ####
 
 struct EPGWork_ReIm{T, ETL, MPSVType <: AbstractVector{SVector{3, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm(T, ETL::Int)
-    MSPV = SizedVector{ETL, SVector{3, T}}(undef)
-    dc   = SizedVector{ETL, T}(undef)
-    return EPGWork_ReIm{T, ETL, typeof(MSPV), typeof(dc)}(MSPV, dc)
+function EPGWork_ReIm(::Type{T}, ETL::Int) where {T}
+    MSPV = zeros(SVector{3, T}, ETL)
+    dc   = zeros(T, ETL)
+    return EPGWork_ReIm(ETL, MSPV, dc)
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T}, θ::EPGOptions{T}) where {T}
+    ETL = length(dc)
+
     # Unpack workspace
     (; MPSV) = work
     A = B1correction(θ)
@@ -426,16 +419,18 @@ end
 
 #=
 struct EPGWork_ReIm_Generated{T, ETL, MPSVType <: AbstractVector{SVector{3, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_Generated(T, ETL::Int)
+function EPGWork_ReIm_Generated(::Type{T}, ::Val{ETL}) where {T, ETL}
     MSPV = SizedVector{ETL, SVector{3, T}}(undef)
     dc   = SizedVector{ETL, T}(undef)
-    return EPGWork_ReIm_Generated{T, ETL, typeof(MSPV), typeof(dc)}(MSPV, dc)
+    return EPGWork_ReIm_Generated(Val(ETL), MSPV, dc)
 end
+EPGWork_ReIm_Generated(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_Generated(T, Val(ETL))
 
-function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T, ETL, A <: AbstractVector{T}, W <: EPGWork_ReIm_Generated{T, ETL}, O <: EPGOptions{T, ETL}}
+function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T, ETL, A <: AbstractVector{T}, W <: EPGWork_ReIm_Generated{T, Val{ETL}}, O <: EPGOptions{T, Val{ETL}}}
     MPSV(i::Int) = Symbol(:MPSV, i)
     quote
         # Unpack workspace
@@ -506,7 +501,7 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
     end
 end
 
-@generated function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_Generated{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+@generated function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_Generated{T}, θ::EPGOptions{T}) where {T}
     return epg_decay_curve_impl!(dc, work, θ)
 end
 =#
@@ -516,18 +511,21 @@ end
 ####
 
 struct EPGWork_ReIm_DualVector{T, ETL, MPSVType <: AbstractVector{SVector{3, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_DualVector(T, ETL::Int)
-    MPSV₁ = SizedVector{ETL, SVector{3, T}}(undef)
-    MPSV₂ = SizedVector{ETL, SVector{3, T}}(undef)
-    dc    = SizedVector{ETL, T}(undef)
-    return EPGWork_ReIm_DualVector{T, ETL, typeof(MPSV₁), typeof(dc)}(MPSV₁, MPSV₂, dc)
+function EPGWork_ReIm_DualVector(::Type{T}, ETL::Int) where {T}
+    MPSV₁ = zeros(SVector{3, T}, ETL)
+    MPSV₂ = zeros(SVector{3, T}, ETL)
+    dc    = zeros(T, ETL)
+    return EPGWork_ReIm_DualVector(ETL, MPSV₁, MPSV₂, dc)
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T}, θ::EPGOptions{T}) where {T}
+    ETL = length(dc)
+
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     A = B1correction(θ)
@@ -596,18 +594,21 @@ end
 ####
 
 struct EPGWork_ReIm_DualVector_Split{T, ETL, MPSVType <: AbstractVector{SVector{3, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_DualVector_Split(T, ETL::Int)
-    MPSV₁ = SizedVector{ETL, SVector{3, T}}(undef)
-    MPSV₂ = SizedVector{ETL, SVector{3, T}}(undef)
-    dc    = SizedVector{ETL, T}(undef)
-    return EPGWork_ReIm_DualVector_Split{T, ETL, typeof(MPSV₁), typeof(dc)}(MPSV₁, MPSV₂, dc)
+function EPGWork_ReIm_DualVector_Split(::Type{T}, ETL::Int) where {T}
+    MPSV₁ = zeros(SVector{3, T}, ETL)
+    MPSV₂ = zeros(SVector{3, T}, ETL)
+    dc    = zeros(T, ETL)
+    return EPGWork_ReIm_DualVector_Split(ETL, MPSV₁, MPSV₂, dc)
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_Split{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_Split{T}, θ::EPGOptions{T}) where {T}
+    ETL = length(dc)
+
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     A = B1correction(θ)
@@ -677,7 +678,8 @@ end
 #### EPGWork_ReIm_DualVector_Split_Dynamic
 ####
 
-struct EPGWork_ReIm_DualVector_Split_Dynamic{T, MPSVType <: AbstractVector{SVector{3, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, Nothing}
+struct EPGWork_ReIm_DualVector_Split_Dynamic{T, ETL, MPSVType <: AbstractVector{SVector{3, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
@@ -686,10 +688,10 @@ function EPGWork_ReIm_DualVector_Split_Dynamic(::Type{T}, ETL::Int) where {T}
     MPSV₁ = zeros(SVector{3, T}, ETL)
     MPSV₂ = zeros(SVector{3, T}, ETL)
     dc    = zeros(T, ETL)
-    return EPGWork_ReIm_DualVector_Split_Dynamic{T, typeof(MPSV₁), typeof(dc)}(MPSV₁, MPSV₂, dc)
+    return EPGWork_ReIm_DualVector_Split_Dynamic(ETL, MPSV₁, MPSV₂, dc)
 end
 
-function DECAES.epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Split_Dynamic{T}, θ::EPGOptions{T}) where {T}
+function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Split_Dynamic{T}, θ::EPGOptions{T}) where {T}
     ETL = length(dc)
 
     # Unpack workspace
@@ -760,18 +762,20 @@ end
 ####
 
 struct EPGWork_ReIm_DualMVector_Split{T, ETL, MPSVType <: AbstractVector{SVector{3, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_DualMVector_Split(T, ETL::Int)
+function EPGWork_ReIm_DualMVector_Split(::Type{T}, ::Val{ETL}) where {T, ETL}
     MPSV₁ = MVector{ETL, SVector{3, T}}(undef)
     MPSV₂ = MVector{ETL, SVector{3, T}}(undef)
     dc    = MVector{ETL, T}(undef)
-    return EPGWork_ReIm_DualMVector_Split{T, ETL, typeof(MPSV₁), typeof(dc)}(MPSV₁, MPSV₂, dc)
+    return EPGWork_ReIm_DualMVector_Split(Val(ETL), MPSV₁, MPSV₂, dc)
 end
+EPGWork_ReIm_DualMVector_Split(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, Val(ETL))
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Split{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Split{T, Val{ETL}}, θ::EPGOptions{T, Val{ETL}}) where {T, ETL}
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     A = B1correction(θ)
@@ -843,18 +847,20 @@ end
 
 #=
 struct EPGWork_ReIm_DualPaddedMVector_Vec_Split{T, ETL, MPSVType <: AbstractVector{Vec{4, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_DualPaddedMVector_Vec_Split(T, ETL::Int)
+function EPGWork_ReIm_DualPaddedMVector_Vec_Split(::Type{T}, ::Val{ETL}) where {T, ETL}
     MPSV₁ = MVector{ETL, Vec{4, T}}(undef)
     MPSV₂ = MVector{ETL, Vec{4, T}}(undef)
     dc    = MVector{ETL, T}(undef)
-    return EPGWork_ReIm_DualPaddedMVector_Vec_Split{T, ETL, typeof(MPSV₁), typeof(dc)}(MPSV₁, MPSV₂, dc)
+    return EPGWork_ReIm_DualPaddedMVector_Vec_Split(Val(ETL), MPSV₁, MPSV₂, dc)
 end
+EPGWork_ReIm_DualPaddedMVector_Vec_Split(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualPaddedMVector_Vec_Split(T, Val(ETL))
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMVector_Vec_Split{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMVector_Vec_Split{T, Val{ETL}}, θ::EPGOptions{T, Val{ETL}}) where {T, ETL}
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     A = B1correction(θ)
@@ -926,18 +932,21 @@ end
 ####
 
 struct EPGWork_ReIm_DualPaddedVector_Split{T, ETL, MPSVType <: AbstractVector{SVector{4, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV₁::MPSVType
     MPSV₂::MPSVType
     dc::DCType
 end
-function EPGWork_ReIm_DualPaddedVector_Split(T, ETL::Int)
-    MPSV₁ = SizedVector{ETL, SVector{4, T}}(undef)
-    MPSV₂ = SizedVector{ETL, SVector{4, T}}(undef)
-    dc    = SizedVector{ETL, T}(undef)
-    return EPGWork_ReIm_DualPaddedVector_Split{T, ETL, typeof(MPSV₁), typeof(dc)}(MPSV₁, MPSV₂, dc)
+function EPGWork_ReIm_DualPaddedVector_Split(::Type{T}, ETL::Int) where {T}
+    MPSV₁ = zeros(SVector{4, T}, ETL)
+    MPSV₂ = zeros(SVector{4, T}, ETL)
+    dc    = zeros(T, ETL)
+    return EPGWork_ReIm_DualPaddedVector_Split(ETL, MPSV₁, MPSV₂, dc)
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVector_Split{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVector_Split{T}, θ::EPGOptions{T}) where {T}
+    ETL = length(dc)
+
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     A = B1correction(θ)
@@ -1013,16 +1022,19 @@ end
 
 #=
 struct EPGWork_Vec{T, ETL, MPSVType <: AbstractVector{Vec{2, T}}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
     MPSV::MPSVType
     dc::DCType
 end
-function EPGWork_Vec(T, ETL::Int)
-    MSPV = SizedVector{3 * ETL, Vec{2, T}}(undef)
-    dc = SizedVector{ETL, T}(undef)
-    return EPGWork_Vec{T, ETL, typeof(MSPV), typeof(dc)}(MSPV, dc)
+function EPGWork_Vec(::Type{T}, ETL::Int) where {T}
+    MSPV = zeros(Vec{2, T}, 3 * ETL)
+    dc = zeros(T, ETL)
+    return EPGWork_Vec(ETL, MSPV, dc)
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T, ETL}, θ::EPGOptions{T, ETL}) where {T, ETL}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T}, θ::EPGOptions{T}) where {T}
+    ETL = length(dc)
+
     ###########################
     # Setup
     (; MPSV) = work

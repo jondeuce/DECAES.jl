@@ -538,8 +538,8 @@ function mock_image(o::T2mapOptions{T}; SNR = 50) where {T}
         sfr = T(0.1) + T(0.2) * rand(T)
         T21 = T(10e-3) + T(10e-3) * rand(T) # short T2
         T22 = T(50e-3) + T(50e-3) * rand(T) # long T2
-        dc1 = EPGdecaycurve!(work1, EPGOptions{T, Nothing}((α, TE, T21, T(1), β)))
-        dc2 = EPGdecaycurve!(work2, EPGOptions{T, Nothing}((α, TE, T22, T(1), β)))
+        dc1 = EPGdecaycurve!(work1, EPGOptions((; ETL = nTE, α, TE, T2 = T21, T1 = one(T), β)))
+        dc2 = EPGdecaycurve!(work2, EPGOptions((; ETL = nTE, α, TE, T2 = T22, T1 = one(T), β)))
         @inbounds begin
             m .= sfr .* dc1 .+ (1 - sfr) .* dc2 # bi-exponential signal with EPG correction
             σM = m[1] * σ

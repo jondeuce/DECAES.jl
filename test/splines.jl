@@ -10,7 +10,10 @@ function test_cubic_splines()
         @test spl(x) ≈ y
         @test ŷ >= y - 100 * eps()
 
-        ȳ = (maximum(Y) + minimum(Y)) / 2
+        x̄ = DECAES.spline_root(X, Y, y - 1; deg_spline)
+        @test isnan(x̄)
+
+        ȳ = (minimum(Y) + maximum(Y)) / 2
         x̄ = DECAES.spline_root(X, Y, ȳ; deg_spline)
         @test X[1] <= x̄ <= X[end]
         @test spl(x̄) ≈ ȳ
@@ -24,7 +27,7 @@ function test_mock_surrogate_search_problem(
     ),
 )
     function A(α, β)
-        theta = DECAES.EPGOptions((; α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β), Val(32), Float64)
+        theta = DECAES.EPGOptions((; ETL = 32, α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β))
         T2_times = DECAES.logrange(opts.T2Range..., opts.nT2)
         return DECAES.epg_decay_basis(theta, T2_times)
     end
