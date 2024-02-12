@@ -7,7 +7,7 @@ using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
 using Base.MathConstants: φ
 
 # External libraries
-using ArgParse: ArgParse, @add_arg_table!, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
+using ArgParse: ArgParse, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
 using Dierckx: Dierckx
 using DocStringExtensions: DocStringExtensions, FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using ForwardDiff: ForwardDiff, DiffResults

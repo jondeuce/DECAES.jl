@@ -15,200 +15,270 @@ const CLI_SETTINGS = ArgParseSettings(;
     version = string(VERSION),
 )
 
-@add_arg_table! CLI_SETTINGS begin
-    "input"
-        nargs = '*' # At least one input is required, but this is checked internally
-        arg_type = String
-        help = "one or more input filenames. Valid file types are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
-    "--mask", "-m"
-        nargs = '+' # If --mask is passed, at least one input is required
-        arg_type = String
-        help = "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. The number of mask files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING"
-    "--output", "-o"
-        nargs = '+' # If --output is passed, at least one input is required
-        arg_type = String
-        help = "one or more output directories. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). If one folder is passed, all output files from all processed images will be stored in the same folder. Otherwise, the number of output folders must equal the number of input files. Outputs are stored with the same basename as the input files with additional suffixes; see --T2map and --T2part"
-    "--T2map"
-        action = :store_true
-        help = "call T2mapSEcorr to compute T2 distributions from 4D multi spin-echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat"
-    "--T2part"
-        action = :store_true
-        help = "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi spin-echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Output T2 parts are saved as a MAT file with extension .t2parts.mat"
-    "--quiet", "-q"
-        action = :store_true
-        help = "suppress printing to the terminal. Note: all terminal outputs, including errors and warnings, are still printed to the log file"
-    "--dry"
-        action = :store_true
-        help = "execute dry run of processing without saving any results"
-    "--legacy"
-        action = :store_true
-        help = "use legacy settings and algorithms from the original MATLAB pipeline. This ensures that the same T2-distributions and T2-parts will be produced as those from MATLAB. Note that execution time will be much slower, and less robust algorithms will be used"
-end
+add_arg_table!(CLI_SETTINGS,
+    "input",
+    Dict(
+        :nargs => '*', # At least one input is required, but this is checked internally
+        :arg_type => String,
+        :help => "one or more input filenames. Valid file types are limited to: $ALLOWED_FILE_SUFFIXES_STRING",
+    ),
+    ["--mask", "-m"],
+    Dict(
+        :nargs => '+', # If --mask is passed, at least one input is required
+        :arg_type => String,
+        :help => "one or more mask filenames. Masks are loaded and subsequently applied to the corresponding input files via elementwise multiplication. The number of mask files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING",
+    ),
+    ["--output", "-o"],
+    Dict(
+        :nargs => '+', # If --output is passed, at least one input is required
+        :arg_type => String,
+        :help => "one or more output directories. If not specified, output file(s) will be stored in the same location as the corresponding input file(s). If one folder is passed, all output files from all processed images will be stored in the same folder. Otherwise, the number of output folders must equal the number of input files. Outputs are stored with the same basename as the input files with additional suffixes; see --T2map and --T2part",
+    ),
+    "--T2map",
+    Dict(
+        :action => :store_true,
+        :help => "call T2mapSEcorr to compute T2 distributions from 4D multi spin-echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat",
+    ),
+    "--T2part",
+    Dict(
+        :action => :store_true,
+        :help => "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi spin-echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Output T2 parts are saved as a MAT file with extension .t2parts.mat",
+    ),
+    ["--quiet", "-q"],
+    Dict(
+        :action => :store_true,
+        :help => "suppress printing to the terminal. Note: all terminal outputs, including errors and warnings, are still printed to the log file",
+    ),
+    "--dry",
+    Dict(
+        :action => :store_true,
+        :help => "execute dry run of processing without saving any results",
+    ),
+    "--legacy",
+    Dict(
+        :action => :store_true,
+        :help => "use legacy settings and algorithms from the original MATLAB pipeline. This ensures that the same T2-distributions and T2-parts will be produced as those from MATLAB. Note that execution time will be much slower, and less robust algorithms will be used",
+    ),
+)
 
 add_arg_group!(CLI_SETTINGS,
     "T2map/T2part required parameters",
     :t2_map_part_required,
 )
 
-@add_arg_table! CLI_SETTINGS begin
-    "--MatrixSize"
-        nargs = 3
-        arg_type = Int
-        help = "matrix size of the magnitude image. Inferred automatically as the first three dimensions of the input 4D image"
-        group = :t2_map_part_required
-    "--nTE"
-        arg_type = Int
-        help = "number of echoes of the magnitude image. Inferred automatically as the last dimension of the input 4D image"
-        group = :t2_map_part_required
-    "--TE"
-        arg_type = Float64
-        help = "inter-echo spacing. Required when --T2map is passed. (units: seconds)"
-        group = :t2_map_part_required
-    "--nT2"
-        arg_type = Int
-        help = "number of T2 components used in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension of input image if only --T2part and not --T2map is passed"
-        group = :t2_map_part_required
-    "--T2Range"
-        nargs = 2
-        arg_type = Float64
-        help = "minimum and maximum T2 values. T2 components are logarithmically spaced between these bounds. Required parameter. (units: seconds)"
-        group = :t2_map_part_required
-    "--SPWin"
-        nargs = 2
-        arg_type = Float64
-        help = "minimum and maximum T2 values of the short peak window. Required parameter when --T2part is passed. (units: seconds)"
-        group = :t2_map_part_required
-    "--MPWin"
-        nargs = 2
-        arg_type = Float64
-        help = "minimum and maximum T2 values of the middle peak window. Required parameter when --T2part is passed. (units: seconds)"
-        group = :t2_map_part_required
-    "--Reg"
-        arg_type = String
-        help = "routine used for choosing regularization parameter. One of \"lcurve\", \"gcv\", \"chi2\", or \"none\", representing L-curve based regularization, generalized cross-validation based regularization, --Chi2Factor based Tikhonov regularization, and no regularization, respectively. Required parameter"
-        group = :t2_map_part_required
-    "--Chi2Factor"
-        arg_type = Float64
-        help = "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution. Required parameter when --Reg=\"chi2\""
-        group = :t2_map_part_required
-end
+add_arg_table!(CLI_SETTINGS,
+    "--MatrixSize",
+    Dict(
+        :nargs => 3,
+        :arg_type => Int,
+        :help => "matrix size of the magnitude image. Inferred automatically as the first three dimensions of the input 4D image",
+        :group => :t2_map_part_required,
+    ),
+    "--nTE",
+    Dict(
+        :arg_type => Int,
+        :help => "number of echoes of the magnitude image. Inferred automatically as the last dimension of the input 4D image",
+        :group => :t2_map_part_required,
+    ),
+    "--TE",
+    Dict(
+        :arg_type => Float64,
+        :help => "inter-echo spacing. Required when --T2map is passed. (units: seconds)",
+        :group => :t2_map_part_required,
+    ),
+    "--nT2",
+    Dict(
+        :arg_type => Int,
+        :help => "number of T2 components used in the multi-exponential analysis. Required when --T2map is passed. Inferred from fourth dimension of input image if only --T2part and not --T2map is passed",
+        :group => :t2_map_part_required,
+    ),
+    "--T2Range",
+    Dict(
+        :nargs => 2,
+        :arg_type => Float64,
+        :help => "minimum and maximum T2 values. T2 components are logarithmically spaced between these bounds. Required parameter. (units: seconds)",
+        :group => :t2_map_part_required,
+    ),
+    "--SPWin",
+    Dict(
+        :nargs => 2,
+        :arg_type => Float64,
+        :help => "minimum and maximum T2 values of the short peak window. Required parameter when --T2part is passed. (units: seconds)",
+        :group => :t2_map_part_required,
+    ),
+    "--MPWin",
+    Dict(
+        :nargs => 2,
+        :arg_type => Float64,
+        :help => "minimum and maximum T2 values of the middle peak window. Required parameter when --T2part is passed. (units: seconds)",
+        :group => :t2_map_part_required,
+    ),
+    "--Reg",
+    Dict(
+        :arg_type => String,
+        :help => "routine used for choosing regularization parameter. One of \"lcurve\", \"gcv\", \"chi2\", or \"none\", representing L-curve based regularization, generalized cross-validation based regularization, --Chi2Factor based Tikhonov regularization, and no regularization, respectively. Required parameter",
+        :group => :t2_map_part_required,
+    ),
+    "--Chi2Factor",
+    Dict(
+        :arg_type => Float64,
+        :help => "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution. Required parameter when --Reg=\"chi2\"",
+        :group => :t2_map_part_required,
+    ),
+)
 
 add_arg_group!(CLI_SETTINGS,
     "T2map/T2part optional parameters",
     :t2_map_part_optional,
 )
 
-@add_arg_table! CLI_SETTINGS begin
-    "--T1"
-        arg_type = Float64
-        help = "assumed value of longitudinal T1 relaxation. (default: 1.0) (units: seconds)"
-        group = :t2_map_part_optional
-    "--Sigmoid"
-        arg_type = Float64
-        help = "replace the hard upper limit cutoff time of the short peak window, SPWin[2], with a smoothed sigmoidal cutoff function 'σ' scaled and shifted such that σ(SPWin[2] +/- Sigmoid) = 0.5 -/+ 0.4. Sigmoid is the time scale of the smoothing. (units: seconds)"
-        group = :t2_map_part_optional
-    "--Threshold"
-        arg_type = Float64
-        help = "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold. (default: 0.0) (units: signal magnitude)"
-        group = :t2_map_part_optional
-    "--Progress"
-        action = :store_const # deprecated flags use :store_const with default value nothing (instead of :store_true with default value false)
-        constant = true
-        default = nothing
-        help = "Print progress updates during T2 distribution computation. Note: this flag is now deprecated; progress updates are always printed unless the --quiet flag is passed"
-        group = :t2_map_part_optional
-end
+add_arg_table!(CLI_SETTINGS,
+    "--T1",
+    Dict(
+        :arg_type => Float64,
+        :help => "assumed value of longitudinal T1 relaxation. (default: 1.0) (units: seconds)",
+        :group => :t2_map_part_optional,
+    ),
+    "--Sigmoid",
+    Dict(
+        :arg_type => Float64,
+        :help => "replace the hard upper limit cutoff time of the short peak window, SPWin[2], with a smoothed sigmoidal cutoff function 'σ' scaled and shifted such that σ(SPWin[2] +/- Sigmoid) = 0.5 -/+ 0.4. Sigmoid is the time scale of the smoothing. (units: seconds)",
+        :group => :t2_map_part_optional,
+    ),
+    "--Threshold",
+    Dict(
+        :arg_type => Float64,
+        :help => "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold. (default: 0.0) (units: signal magnitude)",
+        :group => :t2_map_part_optional,
+    ),
+    "--Progress",
+    Dict(
+        :action => :store_const, # deprecated flags use :store_const with default value nothing (instead of :store_true with default value false)
+        :constant => true,
+        :default => nothing,
+        :help => "Print progress updates during T2 distribution computation. Note: this flag is now deprecated; progress updates are always printed unless the --quiet flag is passed",
+        :group => :t2_map_part_optional,
+    ),
+)
 
 add_arg_group!(CLI_SETTINGS,
     "B1 correction and stimulated echo correction",
     :B1_SE_corr,
 )
 
-@add_arg_table! CLI_SETTINGS begin
-    "--B1map"
-        nargs = '+' # If --B1map is passed, at least one input is required
-        arg_type = String
-        help = "one or more B1 map filenames. The B1 maps must have the same matrix sizes as the corresponding images, and are assumed to represent flip angles in units of degrees. The number of B1 map files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING. (units: degrees)"
-        group = :B1_SE_corr
-    "--nRefAngles"
-        arg_type = Int
-        help = "in estimating the local refocusing flip angle to correct for B1 inhomogeneities, up to --nRefAngles angles in the range [--MinRefAngle, 180] are explicitly checked. The optimal angle is then estimated by interpolating between these observations. (default: 32)"
-        group = :B1_SE_corr
-    "--nRefAnglesMin"
-        arg_type = Int
-        help = "initial number of angles in the range [--MinRefAngle, 180] to check during flip angle estimation before refinement near likely optima. Setting --nRefAnglesMin equal to --nRefAngles forces all candidate angles to be checked before interpolation. (default: 5)"
-        group = :B1_SE_corr
-    "--MinRefAngle"
-        arg_type = Float64
-        help = "minimum refocusing angle for flip angle estimation. (default: 50.0) (units: degrees)"
-        group = :B1_SE_corr
-    "--SetFlipAngle"
-        arg_type = Float64
-        help = "to skip B1 inhomogeneity correction, use --SetFlipAngle to assume a fixed refocusing flip angle for all voxels. (units: degrees)"
-        group = :B1_SE_corr
-    "--RefConAngle"
-        arg_type = Float64
-        help = "refocusing pulse control angle. The sequence of flip angles used within the extended phase graph algorithm to perform stimulated echo correction is (90, 180, β, β, ..., β), where β is the refocusing pulse control angle. For typical multi spin-echo sequences this parameter should not be changed. (default: 180.0) (units: degrees)"
-        group = :B1_SE_corr
-end
+add_arg_table!(CLI_SETTINGS,
+    "--B1map",
+    Dict(
+        :nargs => '+', # If --B1map is passed, at least one input is required
+        :arg_type => String,
+        :help => "one or more B1 map filenames. The B1 maps must have the same matrix sizes as the corresponding images, and are assumed to represent flip angles in units of degrees. The number of B1 map files must equal the number of input files. Valid file types are the same as for input files, and are limited to: $ALLOWED_FILE_SUFFIXES_STRING. (units: degrees)",
+        :group => :B1_SE_corr,
+    ),
+    "--nRefAngles",
+    Dict(
+        :arg_type => Int,
+        :help => "in estimating the local refocusing flip angle to correct for B1 inhomogeneities, up to --nRefAngles angles in the range [--MinRefAngle, 180] are explicitly checked. The optimal angle is then estimated by interpolating between these observations. (default: 32)",
+        :group => :B1_SE_corr,
+    ),
+    "--nRefAnglesMin",
+    Dict(
+        :arg_type => Int,
+        :help => "initial number of angles in the range [--MinRefAngle, 180] to check during flip angle estimation before refinement near likely optima. Setting --nRefAnglesMin equal to --nRefAngles forces all candidate angles to be checked before interpolation. (default: 5)",
+        :group => :B1_SE_corr,
+    ),
+    "--MinRefAngle",
+    Dict(
+        :arg_type => Float64,
+        :help => "minimum refocusing angle for flip angle estimation. (default: 50.0) (units: degrees)",
+        :group => :B1_SE_corr,
+    ),
+    "--SetFlipAngle",
+    Dict(
+        :arg_type => Float64,
+        :help => "to skip B1 inhomogeneity correction, use --SetFlipAngle to assume a fixed refocusing flip angle for all voxels. (units: degrees)",
+        :group => :B1_SE_corr,
+    ),
+    "--RefConAngle",
+    Dict(
+        :arg_type => Float64,
+        :help => "refocusing pulse control angle. The sequence of flip angles used within the extended phase graph algorithm to perform stimulated echo correction is (90, 180, β, β, ..., β), where β is the refocusing pulse control angle. For typical multi spin-echo sequences this parameter should not be changed. (default: 180.0) (units: degrees)",
+        :group => :B1_SE_corr,
+    ),
+)
 
 add_arg_group!(CLI_SETTINGS,
     "Additional save options",
     :save_opts,
 )
 
-@add_arg_table! CLI_SETTINGS begin
-    "--SaveDecayCurve"
-        action = :store_true
-        help = "include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary"
-        group = :save_opts
-    "--SaveNNLSBasis"
-        action = :store_true
-        help = "include a 5D (or 2D if --SetFlipAngle is used) array of NNLS basis matrices in the output maps dictionary. Note: this 5D array is extremely large for typical image sizes; in most cases, this flag should only be set when debugging small images"
-        group = :save_opts
-    "--SaveRegParam"
-        action = :store_true
-        help = "include 3D arrays of resulting regularization parameters and χ² factors in the output maps dictionary"
-        group = :save_opts
-    "--SaveResidualNorm"
-        action = :store_true
-        help = "include a 3D array of the l2-norms of the residuals from the NNLS fits in the output maps dictionary"
-        group = :save_opts
-end
+add_arg_table!(CLI_SETTINGS,
+    "--SaveDecayCurve",
+    Dict(
+        :action => :store_true,
+        :help => "include a 4D array of the time domain decay curves resulting from the NNLS fits in the output maps dictionary",
+        :group => :save_opts,
+    ),
+    "--SaveNNLSBasis",
+    Dict(
+        :action => :store_true,
+        :help => "include a 5D (or 2D if --SetFlipAngle is used) array of NNLS basis matrices in the output maps dictionary. Note: this 5D array is extremely large for typical image sizes; in most cases, this flag should only be set when debugging small images",
+        :group => :save_opts,
+    ),
+    "--SaveRegParam",
+    Dict(
+        :action => :store_true,
+        :help => "include 3D arrays of resulting regularization parameters and χ² factors in the output maps dictionary",
+        :group => :save_opts,
+    ),
+    "--SaveResidualNorm",
+    Dict(
+        :action => :store_true,
+        :help => "include a 3D array of the l2-norms of the residuals from the NNLS fits in the output maps dictionary",
+        :group => :save_opts,
+    ),
+)
 
 add_arg_group!(CLI_SETTINGS,
     "BET arguments",
     :bet_args,
 )
 
-@add_arg_table! CLI_SETTINGS begin
-    "--bet"
-        action = :store_true
-        help = "use the BET brain extraction tool from the FSL library of analysis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and the --bet flag will be ignored"
-        group = :bet_args
-    "--betargs"
-        arg_type = String
-        default = "-m -n -f 0.25 -R"
-        help = "BET command line interface arguments. Must be passed as a single string with arguments separated by commas or spaces, e.g. \"-m -n\". The flag \"-m\" indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided"
-        group = :bet_args
-    "--betpath"
-        arg_type = String
-        default = "bet"
-        help = "path to BET executable"
-        group = :bet_args
-end
+add_arg_table!(CLI_SETTINGS,
+    "--bet",
+    Dict(
+        :action => :store_true,
+        :help => "use the BET brain extraction tool from the FSL library of analysis tools to automatically create a binary brain mask. Only voxels within the binary mask will be analyzed. Note that if a mask is passed explicitly with the --mask flag, this mask will be used and the --bet flag will be ignored",
+        :group => :bet_args,
+    ),
+    "--betargs",
+    Dict(
+        :arg_type => String,
+        :default => "-m -n -f 0.25 -R",
+        :help => "BET command line interface arguments. Must be passed as a single string with arguments separated by commas or spaces, e.g. \"-m -n\". The flag \"-m\" indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided",
+        :group => :bet_args,
+    ),
+    "--betpath",
+    Dict(
+        :arg_type => String,
+        :default => "bet",
+        :help => "path to BET executable",
+        :group => :bet_args,
+    ),
+)
 
 add_arg_group!(CLI_SETTINGS,
     "Compiling DECAES (experimental)",
     :compilation,
 )
 
-@add_arg_table! CLI_SETTINGS begin
-    "--compile"
-        action = :store_true
-        help = "compile DECAES into a executable app and exit. The DECAES app is stored in `~/.julia/scratchspaces/<DECAES UUID>`, and a symbolic link to the executable is created at `~/.julia/bin/decaes`. The app can be run from the command line using the syntax 'decaes <DECAES arguments> --julia-args <Julia arguments>'. Note: PackageCompiler.jl will be automatically downloaded and installed upon first use of the --compile flag"
-        group = :compilation
-end
+add_arg_table!(CLI_SETTINGS,
+    "--compile",
+    Dict(
+        :action => :store_true,
+        :help => "compile DECAES into a executable app and exit. The DECAES app is stored in `~/.julia/scratchspaces/<DECAES UUID>`, and a symbolic link to the executable is created at `~/.julia/bin/decaes`. The app can be run from the command line using the syntax 'decaes <DECAES arguments> --julia-args <Julia arguments>'. Note: PackageCompiler.jl will be automatically downloaded and installed upon first use of the --compile flag",
+        :group => :compilation,
+    ),
+)
 
 """
     main(command_line_args = ARGS)
