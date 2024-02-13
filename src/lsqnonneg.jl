@@ -480,7 +480,7 @@ end
 function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8 * eps(one(float(real(first(xs))))), maxiters = 1000)
     if length(xs) == 1 # secant needs a, b; only a given
         a  = float(xs[1])
-        h  = eps(one(real(a)))^(1 / 3)
+        h  = cbrt(eps(one(real(a))))
         da = h * oneunit(a) + abs(a) * h^2 # adjust for if eps(a) > h
         b  = a + da
     else
@@ -524,13 +524,13 @@ function bisection_method(f, a::Number, b::Number; xtol = nothing, xrtol = nothi
     y₁, y₂ = f(x₁), f(x₂)
 
     xtol = xtol === nothing ? zero(T) : T(xtol)
-    xrtol = xrtol === nothing ? zero(one(T)) : T(xrtol)
+    xrtol = xrtol === nothing ? zero(T) : T(xrtol)
     ftol = ftol === nothing ? zero(T) : T(ftol)
 
     return bisect(f, x₁, x₂, y₁, y₂; xtol, xrtol, ftol, maxiters)
 end
 
-function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = zero(one(T)), ftol = zero(T), maxiters = 1000) where {T}
+function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = zero(T), ftol = zero(T), maxiters = 1000) where {T}
     # No sign change; return arbitrary endpoint
     if y₁ * y₂ >= 0
         return (x₁, y₁)
@@ -594,7 +594,7 @@ function bracketing_interval(f, a, δ, dilate = 1; maxiters = 1000)
 end
 
 ####
-#### Optimization methods. `brent` is a modified code from Optim.jl:
+#### Optimization methods. `brents_method` is a modified code from Optim.jl:
 ####
 ####    https://github.com/JuliaNLSolvers/Optim.jl/blob/1189ba0347ba567e43d1d4de94588aaf8a9e3ac0/src/univariate/solvers/brent.jl#L23
 ####
@@ -606,11 +606,11 @@ end
 #### > The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 #### > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function brent(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xtol = eps(T), maxiters::Int = 1_000) where {T <: AbstractFloat}
+function brents_method(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xtol = eps(T), maxiters::Int = 1_000) where {T <: AbstractFloat}
     @assert x₁ <= x₂ "x₁ must be less than x₂"
 
-    φ::T = (3 - sqrt(T(5))) / 2
-    xᵒᵖᵗ = x₁ + φ * (x₂ - x₁)
+    α = 2 - T(φ)
+    xᵒᵖᵗ = x₁ + α * (x₂ - x₁)
     yᵒᵖᵗ = f(xᵒᵖᵗ)
 
     Δx_old = Δx = zero(T)
@@ -661,7 +661,7 @@ function brent(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xtol = eps(T), maxiter
             end
         else
             Δx_old = (xᵒᵖᵗ < xₘ) ? x₂ - xᵒᵖᵗ : x₁ - xᵒᵖᵗ
-            Δx = φ * Δx_old
+            Δx = α * Δx_old
         end
 
         # The function must not be evaluated too close to xᵒᵖᵗ
@@ -943,36 +943,6 @@ function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}
     return Cₖ
 end
 
-function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2, T}}
-    if interp_uniform
-        h = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / T(φ)
-        h₋ = h₊ = h
-        x₋, x₀, x₊ = xₖ - h, xₖ, xₖ + h
-        P₀ = Pₖ
-        P₋ = exp_interp.(x₋, xⱼ, xₖ, Pⱼ, Pₖ)
-        P₊ = exp_interp.(x₊, xₖ, xₗ, Pₖ, Pₗ)
-    else
-        P₋, P₀, P₊ = Pⱼ, Pₖ, Pₗ
-        x₋, x₀, x₊ = xⱼ, xₖ, xₗ
-        h₋, h₊ = x₀ - x₋, x₊ - x₀
-    end
-    ξ₋, ξ₀, ξ₊ = P₋[1], P₀[1], P₊[1]
-    η₋, η₀, η₊ = P₋[2], P₀[2], P₊[2]
-
-    if linear_deriv
-        ξ′ = (ξ₊ - ξ₋) / (h₊ + h₋)
-        η′ = (η₊ - η₋) / (h₊ + h₋)
-    else
-        ξ′ = (h₋^2 * ξ₊ + (h₊ + h₋) * (h₊ - h₋) * ξ₀ - h₊^2 * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
-        η′ = (h₋^2 * η₊ + (h₊ + h₋) * (h₊ - h₋) * η₀ - h₊^2 * η₋) / (h₊ * h₋ * (h₊ + h₋))
-    end
-
-    ξ′′ = 2 * (h₋ * ξ₊ - (h₊ + h₋) * ξ₀ + h₊ * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
-    η′′ = 2 * (h₋ * η₊ - (h₊ + h₋) * η₀ + h₊ * η₋) / (h₊ * h₋ * (h₊ + h₋))
-
-    return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
-end
-
 function menger(f; h = 1e-3)
     function menger_curvature_inner(x)
         fⱼ, fₖ, fₗ = f(x - h), f(x), f(x + h)
@@ -1007,6 +977,37 @@ function menger(y::Dierckx.Spline1D)
         y′′ = Dierckx.derivative(y, t; nu = 2)
         return y′′ / √((1 + y′^2)^3)
     end
+end
+
+#=
+function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2, T}}
+    if interp_uniform
+        h = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / T(φ)
+        h₋ = h₊ = h
+        x₋, x₀, x₊ = xₖ - h, xₖ, xₖ + h
+        P₀ = Pₖ
+        P₋ = exp_interp.(x₋, xⱼ, xₖ, Pⱼ, Pₖ)
+        P₊ = exp_interp.(x₊, xₖ, xₗ, Pₖ, Pₗ)
+    else
+        P₋, P₀, P₊ = Pⱼ, Pₖ, Pₗ
+        x₋, x₀, x₊ = xⱼ, xₖ, xₗ
+        h₋, h₊ = x₀ - x₋, x₊ - x₀
+    end
+    ξ₋, ξ₀, ξ₊ = P₋[1], P₀[1], P₊[1]
+    η₋, η₀, η₊ = P₋[2], P₀[2], P₊[2]
+
+    if linear_deriv
+        ξ′ = (ξ₊ - ξ₋) / (h₊ + h₋)
+        η′ = (η₊ - η₋) / (h₊ + h₋)
+    else
+        ξ′ = (h₋^2 * ξ₊ + (h₊ + h₋) * (h₊ - h₋) * ξ₀ - h₊^2 * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
+        η′ = (h₋^2 * η₊ + (h₊ + h₋) * (h₊ - h₋) * η₀ - h₊^2 * η₋) / (h₊ * h₋ * (h₊ + h₋))
+    end
+
+    ξ′′ = 2 * (h₋ * ξ₊ - (h₊ + h₋) * ξ₀ + h₊ * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
+    η′′ = 2 * (h₋ * η₊ - (h₊ + h₋) * η₀ + h₊ * η₋) / (h₊ * h₋ * (h₊ + h₋))
+
+    return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
 end
 
 function maximize_curvature(state::LCurveCornerState{T}) where {T}
@@ -1115,6 +1116,7 @@ function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2, T}}
     return v₁ × v₂ > 0 ? 2 * T(π) - α : α
 end
 kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(Pⱼ - Pₖ, Pₗ - Pₖ)
+=#
 
 ####
 #### GCV method for choosing Tikhonov regularization parameter
@@ -1189,7 +1191,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T
         opt.min_objective = (logμ, ∇logμ) -> log(Float64(gcv!(work, logμ[1])))
         minf, minx, ret   = NLopt.optimize(opt, [-4.0])
     elseif method === :brent
-        minx, minf = brent(-8.0, 2.0; xrtol = T(0.05), xtol = T(1e-4), maxiters = 10) do logμ
+        minx, minf = brents_method(-8.0, 2.0; xrtol = T(0.05), xtol = T(1e-4), maxiters = 10) do logμ
             return log(gcv!(work, logμ))
         end
     else

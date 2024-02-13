@@ -16,7 +16,7 @@ set_theme!(theme_ggplot2(); resolution = (500, 400), font = "CMU Serif")
 
 function plot_neighbours(::Val{D} = Val(2)) where {D}
     grid  = DECAES.meshgrid(SVector{D, Float64}, [range(0, 1; length = 25) for _ in 1:D]...)
-    surr  = DECAES.HermiteSplineSurrogate(I -> (1.0, zero(SVector{D, Float64})), grid)
+    surr  = DECAES.NormalHermiteSplineSurrogate(I -> (1.0, zero(SVector{D, Float64})), grid)
     state = DECAES.DiscreteSurrogateSearcher(surr; mineval = 5, maxeval = typemax(Int))
 
     second(x) = x[2]
@@ -56,7 +56,7 @@ function plot_bisection_search(
     # build surrogate
     surr = surrtype === :cubic ?
            DECAES.CubicSplineSurrogate(prob) :
-           DECAES.HermiteSplineSurrogate(prob)
+           DECAES.NormalHermiteSplineSurrogate(prob)
     f_true = function (x...)
         α, β = length(x) == 1 ? (x[1], opts.RefConAngle) : (x[1], x[2])
         θ = DECAES.EPGOptions((; ETL, α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β))

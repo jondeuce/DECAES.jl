@@ -3,7 +3,7 @@ AUTO-GENERATED FILE - DO NOT EDIT
 
 This file is derived from the following fork of the NormalHermiteSplines.jl package:
 
-    https://github.com/jondeuce/NormalHermiteSplines.jl#eda1e4cf214e291d219509163a54312edfce271a
+    https://github.com/jondeuce/NormalHermiteSplines.jl#90e71425004c002611c68741e10787755028a6d6
 
 As it is not possible to depend on a package fork, the above module is included here verbatim.
 
@@ -126,49 +126,52 @@ struct RK_H2{T} <: ReproducingKernel_2
 end
 Base.eltype(::RK_H2{T}) where {T} = T
 
-@inline function _rk(kernel::RK_H2, η::SVector, ξ::SVector)
-    x = kernel.ε * norm(η - ξ)
+@inline _norm(x::SVector) = norm(x)
+@inline _norm(x::SVector{1}) = abs(x[1])
+
+@inline @fastmath function _rk(kernel::RK_H2, η::SVector, ξ::SVector)
+    x = kernel.ε * _norm(η - ξ)
     return (3 + x * (3 + x)) * exp(-x)
 end
 
-@inline function _rk(kernel::RK_H1, η::SVector, ξ::SVector)
-    x = kernel.ε * norm(η - ξ)
+@inline @fastmath function _rk(kernel::RK_H1, η::SVector, ξ::SVector)
+    x = kernel.ε * _norm(η - ξ)
     return (1 + x) * exp(-x)
 end
 
-@inline function _rk(kernel::RK_H0, η::SVector, ξ::SVector)
-    x = kernel.ε * norm(η - ξ)
+@inline @fastmath function _rk(kernel::RK_H0, η::SVector, ξ::SVector)
+    x = kernel.ε * _norm(η - ξ)
     return exp(-x)
 end
 
-@inline function _∂rk_∂e(kernel::RK_H2, η::SVector, ξ::SVector, e::SVector)
+@inline @fastmath function _∂rk_∂e(kernel::RK_H2, η::SVector, ξ::SVector, e::SVector)
     t = η - ξ
-    x = kernel.ε * norm(t)
+    x = kernel.ε * _norm(t)
     return kernel.ε^2 * exp(-x) * (1 + x) * (t ⋅ e)
 end
 
-@inline function _∂rk_∂e(kernel::RK_H1, η::SVector, ξ::SVector, e::SVector)
+@inline @fastmath function _∂rk_∂e(kernel::RK_H1, η::SVector, ξ::SVector, e::SVector)
     t = η - ξ
-    x = kernel.ε * norm(t)
+    x = kernel.ε * _norm(t)
     return kernel.ε^2 * exp(-x) * (t ⋅ e)
 end
 
-@inline function _∂rk_∂η(kernel::RK_H2, η::SVector, ξ::SVector)
+@inline @fastmath function _∂rk_∂η(kernel::RK_H2, η::SVector, ξ::SVector)
     t = η - ξ
-    x = kernel.ε * norm(t)
+    x = kernel.ε * _norm(t)
     return -kernel.ε^2 * exp(-x) * (1 + x) * t
 end
 
-@inline function _∂rk_∂η(kernel::RK_H1, η::SVector, ξ::SVector)
+@inline @fastmath function _∂rk_∂η(kernel::RK_H1, η::SVector, ξ::SVector)
     t = η - ξ
-    x = kernel.ε * norm(t)
+    x = kernel.ε * _norm(t)
     return -kernel.ε^2 * exp(-x) * t
 end
 
-@inline function _∂rk_∂η(kernel::RK_H0, η::SVector, ξ::SVector)
+@inline @fastmath function _∂rk_∂η(kernel::RK_H0, η::SVector, ξ::SVector)
     # Note: Derivative of spline built with reproducing kernel RK_H0 does not exist at the spline nodes
     t    = η - ξ
-    tnrm = norm(t)
+    tnrm = _norm(t)
     x    = kernel.ε * tnrm
     ∇    = kernel.ε * exp(-x)
     t    = ifelse(x > eps(typeof(x)), t, zeros(t))
@@ -177,11 +180,11 @@ end
     return ∇
 end
 
-@inline function _∂²rk_∂²e(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}, êη::SVector{n}, êξ::SVector{n}) where {n}
+@inline @fastmath function _∂²rk_∂²e(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}, êη::SVector{n}, êξ::SVector{n}) where {n}
     ε     = kernel.ε
     ε²    = ε * ε
     t     = η - ξ
-    tnrm  = norm(t)
+    tnrm  = _norm(t)
     x     = ε * tnrm
     ε²e⁻ˣ = ε² * exp(-x)
     ∇²    = ((1 + x) * ε²e⁻ˣ) * (êξ ⋅ êη)
@@ -189,12 +192,12 @@ end
     return ∇²
 end
 
-@inline function _∂²rk_∂²e(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}, êη::SVector{n}, êξ::SVector{n}) where {n}
+@inline @fastmath function _∂²rk_∂²e(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}, êη::SVector{n}, êξ::SVector{n}) where {n}
     # Note: Second derivative of spline built with reproducing kernel RK_H1 does not exist at the spline nodes
     ε     = kernel.ε
     ε²    = ε * ε
     t     = η - ξ
-    tnrm  = norm(t)
+    tnrm  = _norm(t)
     x     = ε * tnrm
     ε²e⁻ˣ = ε² * exp(-x)
     ∇²    = ε²e⁻ˣ * (êξ ⋅ êη)
@@ -202,11 +205,11 @@ end
     return ∇²
 end
 
-@inline function _∂²rk_∂η∂ξ(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}) where {n}
+@inline @fastmath function _∂²rk_∂η∂ξ(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}) where {n}
     ε     = kernel.ε
     ε²    = ε * ε
     t     = η - ξ
-    tnrm  = norm(t)
+    tnrm  = _norm(t)
     x     = ε * tnrm
     ε²e⁻ˣ = ε² * exp(-x)
     S     = SMatrix{n, n, typeof(x)}
@@ -215,12 +218,12 @@ end
     return ∇²
 end
 
-@inline function _∂²rk_∂η∂ξ(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}) where {n}
+@inline @fastmath function _∂²rk_∂η∂ξ(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}) where {n}
     # Note: Second derivative of spline built with reproducing kernel RK_H1 does not exist at the spline nodes
     ε     = kernel.ε
     ε²    = ε * ε
     t     = η - ξ
-    tnrm  = norm(t)
+    tnrm  = _norm(t)
     x     = ε * tnrm
     ε²e⁻ˣ = ε² * exp(-x)
     S     = SMatrix{n, n, typeof(x)}
@@ -686,7 +689,7 @@ function Base.insert!(
     curr_d_nodes = _get_d_nodes(spl)
     curr_d_dirs  = _get_d_dirs(spl)
     new_d_node   = _normalize(spl, d_node)
-    new_d_dir    = d_dir / norm(d_dir)
+    new_d_dir    = d_dir / _norm(d_dir)
     new_d_value  = _get_scale(spl) * d_value
     @inbounds begin
         spl._d_nodes[n₂+1]   = new_d_node
@@ -803,7 +806,7 @@ end
 function _pairwise_sum_norms(nodes::AbstractVecOfSVecs{n, T}) where {n, T}
     ℓ = zero(T)
     @inbounds for i in 1:length(nodes), j in i:length(nodes)
-        ℓ += norm(nodes[i] .- nodes[j])
+        ℓ += _norm(nodes[i] - nodes[j])
     end
     return ℓ
 end
@@ -811,7 +814,7 @@ end
 function _pairwise_sum_norms_weighted(nodes::AbstractVecOfSVecs{n, T}, d_nodes::AbstractVecOfSVecs{n, T}, w_d_nodes::T) where {n, T}
     ℓ = zero(T)
     @inbounds for i in 1:length(nodes), j in 1:length(d_nodes)
-        ℓ += norm(nodes[i] .- w_d_nodes .* d_nodes[j])
+        ℓ += _norm(nodes[i] - w_d_nodes * d_nodes[j])
     end
     return ℓ
 end
@@ -881,7 +884,7 @@ function _get_gram(nodes::AbstractVecOfSVecs, d_nodes::AbstractVecOfSVecs, d_dir
     min_bound, max_bound, scale = _normalization_scaling(nodes, d_nodes)
     nodes = _normalize.(nodes, (min_bound,), (max_bound,), scale)
     d_nodes = _normalize.(d_nodes, (min_bound,), (max_bound,), scale)
-    d_dirs = d_dirs ./ norm.(d_dirs)
+    d_dirs = d_dirs ./ _norm.(d_dirs)
     if kernel.ε == 0
         kernel = _estimate_ε(kernel, nodes, d_nodes)
     end
@@ -999,7 +1002,7 @@ function _prepare(nodes::AbstractVecOfSVecs{n, T}, d_nodes::AbstractVecOfSVecs{n
     min_bound, max_bound, scale = _normalization_scaling(nodes, d_nodes)
     nodes = _normalize.(nodes, (min_bound,), (max_bound,), scale)
     d_nodes = _normalize.(d_nodes, (min_bound,), (max_bound,), scale)
-    d_dirs = d_dirs ./ norm.(d_dirs)
+    d_dirs = d_dirs ./ _norm.(d_dirs)
 
     if kernel.ε == 0
         kernel = _estimate_ε(kernel, nodes, d_nodes)

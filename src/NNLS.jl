@@ -38,8 +38,8 @@
 module NNLS
 
 using LinearAlgebra
-using MuladdMacro: @muladd
-using UnsafeArrays: uview
+using MuladdMacro: MuladdMacro, @muladd
+using UnsafeArrays: UnsafeArrays, uview
 
 export nnls, nnls!, load!
 export NNLSWorkspace, NormalEquation, NormalEquationCholesky
@@ -100,7 +100,7 @@ function load!(work::NNLSWorkspace{T}, A::AbstractMatrix{T}, b::AbstractVector{T
     return work
 end
 
-@noinline function checkargs(work::NNLSWorkspace)
+function checkargs(work::NNLSWorkspace)
     m, n = size(work.A)
     @assert size(work.b) == (m,)
     @assert size(work.x) == (n,)
@@ -179,14 +179,15 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function construct_householder!(u::AbstractVector{T}, up::T) where {T}
+@fastmath function construct_householder!(u::AbstractVector{T}, up::T) where {T}
     if length(u) <= 1
         return up
     end
 
     sm = zero(T)
     @inbounds @simd for i in eachindex(u)
-        sm = sm + u[i] * u[i]
+        ui = u[i]
+        sm = sm + ui * ui
     end
     cl = sqrt(sm)
 
@@ -208,7 +209,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
+@fastmath function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
     m = length(u)
     if m <= 1
         return nothing
@@ -236,7 +237,7 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
     end
 end
 
-function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int}, nsetp::Int, jup::Int) where {T}
+@fastmath function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int}, nsetp::Int, jup::Int) where {T}
     m, n = size(A)
     if m - nsetp <= 0
         return nothing
@@ -282,17 +283,17 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
         SIG IS COMPUTED LAST TO ALLOW FOR THE POSSIBILITY THAT
         SIG MAY BE IN THE SAME LOCATION AS A OR B .
 """
-@inline function orthogonal_rotmat(a::T, b::T) where {T}
+@inline @fastmath function orthogonal_rotmat(a::T, b::T) where {T}
     if abs(a) > abs(b)
         xr = b / a
-        yr = sqrt(1 + xr * xr)
-        c = inv(yr) * sign(a)
+        yr = sqrt(one(T) + xr * xr)
+        c = sign(a) / yr
         s = c * xr
         sig = abs(a) * yr
     elseif b != 0
         xr = a / b
-        yr = sqrt(1 + xr * xr)
-        s = inv(yr) * sign(b)
+        yr = sqrt(one(T) + xr * xr)
+        s = sign(b) / yr
         c = s * xr
         sig = abs(b) * yr
     else
@@ -303,7 +304,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     return c, s, sig
 end
 
-@inline function orthogonal_rotmatvec(c::T, s::T, a::T, b::T) where {T}
+@inline @fastmath function orthogonal_rotmatvec(c::T, s::T, a::T, b::T) where {T}
     x = c * a + s * b
     y = -s * a + c * b
     return x, y
@@ -316,7 +317,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int, ::Val{transp} = Val(false)) where {T, transp}
+@fastmath function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int, ::Val{transp} = Val(false)) where {T, transp}
     if nsetp <= 0
         return zz
     end
@@ -357,7 +358,7 @@ function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, i
     return zz
 end
 
-function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
+@fastmath function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
     n = length(w)
     wmax = zero(T)
     i_wmax = 0
@@ -508,7 +509,7 @@ function nnls!(
 
             # SEE IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE.
             # IF NOT COMPUTE ALPHA.
-            alpha = convert(T, 2)
+            alpha = T(2)
             @inbounds for ip in 1:nsetp
                 j = idx[ip]
                 if zz[ip] <= 0
@@ -616,7 +617,7 @@ function nnls!(
     else
         fill!(w, zero(T))
     end
-    work.rnorm[] = sqrt(sm)
+    work.rnorm[] = @fastmath sqrt(sm)
     work.nsetp[] = nsetp
     return work.x
 end

@@ -173,10 +173,15 @@ function T2mapSEcorr!(
 
     # Run analysis in parallel
     indices = filter(I -> image[I, 1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
-    signals = permutedims(image[indices, :]) # Permute image for cache locality
-
+    if isempty(indices)
+        !opts.Silent && @warn "No voxels found with first-echo signal intensity above threshold $(opts.Threshold).\nConsider lowering the threshold or checking the input data."
+        return convert(Dict{String, Any}, maps), convert(Array{T, 4}, dist)
+    end
     ntasks = opts.Threaded ? Threads.nthreads() : 1
     indices_blocks = split_indices(length(indices), default_blocksize())
+
+    # Run analysis in parallel
+    signals = permutedims(image[indices, :]) # permute image for cache locality
 
     with_singlethreaded_blas() do
         workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
@@ -383,7 +388,7 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Abstrac
         ∇epg_decay_basis!(decay_basis_set_ensemble, θ)
         α_surrogate = o.legacy ?
                       CubicSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob; legacy = true) :
-                      HermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
+                      NormalHermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
     end
 
     return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate)
@@ -470,12 +475,18 @@ function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T},
     (; gdn, ggm, gva, fnr, snr, alpha) = maps
     @inbounds begin
         mul!(decay_calc, decay_basis, T2_dist)
+        Σ_dist = sum(T2_dist)
         residuals .= decay_calc .- decay_data
-        gdn[I] = sum(T2_dist)
-        ggm[I] = exp(dot(T2_dist, logT2_times) / sum(T2_dist))
-        gva_buf .= (logT2_times .- log(ggm[I])) .^ 2 .* T2_dist
-        gva[I] = exp(sum(gva_buf) / sum(T2_dist)) - 1
-        fnr[I] = sum(T2_dist) / sqrt(sum(abs2, residuals) / (o.nTE - 1))
+        log_ggm = dot(T2_dist, logT2_times) / Σ_dist
+        log1p_gva = zero(T)
+        @simd for j in 1:o.nT2
+            log1p_gva += abs2(logT2_times[j] - log_ggm) * T2_dist[j]
+        end
+        log1p_gva /= Σ_dist
+        gdn[I] = Σ_dist
+        ggm[I] = exp(log_ggm)
+        gva[I] = expm1(log1p_gva)
+        fnr[I] = Σ_dist / sqrt(sum(abs2, residuals) / (o.nTE - 1))
         snr[I] = maximum(decay_data) / std(residuals)
         alpha[I] = flip_angle_work.α[]
     end

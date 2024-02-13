@@ -83,7 +83,7 @@ end
 
 function test_discrete_searcher()
     grid = DECAES.meshgrid(SVector{2, Float64}, 1:5, 1:10)
-    surr = DECAES.HermiteSplineSurrogate(I -> (1.0, zero(SVector{2, Float64})), grid)
+    surr = DECAES.NormalHermiteSplineSurrogate(I -> (1.0, zero(SVector{2, Float64})), grid)
     state = DECAES.DiscreteSurrogateSearcher(surr; mineval = 0, maxeval = 0)
     state.seen[[1, 5], [1, 10]] .= true
 

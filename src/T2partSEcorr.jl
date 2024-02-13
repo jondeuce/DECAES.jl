@@ -96,20 +96,20 @@ end
 function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOptions{T}, I) where {T}
     (; dist, T2_times, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights) = thread_buffer
 
-    # Return nothing if distribution contains NaN entries
+    # Return if distribution contains NaN entries
     @inbounds for j in 1:o.nT2
         isnan(T2distributions[I, j]) && return nothing
     end
 
     # Load in voxel T2 distribution
-    @inbounds for j in 1:o.nT2
+    @inbounds @simd for j in 1:o.nT2
         dist[j] = T2distributions[I, j]
     end
 
     # Precompute sums and dot products over small pool, medium pool, and entire ranges
     Σ_dist, Σ_dist_sp, Σ_dist_mp = zero(T), zero(T), zero(T)
     dot_sp, dot_mp = zero(T), zero(T)
-    @inbounds for j in 1:length(dist)
+    @inbounds @simd for j in 1:length(dist)
         Σ_dist += dist[j]
     end
     @inbounds for j in 1:length(sp_range)
@@ -124,15 +124,15 @@ function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOpti
     end
 
     # Compute T2 distribution parts
-    if Σ_dist > 0
-        @inbounds maps.sfr[I] = o.Sigmoid !== nothing ? dot(dist, weights) / Σ_dist : Σ_dist_sp / Σ_dist
-        @inbounds maps.mfr[I] = Σ_dist_mp / Σ_dist
+    @inbounds if Σ_dist > 0
+        maps.sfr[I] = o.Sigmoid !== nothing ? dot(dist, weights) / Σ_dist : Σ_dist_sp / Σ_dist
+        maps.mfr[I] = Σ_dist_mp / Σ_dist
     end
-    if Σ_dist_sp > 0
-        @inbounds maps.sgm[I] = exp(dot_sp / Σ_dist_sp)
+    @inbounds if Σ_dist_sp > 0
+        maps.sgm[I] = exp(dot_sp / Σ_dist_sp)
     end
-    if Σ_dist_mp > 0
-        @inbounds maps.mgm[I] = exp(dot_mp / Σ_dist_mp)
+    @inbounds if Σ_dist_mp > 0
+        maps.mgm[I] = exp(dot_mp / Σ_dist_mp)
     end
 
     return nothing

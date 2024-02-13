@@ -258,19 +258,19 @@ function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
     return SVector{1, T}(p), T(u)
 end
 
-struct HermiteSplineSurrogate{D, T, F, RK} <: AbstractSurrogate{D, T}
+struct NormalHermiteSplineSurrogate{D, T, F, RK} <: AbstractSurrogate{D, T}
     fg::F
     grid::Array{SVector{D, T}, D}
     ugrid::Array{T, D}
     spl::NormalHermiteSplines.ElasticNormalSpline{D, T, RK}
 end
 
-function HermiteSplineSurrogate(fg, grid::Array{SVector{D, T}, D}, kernel = RK_H1(one(T))) where {D, T}
+function NormalHermiteSplineSurrogate(fg, grid::Array{SVector{D, T}, D}, kernel = RK_H1(one(T))) where {D, T}
     spl = NormalHermiteSplines.ElasticNormalSpline(first(grid), last(grid), maximum(size(grid)), kernel)
-    return HermiteSplineSurrogate(fg, grid, zeros(T, size(grid)), spl)
+    return NormalHermiteSplineSurrogate(fg, grid, zeros(T, size(grid)), spl)
 end
 
-function update!(surr::HermiteSplineSurrogate{D, T}, I::CartesianIndex{D}) where {D, T}
+function update!(surr::NormalHermiteSplineSurrogate{D, T}, I::CartesianIndex{D}) where {D, T}
     u, ∇u = surr.fg(I)
     @inbounds p = surr.grid[I]
     insert!(surr.spl, p, u)
@@ -281,12 +281,12 @@ function update!(surr::HermiteSplineSurrogate{D, T}, I::CartesianIndex{D}) where
     return surr
 end
 
-function Base.empty!(surr::HermiteSplineSurrogate)
+function Base.empty!(surr::NormalHermiteSplineSurrogate)
     empty!(surr.spl)
     return surr
 end
 
-function suggest_point(surr::HermiteSplineSurrogate{D, T}) where {D, T}
+function suggest_point(surr::NormalHermiteSplineSurrogate{D, T}) where {D, T}
     _, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
     @inbounds p = surr.grid[I]
     p, u = local_search(surr, p)
@@ -294,7 +294,7 @@ function suggest_point(surr::HermiteSplineSurrogate{D, T}) where {D, T}
 end
 
 # Specialize the 1D case to use the faster and more robust Brent-Dekker method
-function suggest_point(surr::HermiteSplineSurrogate{1, T}) where {T}
+function suggest_point(surr::NormalHermiteSplineSurrogate{1, T}) where {T}
     u₀, I = findmin(evaluate!(surr.ugrid, surr.spl, surr.grid))
     @inbounds p₀ = surr.grid[I]
 
@@ -306,8 +306,8 @@ function suggest_point(surr::HermiteSplineSurrogate{1, T}) where {T}
         p₁, p₂ = surr.grid[I-1], p₀
     else
         # Check gradient at grid minimizer
-        ∇u0 = NormalHermiteSplines.evaluate_gradient(surr.spl, p₀)
-        if ∇u0[1] < 0
+        ∇u₀ = NormalHermiteSplines.evaluate_gradient(surr.spl, p₀)
+        if ∇u₀[1] < 0
             p₁, p₂ = p₀, surr.grid[I+1] # negative gradient -> minimum is to the right
         else
             p₁, p₂ = surr.grid[I-1], p₀ # positive gradient -> minimum is to the left
@@ -315,7 +315,7 @@ function suggest_point(surr::HermiteSplineSurrogate{1, T}) where {T}
     end
 
     # Use Brent's method to search for a minimum on the interval (p₁, p₂)
-    @inbounds xᵒᵖᵗ, uᵒᵖᵗ = brent(p₁[1], p₂[1]; xrtol = T(1e-4), xtol = T(1e-4), maxiters = 10) do x
+    xᵒᵖᵗ, uᵒᵖᵗ = brents_method(p₁[1], p₂[1]; xrtol = T(1e-4), xtol = T(1e-4), maxiters = 10) do x
         p = SA{T}[x]
         u = NormalHermiteSplines.evaluate(surr.spl, p)
         return u
@@ -527,7 +527,7 @@ is_inside(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T}
 ####
 
 function local_search(
-    surr::HermiteSplineSurrogate{D, T},
+    surr::NormalHermiteSplineSurrogate{D, T},
     x₀::SVector{D, T},
     state::Union{Nothing, DiscreteSurrogateSearcher{D, T}} = nothing;
     maxiter::Int = 100,
@@ -578,7 +578,7 @@ end
 
 #=
 function local_search(
-        surr::HermiteSplineSurrogate{D,T},
+        surr::NormalHermiteSplineSurrogate{D,T},
         x₀::SVector{D,T};
         maxeval::Int = 100,
         xtol_rel = 1e-4,
@@ -699,25 +699,21 @@ function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D})
     return SVector{D, T}(∇u)
 end
 
-function CubicSplineSurrogate(prehook!, prob::NNLSDiscreteSurrogateSearch{1, T}; legacy = false) where {T}
-    function f(I)
-        prehook!(I)
-        return loss!(prob, I)
-    end
+function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1, T}; legacy = false) where {T}
+    f = Base.Fix1(cubic_spline_surrogate_loss!, prob)
     return CubicSplineSurrogate(f, prob.αs, SVector{1, T}[], T[], Ref(0), legacy)
 end
-CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch; kwargs...) = CubicSplineSurrogate(I -> nothing, prob; kwargs...)
+cubic_spline_surrogate_loss!(prob::NNLSDiscreteSurrogateSearch{1, T}, I::CartesianIndex{1}) where {T} = loss!(prob, I)
 
-function HermiteSplineSurrogate(prehook!, prob::NNLSDiscreteSurrogateSearch{D, T}) where {D, T}
-    function fg(I)
-        prehook!(I)
-        u = loss!(prob, I)
-        ∇u = ∇loss!(prob, I)
-        return u, ∇u
-    end
-    return HermiteSplineSurrogate(fg, prob.αs, RK_H1(one(T)))
+function NormalHermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D, T}) where {D, T}
+    fg = Base.Fix1(hermite_spline_surrogate_gradloss!, prob)
+    return NormalHermiteSplineSurrogate(fg, prob.αs, RK_H1(one(T)))
 end
-HermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch) = HermiteSplineSurrogate(I -> nothing, prob)
+function hermite_spline_surrogate_gradloss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
+    u = loss!(prob, I)
+    ∇u = ∇loss!(prob, I)
+    return u, ∇u
+end
 
 function surrogate_spline_opt(
     prob::NNLSDiscreteSurrogateSearch{D},
