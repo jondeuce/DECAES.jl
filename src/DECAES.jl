@@ -12,7 +12,7 @@ using Dierckx: Dierckx
 using DocStringExtensions: DocStringExtensions, FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using ForwardDiff: ForwardDiff, DiffResults
 using Logging: Logging, ConsoleLogger, with_logger
-using LoggingExtras: LoggingExtras, FileLogger, TeeLogger, TransformerLogger
+using LoggingExtras: LoggingExtras, FileLogger, LevelOverrideLogger, TeeLogger, TransformerLogger
 using MAT: MAT
 using MuladdMacro: MuladdMacro, @muladd
 using NIfTI: NIfTI

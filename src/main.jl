@@ -352,12 +352,12 @@ function main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
     # Apply mask
     if file_info[:maskfile] !== nothing
         @showtime(
-            "Applying mask from file: '$(file_info[:maskfile])'",
+            "Applying mask from file: $(file_info[:maskfile])",
             try_apply_maskfile!(image, file_info[:maskfile]),
         )
     elseif opts[:bet]
         @showtime(
-            "Making and applying BET mask with args: '$(opts[:betargs])'",
+            "Making and applying BET mask with args: $(opts[:betargs])",
             try_apply_bet!(image, opts[:betpath], opts[:betargs]),
         )
     end
@@ -371,7 +371,7 @@ function main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
         # Load B1 map
         if file_info[:B1mapfile] !== nothing
             @showtime(
-                "Loading B1 map from file: '$(file_info[:B1mapfile])'",
+                "Loading B1 map from file: $(file_info[:B1mapfile])",
                 try_load_B1mapfile!(t2map_maps, file_info[:B1mapfile]),
             )
         end

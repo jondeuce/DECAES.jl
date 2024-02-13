@@ -257,7 +257,7 @@ ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.pro
 
 function maybe_print!(p::DECAESProgress)
     # Internal `progress_meter` prints to the IOBuffer `p.io_buffer`; check this buffer for new messages.
-    #   Note: take!(::IOBuffer) is threadsafe
+    # Note: take!(::IOBuffer) is threadsafe.
     msg = String(take!(p.io_buffer))
     if !isempty(msg)
         # Format message
@@ -269,11 +269,9 @@ function maybe_print!(p::DECAESProgress)
             return last_msg
         end
 
-        if !isempty(last_msg)
-            # Don't print first message, as it usually gives a bad time estimate due to precompilation
-            @info msg
-            flush(stderr)
-        end
+        # Print progress message and flush
+        @info msg
+        flush(stderr)
     end
 end
 
@@ -406,6 +404,7 @@ function tee_capture(f; logfile = tempname(), suppress_terminal = false, suppres
         suppress_logfile ? ConsoleLogger(stderr) :
         suppress_terminal ? TimestampLogger(FileLogger(logfile)) :
         TeeLogger(ConsoleLogger(stderr), TimestampLogger(FileLogger(logfile)))
+    logger = LevelOverrideLogger(LoggingExtras.Info, logger) # suppress debug messages
     with_logger(logger) do
         return f()
     end
