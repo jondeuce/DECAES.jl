@@ -27,9 +27,10 @@ end
     homedepot = first(DEPOT_PATH)
     bin = mkpath(joinpath(homedepot, "bin"))
 
-    st = DECAES.redirect_to_devnull() do
-        return DECAES.install_decaes_cli()
-    end
+    # st = DECAES.redirect_to_devnull() do
+    #     return DECAES.install_decaes_cli()
+    # end
+    st = DECAES.install_decaes_cli()
     @test success(st)
 
     if Sys.iswindows()

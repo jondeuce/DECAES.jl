@@ -254,7 +254,7 @@ add_arg_table!(CLI_SETTINGS,
     Dict(
         :arg_type => String,
         :default => "-m -n -f 0.25 -R",
-        :help => "BET command line interface arguments. Must be passed as a single string with arguments separated by commas or spaces, e.g. \"-m -n\". The flag \"-m\" indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided",
+        :help => "BET command line interface arguments. Must be passed as a single string with arguments separated by commas or spaces, e.g. \"-m,-n\". The flag \"-m\" indicates that a binary mask should be computed, and therefore will be added to the list of arguments if not provided",
         :group => :bet_args,
     ),
     "--betpath",
@@ -357,7 +357,7 @@ function main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
         )
     elseif opts[:bet]
         @showtime(
-            "Making and applying BET mask with args: $(opts[:betargs])",
+            "Making and applying BET mask with args: $(join(opts[:betargs], " "))",
             try_apply_bet!(image, opts[:betpath], opts[:betargs]),
         )
     end
@@ -463,6 +463,7 @@ function parse_cli(args)
     opts = parse_args(args, CLI_SETTINGS; as_symbols = true)
     if opts !== nothing
         opts = handle_cli_deprecations!(opts)
+        opts = clean_cli_args!(opts)
     end
     return opts
 end
@@ -486,6 +487,14 @@ function handle_renamed_cli_flag!(opts, oldnew::Pair)
             opts[newflag] = opts[oldflag]
         end
         delete!(opts, oldflag)
+    end
+    return opts
+end
+
+function clean_cli_args!(opts)
+    # Preprocess arguments for use
+    if opts[:betargs] isa String
+        opts[:betargs] = clean_bet_args(opts[:betargs])::Vector{String}
     end
     return opts
 end
@@ -585,7 +594,7 @@ function load_image(filename, ::Val{N}) where {N}
     if maybe_get_suffix(filename) == ".mat"
         # Load first `N`-dimensional array which is found, or throw an error if none are found
         data = MAT.matread(filename)
-        array_keys = findall(x -> x isa AbstractArray{T, N} where {T}, data)
+        array_keys = findall(x -> x isa AbstractArray{<:Any, N}, data)
         if isempty(array_keys)
             error("No $(N)-D array was found in the input file: $filename")
         end
@@ -622,7 +631,7 @@ function load_image(filename, ::Val{N}) where {N}
 end
 load_image(filename; ndims::Int = 4) = load_image(filename, Val(ndims))
 
-function try_load_B1mapfile!(maps::T2Maps{T}, B1mapfile::String) where {T}
+function try_load_B1mapfile!(maps::T2Maps, B1mapfile::String)
     try
         load_B1map!(maps, load_image(B1mapfile, Val(3)))
     catch e
@@ -632,7 +641,7 @@ function try_load_B1mapfile!(maps::T2Maps{T}, B1mapfile::String) where {T}
     return nothing
 end
 
-function try_apply_maskfile!(image::Array{T, 4}, maskfile::String) where {T}
+function try_apply_maskfile!(image::Array{<:Any, 4}, maskfile::String)
     try
         image .*= load_image(maskfile, Val(3))
     catch e
@@ -642,7 +651,7 @@ function try_apply_maskfile!(image::Array{T, 4}, maskfile::String) where {T}
     return image
 end
 
-function try_apply_bet!(image::Array{T, 4}, betpath::String, betargs::String) where {T}
+function try_apply_bet!(image::Array{<:Any, 4}, betpath::String, betargs::Vector{String})
     try
         image .*= make_bet_mask(image, betpath, betargs)
     catch e
@@ -652,36 +661,34 @@ function try_apply_bet!(image::Array{T, 4}, betpath::String, betargs::String) wh
     return image
 end
 
-function make_bet_mask(image::Array{T, 3}, betpath::String, betargs::String) where {T}
-    # Split betargs, and ensure that "-m" (make binary mask) is among args
-    dlm = c -> isspace(c) || c == ','
-    args = convert(Vector{String}, split(betargs, dlm; keepempty = false))
-    if "-m" ∉ args
-        push!(args, "-m")
-    end
-
+function make_bet_mask(image::Array{<:Any, 3}, betpath::String, betargs::Vector{String})
     # Create mask using BET and return mask
     mask = mktempdir() do temppath
         tempbase = basename(tempname())
         nifti_imagefile = joinpath(temppath, tempbase * ".nii")
         nifti_maskfile = joinpath(temppath, tempbase * ".bet")
         NIfTI.niwrite(nifti_imagefile, NIfTI.NIVolume(image)) # create nifti file for bet
-        run(Cmd([
-            betpath;
-            nifti_imagefile;
-            nifti_maskfile;
-            args
-        ]))
+        run(Cmd(String[betpath; nifti_imagefile; nifti_maskfile; betargs]))
+
         # BET appends "_mask" and ".nii.gz" to output file name.
         # Find this file, ensure it is unique, then load and return it
         bet_maskfiles = filter!(file -> startswith(file, tempbase * ".bet_mask"), readdir(temppath))
         @assert length(bet_maskfiles) == 1 # ensure unique; this should never be false using a temp filename
         return load_image(joinpath(temppath, bet_maskfiles[1]), Val(3))
     end
-
     return mask
 end
-make_bet_mask(image::Array{T, 4}, args...; kwargs...) where {T} = make_bet_mask(image[:, :, :, 1], args...; kwargs...) # use first echo
+make_bet_mask(image::Array{<:Any, 4}, args...; kwargs...) = make_bet_mask(image[:, :, :, 1], args...; kwargs...) # use first echo
+
+function clean_bet_args(betargs::String)
+    # Split betargs, and ensure that "-m" (make binary mask) is among args
+    dlm = c -> isspace(c) || c == ','
+    args = split(betargs, dlm; keepempty = false)
+    if "-m" ∉ args
+        pushfirst!(args, "-m")
+    end
+    return convert(Vector{String}, args)
+end
 
 maybe_get_first(f, xs) = findfirst(f, xs) |> I -> I === nothing ? nothing : xs[I]
 maybe_get_suffix(filename) = maybe_get_first(ext -> endswith(lowercase(filename), ext), ALLOWED_FILE_SUFFIXES) # case-insensitive

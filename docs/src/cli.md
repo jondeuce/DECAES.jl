@@ -39,7 +39,7 @@ Input files must be one of the following file types:
 3. Philips [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) file pair with extensions `.par` and `.rec` (or `.PAR` and `.REC`).
 4. Philips XML/REC file pair with extensions `.xml` and `.rec` (or `.XML` and `.REC`).
 
-All output files are saved as `.mat` files in format `v7.3`. 
+All output files are saved as `.mat` files in format `v7.3`.
 
 !!! note
     If your data is in DICOM format, the [freely available `dcm2niix` tool](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage) is able to convert [DICOM](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#General_Usage) files into NIfTI format
@@ -236,12 +236,12 @@ If `bet` is not on your system path, you can pass the path to the `bet` binary w
 Additionally, you can pass arguments to `bet` with the `--betargs` flag:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- image.nii --bet --betpath /path/to/bet --betargs '-m -n' <COMMAND LINE ARGS>") # hide
+println("\$ julia --threads=auto decaes.jl -- image.nii --bet --betpath /path/to/bet --betargs -m,-n <COMMAND LINE ARGS>") # hide
 ```
 
-Note that `bet` arguments must be passed as a single string to `--betargs`, separated by spaces, as shown above.
+Note that `bet` arguments must be passed as a single string to `--betargs`, separated by commas or spaces, as shown above.
 
-Equivalently, add `--bet`, `--betpath`, `/path/to/bet`, `--betargs`, `-m -n ...` as consecutive lines in your settings file.
+Equivalently, add `--bet`, `--betpath`, `/path/to/bet`, `--betargs`, `-m,-n` as consecutive lines in your settings file.
 
 !!! note
     If a mask file is passed using the `--mask` flag, the `--bet` flag will be ignored and the mask file will be used
