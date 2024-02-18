@@ -428,15 +428,30 @@ end
 
 # Build DECAES into a relocatable executable [app](https://julialang.github.io/PackageCompiler.jl/dev/apps/).
 function compile_decaes_app()
-    # Copy DECAES app into a temporary directory
+    # Copy DECAES app into a scratch directory
     app_dir = pkgdir(DECAES, "api", "DECAESApp")
-    scratch_app_dir = @get_scratch!("DECAESApp")
+    scratch_app_dir = @get_scratch!("App")
+    ispath(scratch_app_dir) && rm(scratch_app_dir; force = true, recursive = true)
     cp(app_dir, scratch_app_dir; force = true)
 
     # Run build script in a new julia instance. This will instantiate `DECAESApp`
     # and build the relocatable executable app into the `build` subfolder
     scratch_app_builder = joinpath(scratch_app_dir, "app_builder.jl")
     cmd = `$(Base.julia_cmd()) --startup-file=no --threads=auto --project=$(scratch_app_dir) $(scratch_app_builder)`
+    return run(cmd)
+end
+
+# Install CLI script into ~/.julia/bin
+function install_decaes_cli()
+    # Copy DECAES CLI environment into a scratch directory
+    cli_dir = pkgdir(DECAES, "api", "DECAESCLI")
+    scratch_cli_dir = @get_scratch!("CLI")
+    ispath(scratch_cli_dir) && rm(scratch_cli_dir; force = true, recursive = true)
+    cp(cli_dir, scratch_cli_dir; force = true)
+
+    # Run build script in a new julia instance.
+    scratch_cli_builder = joinpath(scratch_cli_dir, "cli_builder.jl")
+    cmd = `$(Base.julia_cmd()) --startup-file=no --threads=auto --project=$(scratch_cli_dir) $(scratch_cli_builder)`
     return run(cmd)
 end
 
