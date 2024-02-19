@@ -23,22 +23,9 @@
     end
 end
 
-@testset "install cli script" begin
+@testset "cli script" begin
     homedepot = first(DEPOT_PATH)
     bin = mkpath(joinpath(homedepot, "bin"))
-
-    rm(pkgdir(DECAES, "api", "DECAESCLI", "Manifest.toml"); force = true)
-    Pkg.activate(pkgdir(DECAES, "api", "DECAESCLI")) do
-        # Need to instantiate this development version of DECAES
-        Pkg.develop(; path = pkgdir(DECAES))
-    end
-
-    # st = DECAES.redirect_to_devnull() do
-    #     return DECAES.install_decaes_cli()
-    # end
-    st = DECAES.install_decaes_cli()
-    @test success(st)
-
     if Sys.iswindows()
         cli = joinpath(bin, "decaes.cmd")
         @test isfile(cli)

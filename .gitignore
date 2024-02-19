@@ -10,3 +10,4 @@
 /bench/main/settings*
 Manifest.toml
 results
+*.log

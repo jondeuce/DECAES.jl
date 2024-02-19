@@ -18,6 +18,7 @@ NIfTI = "a3a9e032-41b5-5fc4-967a-a6b7a19844d3"
 NLopt = "76087f3c-5699-56af-9a33-bf431cd00edd"
 ParXRec = "ce505a99-8540-44bd-8e52-2947982c0c75"
 Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 PolynomialRoots = "3a141323-8675-5d76-9d11-e1df1406c778"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
@@ -66,9 +67,8 @@ julia = "1.9"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
 MATLAB = "10e44e05-a98a-55b3-a45b-ba969058deb6"
-Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "DoubleFloats", "MATLAB", "Pkg", "TOML", "Test"]
+test = ["Aqua", "DoubleFloats", "MATLAB", "TOML", "Test"]
