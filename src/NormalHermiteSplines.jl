@@ -3,7 +3,7 @@ AUTO-GENERATED FILE - DO NOT EDIT
 
 This file is derived from the following fork of the NormalHermiteSplines.jl package:
 
-    https://github.com/jondeuce/NormalHermiteSplines.jl#90e71425004c002611c68741e10787755028a6d6
+    https://github.com/jondeuce/NormalHermiteSplines.jl#4aa0631aaa454c7a45bbc7831a48de0ce40f1063
 
 As it is not possible to depend on a package fork, the above module is included here verbatim.
 
@@ -30,11 +30,12 @@ export NormalSpline, ElasticCholesky, ElasticNormalSpline, RK_H0, RK_H1, RK_H2
 export get_epsilon, estimate_epsilon, get_cond, estimate_cond, estimate_accuracy
 
 using LinearAlgebra: LinearAlgebra, Cholesky, Factorization, Hermitian, UpperTriangular, cholesky, cholesky!, ldiv!, norm, ⋅
+using MuladdMacro: @muladd
 using StaticArrays: StaticArrays, SMatrix, SVector
 using UnsafeArrays: UnsafeArrays, uview
 
-const AbstractArrOfSVecs{n, T, N} = AbstractArray{SVector{n, T}, N}
-const AbstractVecOfSVecs{n, T} = AbstractVector{SVector{n, T}}
+const AbstractArrOfSVecs{n, T, D} = AbstractArray{S, D} where {S <: SVector{n, T}}
+const AbstractVecOfSVecs{n, T} = AbstractArrOfSVecs{n, T, 1}
 const VecOfSVecs{n, T} = Vector{SVector{n, T}}
 
 @inline svectors(x::AbstractMatrix{T}) where {T} = reinterpret(reshape, SVector{size(x, 1), T}, x)
@@ -73,6 +74,7 @@ struct RK_H0{T} <: ReproducingKernel_0
     end
 end
 Base.eltype(::RK_H0{T}) where {T} = T
+Base.eltype(::Type{RK_H0{T}}) where {T} = T
 
 @doc raw"
 `struct RK_H1{T} <: ReproducingKernel_1`
@@ -99,6 +101,7 @@ struct RK_H1{T} <: ReproducingKernel_1
     end
 end
 Base.eltype(::RK_H1{T}) where {T} = T
+Base.eltype(::Type{RK_H1{T}}) where {T} = T
 
 @doc raw"
 `struct RK_H2{T} <: ReproducingKernel_2`
@@ -125,110 +128,194 @@ struct RK_H2{T} <: ReproducingKernel_2
     end
 end
 Base.eltype(::RK_H2{T}) where {T} = T
+Base.eltype(::Type{RK_H2{T}}) where {T} = T
 
 @inline _norm(x::SVector) = norm(x)
 @inline _norm(x::SVector{1}) = abs(x[1])
 
-@inline @fastmath function _rk(kernel::RK_H2, η::SVector, ξ::SVector)
+@inline @fastmath @muladd function _rk(kernel::RK_H2, η::SVector, ξ::SVector)
     x = kernel.ε * _norm(η - ξ)
     return (3 + x * (3 + x)) * exp(-x)
 end
 
-@inline @fastmath function _rk(kernel::RK_H1, η::SVector, ξ::SVector)
+@inline @fastmath @muladd function _rk(kernel::RK_H1, η::SVector, ξ::SVector)
     x = kernel.ε * _norm(η - ξ)
     return (1 + x) * exp(-x)
 end
 
-@inline @fastmath function _rk(kernel::RK_H0, η::SVector, ξ::SVector)
+@inline @fastmath @muladd function _rk(kernel::RK_H0, η::SVector, ξ::SVector)
     x = kernel.ε * _norm(η - ξ)
     return exp(-x)
 end
 
-@inline @fastmath function _∂rk_∂e(kernel::RK_H2, η::SVector, ξ::SVector, e::SVector)
+@inline @fastmath @muladd function _∂rk_∂ηⁱ_ûᵢ(kernel::RK_H2, η::SVector, ξ::SVector, û::SVector)
     t = η - ξ
     x = kernel.ε * _norm(t)
-    return kernel.ε^2 * exp(-x) * (1 + x) * (t ⋅ e)
+    return -kernel.ε^2 * exp(-x) * (1 + x) * (t ⋅ û)
 end
 
-@inline @fastmath function _∂rk_∂e(kernel::RK_H1, η::SVector, ξ::SVector, e::SVector)
+@inline @fastmath @muladd function _∂rk_∂ηⁱ_ûᵢ(kernel::RK_H1, η::SVector, ξ::SVector, û::SVector)
     t = η - ξ
     x = kernel.ε * _norm(t)
-    return kernel.ε^2 * exp(-x) * (t ⋅ e)
+    return -kernel.ε^2 * exp(-x) * (t ⋅ û)
 end
 
-@inline @fastmath function _∂rk_∂η(kernel::RK_H2, η::SVector, ξ::SVector)
+@inline @fastmath @muladd function _∂rk_∂ηⁱ_ûᵢ(kernel::RK_H0, η::SVector, ξ::SVector, û::SVector)
+    t     = η - ξ
+    tnrm  = _norm(t)
+    itnrm = ifelse(tnrm > eps(typeof(tnrm)), inv(tnrm), zero(tnrm))
+    x     = kernel.ε * tnrm
+    return -kernel.ε * exp(-x) * itnrm * (t ⋅ û)
+end
+
+@inline @fastmath @muladd function _∂rk_∂η(kernel::RK_H2, η::SVector, ξ::SVector)
     t = η - ξ
     x = kernel.ε * _norm(t)
     return -kernel.ε^2 * exp(-x) * (1 + x) * t
 end
 
-@inline @fastmath function _∂rk_∂η(kernel::RK_H1, η::SVector, ξ::SVector)
+@inline @fastmath @muladd function _∂rk_∂η(kernel::RK_H1, η::SVector, ξ::SVector)
     t = η - ξ
     x = kernel.ε * _norm(t)
     return -kernel.ε^2 * exp(-x) * t
 end
 
-@inline @fastmath function _∂rk_∂η(kernel::RK_H0, η::SVector, ξ::SVector)
-    # Note: Derivative of spline built with reproducing kernel RK_H0 does not exist at the spline nodes
-    t    = η - ξ
-    tnrm = _norm(t)
-    x    = kernel.ε * tnrm
-    ∇    = kernel.ε * exp(-x)
-    t    = ifelse(x > eps(typeof(x)), t, zeros(t))
-    ∇    *= ifelse(x > eps(typeof(x)), inv(tnrm), one(tnrm))
-    ∇    *= t
+@inline @fastmath @muladd function _∂rk_∂η(kernel::RK_H0, η::SVector, ξ::SVector)
+    # Note: Derivative of spline built with reproducing kernel RK_H0 is discontinuous at the spline nodes, i.e. when η = ξ.
+    t     = η - ξ
+    tnrm  = _norm(t)
+    itnrm = ifelse(tnrm > eps(typeof(tnrm)), inv(tnrm), zero(tnrm))
+    x     = kernel.ε * tnrm
+    ∇     = (-kernel.ε * exp(-x) * itnrm) * t
     return ∇
 end
 
-@inline @fastmath function _∂²rk_∂²e(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}, êη::SVector{n}, êξ::SVector{n}) where {n}
-    ε     = kernel.ε
-    ε²    = ε * ε
-    t     = η - ξ
-    tnrm  = _norm(t)
-    x     = ε * tnrm
-    ε²e⁻ˣ = ε² * exp(-x)
-    ∇²    = ((1 + x) * ε²e⁻ˣ) * (êξ ⋅ êη)
-    ∇²    -= (ε² * ε²e⁻ˣ) * (êξ ⋅ t) * (t ⋅ êη)
-    return ∇²
+@inline @fastmath @muladd function _rk_with_∂rk_∂η(kernel::RK_H2, η::SVector, ξ::SVector)
+    t   = η - ξ
+    x   = kernel.ε * _norm(t)
+    e⁻ˣ = exp(-x)
+    y   = (3 + x * (3 + x)) * e⁻ˣ
+    ∇   = -kernel.ε^2 * e⁻ˣ * (1 + x) * t
+    return y, ∇
 end
 
-@inline @fastmath function _∂²rk_∂²e(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}, êη::SVector{n}, êξ::SVector{n}) where {n}
-    # Note: Second derivative of spline built with reproducing kernel RK_H1 does not exist at the spline nodes
-    ε     = kernel.ε
-    ε²    = ε * ε
-    t     = η - ξ
-    tnrm  = _norm(t)
-    x     = ε * tnrm
-    ε²e⁻ˣ = ε² * exp(-x)
-    ∇²    = ε²e⁻ˣ * (êξ ⋅ êη)
-    ∇²    -= ifelse(x > eps(typeof(x)), (ε * ε²e⁻ˣ / tnrm) * (êξ ⋅ t) * (t ⋅ êη), zero(∇²))
-    return ∇²
+@inline @fastmath @muladd function _rk_with_∂rk_∂η(kernel::RK_H1, η::SVector, ξ::SVector)
+    t   = η - ξ
+    x   = kernel.ε * _norm(t)
+    e⁻ˣ = exp(-x)
+    y   = (1 + x) * e⁻ˣ
+    ∇   = -kernel.ε^2 * e⁻ˣ * t
+    return y, ∇
 end
 
-@inline @fastmath function _∂²rk_∂η∂ξ(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}) where {n}
+@inline @fastmath @muladd function _rk_with_∂rk_∂η(kernel::RK_H0, η::SVector, ξ::SVector)
+    # Note: Derivative of spline built with reproducing kernel RK_H0 is discontinuous at the spline nodes, i.e. when η = ξ.
+    t     = η - ξ
+    tnrm  = _norm(t)
+    itnrm = ifelse(tnrm > eps(typeof(tnrm)), inv(tnrm), zero(tnrm))
+    x     = kernel.ε * tnrm
+    y     = exp(-x)
+    ∇     = (-kernel.ε * y * itnrm) * t
+    return y, ∇
+end
+
+@inline @fastmath @muladd function _∂²rk_∂ηⁱ∂ξʲ_ûᵢ_v̂ⱼ(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}, û::SVector{n}, v̂::SVector{n}) where {n}
     ε     = kernel.ε
     ε²    = ε * ε
     t     = η - ξ
     tnrm  = _norm(t)
     x     = ε * tnrm
     ε²e⁻ˣ = ε² * exp(-x)
-    S     = SMatrix{n, n, typeof(x)}
-    ∇²    = S(((1 + x) * ε²e⁻ˣ) * LinearAlgebra.I)
+    return ((1 + x) * ε²e⁻ˣ) * (û ⋅ v̂) - (ε² * ε²e⁻ˣ) * (û ⋅ t) * (t ⋅ v̂)
+end
+
+@inline @fastmath @muladd function _∂²rk_∂ηⁱ∂ξʲ_ûᵢ_v̂ⱼ(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}, û::SVector{n}, v̂::SVector{n}) where {n}
+    # Note: Second derivative of spline built with reproducing kernel RK_H1 is discontinuous at the spline nodes, i.e. when η = ξ.
+    ε     = kernel.ε
+    ε²    = ε * ε
+    t     = η - ξ
+    tnrm  = _norm(t)
+    itnrm = ifelse(tnrm > eps(one(tnrm)), inv(tnrm), zero(tnrm))
+    x     = ε * tnrm
+    ε²e⁻ˣ = ε² * exp(-x)
+    return ε²e⁻ˣ * (û ⋅ v̂) - (ε * ε²e⁻ˣ * itnrm) * (û ⋅ t) * (t ⋅ v̂)
+end
+
+@inline @fastmath @muladd function _∂²rk_∂ηⁱ∂ξ_ûᵢ(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}, û::SVector{n}) where {n}
+    ε     = kernel.ε
+    ε²    = ε * ε
+    t     = η - ξ
+    tnrm  = _norm(t)
+    x     = ε * tnrm
+    ε²e⁻ˣ = ε² * exp(-x)
+    return ((1 + x) * ε²e⁻ˣ) * û - ((ε² * ε²e⁻ˣ) * (û ⋅ t)) * t
+end
+
+@inline @fastmath @muladd function _∂²rk_∂ηⁱ∂ξ_ûᵢ(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}, û::SVector{n}) where {n}
+    # Note: Second derivative of spline built with reproducing kernel RK_H1 is discontinuous at the spline nodes, i.e. when η = ξ.
+    ε     = kernel.ε
+    ε²    = ε * ε
+    t     = η - ξ
+    tnrm  = _norm(t)
+    itnrm = ifelse(tnrm > eps(one(tnrm)), inv(tnrm), zero(tnrm))
+    x     = ε * tnrm
+    ε²e⁻ˣ = ε² * exp(-x)
+    return ε²e⁻ˣ * û - ((ε * ε²e⁻ˣ * itnrm) * (û ⋅ t)) * t
+end
+
+@inline @fastmath @muladd function _∂rk_∂ηⁱ_ûᵢ_with_∂²rk_∂ηⁱ∂ξ_ûᵢ(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}, û::SVector{n}) where {n}
+    ε     = kernel.ε
+    ε²    = ε * ε
+    t     = η - ξ
+    tnrm  = _norm(t)
+    x     = ε * tnrm
+    ε²e⁻ˣ = ε² * exp(-x)
+    tmp1  = ε²e⁻ˣ * û
+    tmp2  = (1 + x) * tmp1
+    ∇ᵀû  = -(tmp2 ⋅ t)
+    ∇²û  = tmp2 - ε² * (tmp1 ⋅ t) * t
+    return ∇ᵀû, ∇²û
+end
+
+@inline @fastmath @muladd function _∂rk_∂ηⁱ_ûᵢ_with_∂²rk_∂ηⁱ∂ξ_ûᵢ(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}, û::SVector{n}) where {n}
+    # Note: Second derivative of spline built with reproducing kernel RK_H1 is discontinuous at the spline nodes, i.e. when η = ξ.
+    ε     = kernel.ε
+    ε²    = ε * ε
+    t     = η - ξ
+    tnrm  = _norm(t)
+    itnrm = ifelse(tnrm > eps(one(tnrm)), inv(tnrm), zero(tnrm))
+    x     = ε * tnrm
+    ε²e⁻ˣ = ε² * exp(-x)
+    tmp1  = ε²e⁻ˣ * û
+    tmp2  = (tmp1 ⋅ t)
+    ∇ᵀû  = -tmp2
+    ∇²û  = tmp1 - (ε * itnrm * tmp2) * t
+    return ∇ᵀû, ∇²û
+end
+
+@inline @fastmath @muladd function _∂²rk_∂η∂ξ(kernel::RK_H2, η::SVector{n}, ξ::SVector{n}) where {n}
+    ε     = kernel.ε
+    ε²    = ε * ε
+    t     = η - ξ
+    tnrm  = _norm(t)
+    x     = ε * tnrm
+    ε²e⁻ˣ = ε² * exp(-x)
+    ∇²    = SMatrix{n, n, typeof(x)}(((1 + x) * ε²e⁻ˣ) * LinearAlgebra.I)
     ∇²    -= ((ε² * ε²e⁻ˣ) * t) * t'
     return ∇²
 end
 
-@inline @fastmath function _∂²rk_∂η∂ξ(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}) where {n}
-    # Note: Second derivative of spline built with reproducing kernel RK_H1 does not exist at the spline nodes
+@inline @fastmath @muladd function _∂²rk_∂η∂ξ(kernel::RK_H1, η::SVector{n}, ξ::SVector{n}) where {n}
+    # Note: Second derivative of spline built with reproducing kernel RK_H1 is discontinuous at the spline nodes, i.e. when η = ξ.
     ε     = kernel.ε
     ε²    = ε * ε
     t     = η - ξ
     tnrm  = _norm(t)
+    itnrm = ifelse(tnrm > eps(one(tnrm)), inv(tnrm), zero(tnrm))
     x     = ε * tnrm
     ε²e⁻ˣ = ε² * exp(-x)
-    S     = SMatrix{n, n, typeof(x)}
-    ∇²    = S(ε²e⁻ˣ * LinearAlgebra.I)
-    ∇²    -= ifelse(x > eps(typeof(x)), ((ε * ε²e⁻ˣ / tnrm) * t) * t', zeros(S))
+    ∇²    = SMatrix{n, n, typeof(x)}(ε²e⁻ˣ * LinearAlgebra.I)
+    ∇²    -= ((ε * ε²e⁻ˣ * itnrm) * t) * t'
     return ∇²
 end
 
@@ -303,12 +390,12 @@ function _gram!(
     @inbounds for j in 1:n₂
         # Top-right block (n₁ × n₂)
         for i in 1:n₁
-            A12[i, j] = _∂rk_∂e(kernel, nodes[i], d_nodes[j], d_dirs[j])
+            A12[i, j] = -_∂rk_∂ηⁱ_ûᵢ(kernel, nodes[i], d_nodes[j], d_dirs[j])
         end
 
         # Bottom-right block (n₂ × n₂)
         for i in 1:j-1
-            A22[i, j] = _∂²rk_∂²e(kernel, d_nodes[j], d_nodes[i], d_dirs[j], d_dirs[i])
+            A22[i, j] = _∂²rk_∂ηⁱ∂ξʲ_ûᵢ_v̂ⱼ(kernel, d_nodes[j], d_nodes[i], d_dirs[j], d_dirs[i])
         end
         A22[j, j] = ε²
     end
@@ -350,7 +437,7 @@ function _gram!(
 
     # Top-right block (n₁+1 × n₂), bottom row (n₂ terms)
     @inbounds for j in 1:n₂
-        A[n₁+1, n₁+1+j] = _∂rk_∂e(kernel, new_node, curr_d_nodes[j], curr_d_dirs[j])
+        A[n₁+1, n₁+1+j] = -_∂rk_∂ηⁱ_ûᵢ(kernel, new_node, curr_d_nodes[j], curr_d_dirs[j])
     end
 
     return Hermitian(A, :U)
@@ -371,13 +458,13 @@ function _gram!(
 
     # Top-right block, (n₁ × n₂+1), right column (n₁ terms)
     @inbounds for i in 1:n₁
-        A[i, n₁+n₂+1] = _∂rk_∂e(kernel, curr_nodes[i], d_node, d_dir)
+        A[i, n₁+n₂+1] = -_∂rk_∂ηⁱ_ûᵢ(kernel, curr_nodes[i], d_node, d_dir)
     end
 
     # Bottom-right block (n₂+1 × n₂+1), right column (n₂+1 terms)
     ε² = kernel.ε^2
     @inbounds for i in 1:n₂
-        A[n₁+i, n₁+n₂+1] = _∂²rk_∂²e(kernel, d_node, curr_d_nodes[i], d_dir, curr_d_dirs[i])
+        A[n₁+i, n₁+n₂+1] = _∂²rk_∂ηⁱ∂ξʲ_ûᵢ_v̂ⱼ(kernel, d_node, curr_d_nodes[i], d_dir, curr_d_dirs[i])
     end
     @inbounds A[n₁+n₂+1, n₁+n₂+1] = ε²
 
@@ -442,7 +529,7 @@ A⁺ = [A  d]
 Then, the corresponding updated cholesky factor `L⁺` of `⁺` is:
 
 ```
-L⁺ = [L  e]
+L⁺ = [L  0]
      [eᵀ α]
 ```
 
@@ -1048,18 +1135,18 @@ end
 
 #### Evaluation
 
-@inline function _evaluate!(
+function _evaluate!(
     vals::AbstractArray{<:Any, N},
     spl::AbstractNormalSpline{n, <:Any, <:ReproducingKernel_0},
     points::AbstractArrOfSVecs{n, <:Any, N},
 ) where {n, N}
-    @inbounds for i in 1:length(points)
+    @inbounds for i in eachindex(vals, points)
         vals[i] = _evaluate(spl, points[i])
     end
     return vals
 end
 
-@inline function _evaluate(
+function _evaluate(
     spl::AbstractNormalSpline{n, <:Any, RK},
     x::SVector{n},
 ) where {n, RK <: ReproducingKernel_0}
@@ -1068,19 +1155,20 @@ end
     n₁ = length(nodes)
     n₂ = length(d_nodes)
     x = _normalize(spl, x)
-    v = zero(promote_type(eltype(spl), eltype(kernel), eltype(x)))
+    T = promote_type(eltype(spl), eltype(kernel), eltype(x))
+    v = zero(T)
     @inbounds for i in 1:n₁
         v += mu[i] * _rk(kernel, x, nodes[i])
     end
     if RK <: ReproducingKernel_1
         @inbounds for i in 1:n₂
-            v += mu[i+n₁] * _∂rk_∂e(kernel, x, d_nodes[i], d_dirs[i])
+            v -= mu[i+n₁] * _∂rk_∂ηⁱ_ûᵢ(kernel, x, d_nodes[i], d_dirs[i])
         end
     end
     return v
 end
 
-@inline function _evaluate_gradient(
+function _evaluate_gradient(
     spl::AbstractNormalSpline{n, <:Any, RK},
     x::SVector{n},
 ) where {n, RK <: ReproducingKernel_0}
@@ -1089,17 +1177,46 @@ end
     n₁ = length(nodes)
     n₂ = length(d_nodes)
     x = _normalize(spl, x)
-    ∇ = zero(SVector{n, promote_type(eltype(spl), eltype(kernel), eltype(x))})
+    T = promote_type(eltype(spl), eltype(kernel), eltype(x))
+    ∇ = zero(SVector{n, T})
     @inbounds for i in 1:n₁
         ∇ += mu[i] * _∂rk_∂η(kernel, x, nodes[i])
     end
     if RK <: ReproducingKernel_1
         @inbounds for i in 1:n₂
-            ∇² = _∂²rk_∂η∂ξ(kernel, x, d_nodes[i])
-            ∇ += mu[i+n₁] * (∇² * d_dirs[i])
+            ∇ += mu[i+n₁] * _∂²rk_∂ηⁱ∂ξ_ûᵢ(kernel, x, d_nodes[i], d_dirs[i])
         end
     end
     return ∇ ./ scale
+end
+
+function _evaluate_with_gradient(
+    spl::AbstractNormalSpline{n, <:Any, RK},
+    x::SVector{n},
+) where {n, RK <: ReproducingKernel_0}
+    kernel, nodes, d_nodes, d_dirs, mu, scale =
+        _get_kernel(spl), _get_nodes(spl), _get_d_nodes(spl), _get_d_dirs(spl), _get_mu(spl), _get_scale(spl)
+    n₁ = length(nodes)
+    n₂ = length(d_nodes)
+    x = _normalize(spl, x)
+    T = promote_type(eltype(spl), eltype(kernel), eltype(x))
+    v = zero(T)
+    ∇ = zero(SVector{n, T})
+    @inbounds for i in 1:n₁
+        μ = mu[i]
+        vᵢ, ∇ᵢ = _rk_with_∂rk_∂η(kernel, x, nodes[i])
+        v += μ * vᵢ
+        ∇ += μ * ∇ᵢ
+    end
+    if RK <: ReproducingKernel_1
+        @inbounds for i in 1:n₂
+            μ = mu[i+n₁]
+            vᵢ, ∇ᵢ = _∂rk_∂ηⁱ_ûᵢ_with_∂²rk_∂ηⁱ∂ξ_ûᵢ(kernel, x, d_nodes[i], d_dirs[i])
+            v -= μ * vᵢ
+            ∇ += μ * ∇ᵢ
+        end
+    end
+    return v, ∇ ./ scale
 end
 
 ####
@@ -1201,16 +1318,17 @@ Evaluate the spline values at the locations defined in `points`.
 
   - `Vector{T}` of the spline values at the locations defined in `points`.
 """
-@inline function evaluate(spline::AbstractNormalSpline{n, T, RK}, points::AbstractMatrix{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate(spline::AbstractNormalSpline{n, T1, RK}, points::AbstractMatrix{T2}) where {n, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
     return evaluate(spline, svectors(points))
 end
-@inline function evaluate(spline::AbstractNormalSpline{n, T, RK}, points::AbstractArrOfSVecs{n, T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate(spline::AbstractNormalSpline{n, T1, RK}, points::AbstractArrOfSVecs{n, T2}) where {n, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
+    T = promote_type(T1, eltype(RK), T2)
     return evaluate!(zeros(T, size(points)), spline, points)
 end
-@inline function evaluate!(spline_values::AbstractArray{T, N}, spline::AbstractNormalSpline{n, T, RK}, points::AbstractArrOfSVecs{n, T, N}) where {n, T <: Real, N, RK <: ReproducingKernel_0}
+@inline function evaluate!(spline_values::AbstractArray{<:Any, D}, spline::AbstractNormalSpline{n, T1, RK}, points::AbstractArrOfSVecs{n, T2, D}) where {n, D, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
     return _evaluate!(spline_values, spline, points)
 end
-@inline function evaluate(spline::AbstractNormalSpline{n, T, RK}, point::SVector{n, T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate(spline::AbstractNormalSpline{n, T1, RK}, point::SVector{n, T2}) where {n, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
     return _evaluate(spline, point)
 end
 
@@ -1229,10 +1347,11 @@ Evaluate the spline value at the `point` location.
 
   - The spline value at the location defined in `point`.
 """
-@inline function evaluate_one(spline::AbstractNormalSpline{n, T, RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate_one(spline::AbstractNormalSpline{n, T1, RK}, point::AbstractVector{T2}) where {n, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
+    T = promote_type(T1, eltype(RK), T2)
     return evaluate_one(spline, SVector{n, T}(ntuple(i -> point[i], n)))
 end
-@inline function evaluate_one(spline::AbstractNormalSpline{n, T, RK}, point::SVector{n, T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate_one(spline::AbstractNormalSpline{n, T1, RK}, point::SVector{n, T2}) where {n, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
     return evaluate(spline, point)
 end
 
@@ -1253,10 +1372,11 @@ Note: Gradient of spline built with reproducing kernel RK_H0 does not exist at t
 
   - `Vector{T}` - gradient of the spline at the location defined in `point`.
 """
-@inline function evaluate_gradient(spline::AbstractNormalSpline{n, T, RK}, point::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate_gradient(spline::AbstractNormalSpline{n, T1, RK}, point::AbstractVector{T2}) where {n, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
+    T = promote_type(T1, eltype(RK), T2)
     return evaluate_gradient(spline, SVector{n, T}(ntuple(i -> point[i], n)))
 end
-@inline function evaluate_gradient(spline::AbstractNormalSpline{n, T, RK}, point::SVector{n, T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate_gradient(spline::AbstractNormalSpline{n, T1, RK}, point::SVector{n, T2}) where {n, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
     return _evaluate_gradient(spline, point)
 end
 
@@ -1418,12 +1538,12 @@ Evaluate the 1D spline values/value at the `points` locations.
 
   - Spline value at the `point` location.
 """
-@inline function evaluate(spline::AbstractNormalSpline{n, T, RK}, points::AbstractVector{T}) where {n, T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate(spline::AbstractNormalSpline{n, T1, RK}, points::AbstractVector{T2}) where {n, T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
     return evaluate(spline, svectors(points))
 end
 
 """
-`evaluate_one(spline::AbstractNormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}`
+`evaluate(spline::AbstractNormalSpline{1,T,RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}`
 
 Evaluate the 1D spline value at the `point` location.
 
@@ -1436,7 +1556,8 @@ Evaluate the 1D spline value at the `point` location.
 
   - Spline value at the `point` location.
 """
-@inline function evaluate_one(spline::AbstractNormalSpline{1, T, RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate(spline::AbstractNormalSpline{1, T1, RK}, point::T2) where {T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
+    T = promote_type(T1, eltype(RK), T2)
     return evaluate(spline, SVector{1, T}((point,)))
 end
 
@@ -1456,7 +1577,8 @@ Note: Derivative of spline built with reproducing kernel RK_H0 does not exist at
 
   - The spline derivative value at the `point` location.
 """
-@inline function evaluate_derivative(spline::AbstractNormalSpline{1, T, RK}, point::T) where {T <: Real, RK <: ReproducingKernel_0}
+@inline function evaluate_derivative(spline::AbstractNormalSpline{1, T1, RK}, point::T2) where {T1 <: Real, T2 <: Real, RK <: ReproducingKernel_0}
+    T = promote_type(T1, eltype(RK), T2)
     return evaluate_gradient(spline, SVector{1, T}((point,)))[1]
 end
 

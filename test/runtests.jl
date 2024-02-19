@@ -1,4 +1,5 @@
 using Test
+using Pkg
 using DECAES
 
 using LinearAlgebra

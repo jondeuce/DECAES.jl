@@ -27,6 +27,12 @@ end
     homedepot = first(DEPOT_PATH)
     bin = mkpath(joinpath(homedepot, "bin"))
 
+    rm(pkgdir(DECAES, "api", "DECAESCLI", "Manifest.toml"); force = true)
+    Pkg.activate(pkgdir(DECAES, "api", "DECAESCLI")) do
+        # Need to instantiate this development version of DECAES
+        Pkg.develop(; path = pkgdir(DECAES))
+    end
+
     # st = DECAES.redirect_to_devnull() do
     #     return DECAES.install_decaes_cli()
     # end
