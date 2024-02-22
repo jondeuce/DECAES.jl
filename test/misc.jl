@@ -29,7 +29,7 @@ end
     if Sys.iswindows()
         cli = joinpath(bin, "decaes.cmd")
         @test isfile(cli)
-        @test success(`cmd /c $(cli) "--help"`)
+        @test success(`cmd /c $(cli) --help`)
     else
         cli = joinpath(bin, "decaes")
         @test isfile(cli)

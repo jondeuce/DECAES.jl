@@ -101,7 +101,7 @@ This is highly recommended to speed up computation time, but is not strictly req
 using DECAES
 const imfile = "image.nii.gz"
 function callmain(args...)
-    image = DECAES.mock_image(MatrixSize = (100,100,1))
+    image = DECAES.mock_image(; MatrixSize = (100, 100, 1))
     cd(tempdir()) do
         try
             DECAES.NIfTI.niwrite(imfile, DECAES.NIfTI.NIVolume(image))

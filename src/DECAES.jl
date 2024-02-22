@@ -59,7 +59,7 @@ export main
         main(["--version"])
         for Reg in ["lcurve", "gcv", "chi2"]
             NumVoxels = max(4, Threads.nthreads()) * default_blocksize()
-            mock_T2_pipeline(; NumVoxels, Reg)
+            mock_T2_pipeline(; MatrixSize = (NumVoxels, 1, 1), Reg)
         end
     end
 end

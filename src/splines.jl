@@ -1,9 +1,10 @@
 # Lightweight polynomial type
-struct Poly{T, A <: AbstractVector{T}}
+struct Poly{T <: AbstractFloat, A <: AbstractVector{T}}
     c::A
 end
 Poly(c::Number...) = Poly(c)
-Poly(c::Tuple) = Poly([float.(c)...])
+Poly(c::Tuple) = Poly(SVector(promote(c...)))
+Poly(c::NTuple{N, Int}) where {N} = Poly(SVector(float.(c)))
 Poly(c::AbstractVector{Int}) = Poly(float.(c))
 
 coeffs(p::Poly) = p.c
@@ -14,10 +15,112 @@ add!(p::Poly, a::Number) = (p.c[1] += a; return p)
 sub!(p::Poly, a::Number) = (p.c[1] -= a; return p)
 
 # Recall: p(x) = Σᵢ cᵢ ⋅ xⁱ⁻¹
-derivative(p::Poly{T}) where {T} = Poly(T[(i - 1) * coeffs(p)[i] for i in 2:degree(p)+1]) # ∂/∂x p(x) = Σᵢ (i-1) ⋅ cᵢ ⋅ xⁱ⁻²
-integral(p::Poly{T}) where {T} = Poly(T[i == 0 ? zero(T) : coeffs(p)[i] / i for i in 0:degree(p)+1]) # ∫₀ˣ p(x) = Σᵢ (cᵢ / i) ⋅ xⁱ
+Base.adjoint(p::Poly) = Poly(deriv_coeffs(coeffs(p))) # ∂/∂x p(x) = Σᵢ (i-1) ⋅ cᵢ ⋅ xⁱ⁻²
+Base.cumsum(p::Poly) = Poly(integral_coeffs(coeffs(p))) # ∫₀ˣ p(x) = Σᵢ (cᵢ / i) ⋅ xⁱ
 PolynomialRoots.roots(p::Poly) = PolynomialRoots.roots(coeffs(p))
-Base.extrema(p::Poly) = PolynomialRoots.roots(derivative(p))
+Base.extrema(p::Poly) = PolynomialRoots.roots(p')
+
+deriv_coeffs(c::AbstractVector{T}) where {T} = T[i * c[i+1] for i in 1:length(c)-1]
+deriv_coeffs(c::SVector{N, T}) where {N, T} = SVector{N - 1, typeof(one(T) * 1)}(ntuple(i -> i * c[i+1], Val(N - 1)))
+deriv_coeffs(c::SVector{0, T}) where {T} = c
+deriv_coeffs(c::Tuple) = Tuple(deriv_coeffs(SVector(c)))
+
+integral_coeffs(c::AbstractVector{T}) where {T} = [i == 0 ? zero(T) / 1 : c[i] / i for i in 0:length(c)]
+integral_coeffs(c::SVector{N, T}) where {N, T} = SVector{N + 1, typeof(one(T) / 1)}(ntuple(i -> i == 1 ? zero(T) / 1 : c[i-1] / (i - 1), Val(N + 1)))
+integral_coeffs(c::Tuple) = Tuple(integral_coeffs(SVector(c)))
+
+# Cubic Hermite interpolator
+struct CubicHermiteInterpolator{T}
+    u0::T
+    u1::T
+    m0::T
+    m1::T
+    coeffs::NTuple{4, T}
+end
+@inline (spl::CubicHermiteInterpolator)(x) = evalpoly(x, spl.coeffs)
+
+function CubicHermiteInterpolator(u0, u1, m0, m1)
+    Δu, Δm = u1 - u0, m1 - m0
+    Σu, Σm = u1 + u0, m1 + m0
+    coeffs = (Σu / 2 - Δm / 4, (3 * Δu - Σm) / 4, Δm / 4, (Σm - Δu) / 4)
+    return CubicHermiteInterpolator(u0, u1, m0, m1, coeffs)
+end
+
+function minimize(spl::CubicHermiteInterpolator{T}) where {T}
+    # Find the minimum of the cubic polynomial
+    (; u0, u1, coeffs) = spl
+    xend, uend = u0 < u1 ? (-one(T), u0) : (one(T), u1) # endpoint minimum
+
+    # Find the roots of the derivative
+    x1, x2 = roots_real_quadratic(deriv_coeffs(spl.coeffs))
+
+    if isnan(x1) || isnan(x2) || x1 >= 1 || x2 <= -1 || (x1 <= -1 && 1 <= x2)
+        # No real local extrema in the interval; return endpoint minimum
+        return xend, uend
+    elseif coeffs[4] == 0
+        # Spline is quadratic; check sign of quadratic coefficient
+        if coeffs[3] > 0
+            x, u = x1, spl(x1) # note: x1 == x2
+            return u < uend ? (x, u) : (xend, uend)
+        else
+            return xend, uend
+        end
+        x = x1 == 0 ? x2 : x1
+        u = spl(x)
+        return u < uend ? (x, u) : (xend, uend)
+    else
+        # Two unique roots; local minimum corresponds to the larger (smaller) root when the cubic coefficient is positive (negative)
+        x = coeffs[4] > 0 ? x2 : x1
+        if -1 < x < 1
+            u = spl(x)
+            return u < uend ? (x, u) : (xend, uend)
+        else
+            return xend, uend
+        end
+    end
+end
+
+function roots_real_quadratic(coeffs::NTuple{3, T}) where {T <: AbstractFloat}
+    # Robust solution to the quadratic equation a*x^2 + b*x + c = 0.
+    # Coefficients are given in increasing order: (c, b, a).
+    # Returns NaN if no real roots are found, else returns sorted roots.
+    #    See: https://math.stackexchange.com/a/2007723
+    c, b, a = coeffs
+    if a == 0
+        if b == 0
+            # Constant: c = 0
+            return (T(NaN), T(NaN))
+        else
+            # Linear: bx + c = 0
+            x = -c / b
+            return (x, x)
+        end
+    elseif c == 0
+        # Factor out x: x * (ax + b) = 0
+        return minmax(zero(T), -b / a)
+    end
+
+    Δ = b^2 - 4 * a * c
+    if Δ < 0
+        # No real roots
+        return (T(NaN), T(NaN))
+    elseif Δ == 0
+        # One repeated real root: x = -b / 2a
+        x = -b / 2a
+        return (x, x)
+    else
+        # Two real roots
+        x1 = (-b - strictsign(b) * √Δ) / 2
+        if x1 == 0
+            x2 = x1
+        else
+            x2 = c / x1 # Viete's formulas
+            x1 = x1 / a
+        end
+        return minmax(x1, x2)
+    end
+end
+roots_real_quadratic(coeffs::Tuple) = (@assert length(coeffs) == 3; return roots_real_quadratic(promote(map(float, coeffs)...)))
 
 ####
 #### Spline utils
@@ -69,7 +172,7 @@ function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, le
         x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
         _x, _y = x₁, p(x₁ - x₀) # check right endpoint
         (_y < y) && (x = _x; y = _y)
-        for rᵢ in extrema(p) # extrema(p) returns the zeros of derivative(p)
+        for rᵢ in extrema(p) # extrema(p) returns the zeros of p'
             if abs(imag(rᵢ)) <= atol # real roots only
                 xᵢ = x₀ + real(rᵢ)
                 if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
@@ -132,25 +235,8 @@ end
 
 # MATLAB spline optimization performs global optimization by sampling the spline
 # fit to data (X, Y) at points X[1]:0.001:X[end], and uses the minimum value.
-# This isn't very efficient; instead we use exact spline optimization and return
-# the (x,y) pair such that x ∈ X[1]:0.001:X[end] is nearest to the exact optimum
-function spline_opt_legacy(spl::Dierckx.Spline1D)
-    xopt, yopt = spline_opt(spl)
-    knots = Dierckx.get_knots(spl)
-    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    _, i0 = find_nearest(xs, xopt) # find nearest x in xs to xopt
-
-    # Note that the above finds the x value nearest the true minimizer, but we need the x value corresponding to
-    # the y value nearest the true minimum. Since we are near the minimum, search for a local minimum.
-    (; x, y, i) = local_gridsearch(spl, xs, i0)
-
-    return (; x, y)
-end
-spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1)) = spline_opt_legacy(make_spline(X, Y; deg_spline))
-
-# Similar to above, but removes the extra trick and instead performs
-# exactly what the MATLAB implementation does
-function spline_opt_legacy_slow(spl::Dierckx.Spline1D)
+function spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1))
+    spl = make_spline(X, Y; deg_spline)
     knots = Dierckx.get_knots(spl)
     xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
     x, y = xs[1], spl(xs[1])
@@ -161,32 +247,11 @@ function spline_opt_legacy_slow(spl::Dierckx.Spline1D)
     end
     return (; x, y)
 end
-spline_opt_legacy_slow(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1)) = spline_opt_legacy_slow(make_spline(X, Y; deg_spline))
 
-# Brute force root finding through fitting a spline to data (X, Y):
+# Brute force root finding through fitting a spline to data (X, Y).
 # MATLAB implementation of spline root finding performs root finding by sampling the
 # spline fit to data (X, Y) at points X[1]:0.001:X[end], and uses the nearest value.
-# This isn't very efficient; instead we use exact spline root finding and return
-# the nearest x ∈ X[1]:0.001:X[end] such that the y value is nearest zero
 function spline_root_legacy(spl::Dierckx.Spline1D, value = 0)
-    # Find x value nearest to the root
-    knots = Dierckx.get_knots(spl)
-    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
-    xroot = spline_root(spl, value)
-    _, i0 = find_nearest(xs, xroot) # find nearest x in xs to xroot
-
-    # Note that the above finds the x value nearest the true root, but we need the x value corresponding to the
-    # y value nearest to `value`. Since we are near the root, search for a local minimum in abs(spl(x)-value).
-    dy(x) = abs(spl(x) - value)
-    (; x, y, i) = local_gridsearch(dy, xs, i0)
-
-    return x
-end
-spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X) - 1)) = spline_root_legacy(make_spline(X, Y; deg_spline), value)
-
-# Similar to above, but removes the extra trick and instead performs
-# exactly what the MATLAB implementation does
-function spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     knots = Dierckx.get_knots(spl)
     xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
     x, y = xs[1], abs(spl(xs[1]) - value)
@@ -197,7 +262,7 @@ function spline_root_legacy_slow(spl::Dierckx.Spline1D, value = 0)
     end
     return x
 end
-spline_root_legacy_slow(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X) - 1)) = spline_root_legacy_slow(make_spline(X, Y; deg_spline), value)
+spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline = min(3, length(X) - 1)) = spline_root_legacy(make_spline(X, Y; deg_spline), value)
 
 ####
 #### Surrogate functions over discrete grids
@@ -254,7 +319,7 @@ function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
     npts = surr.npts[]
     ps = reinterpret(T, view(surr.p, 1:npts))
     us = view(surr.u, 1:npts)
-    p, u = surr.legacy ? spline_opt_legacy_slow(ps, us) : spline_opt(ps, us)
+    p, u = surr.legacy ? spline_opt_legacy(ps, us) : spline_opt(ps, us)
     return SVector{1, T}(p), T(u)
 end
 
@@ -315,7 +380,7 @@ function suggest_point(surr::NormalHermiteSplineSurrogate{1, T}) where {T}
     end
 
     # Use Brent's method to search for a minimum on the interval (p₁, p₂)
-    xᵒᵖᵗ, uᵒᵖᵗ = brents_method(p₁[1], p₂[1]; xrtol = T(1e-4), xtol = T(1e-4), maxiters = 10) do x
+    xᵒᵖᵗ, uᵒᵖᵗ = brents_method(p₁[1], p₂[1]; xrtol = T(1e-4), xatol = T(1e-4), maxiters = 10) do x
         p = SA{T}[x]
         u = NormalHermiteSplines.evaluate(surr.spl, p)
         return u
@@ -787,7 +852,7 @@ function mock_surrogate_search_problem(
     return NNLSDiscreteSurrogateSearch(As, ∇As, opt_ranges, b)
 end
 function mock_surrogate_search_problem(::Val{D}, ::Val{ETL}, opts = mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = ETL); kwargs...) where {D, ETL}
-    b = vec(mock_image(opts))
+    b = vec(mock_image(opts; kwargs...))
     return mock_surrogate_search_problem(b, opts, Val(D), Val(ETL); kwargs...)
 end
 function mock_surrogate_search_problem(b::AbstractVector, opts::T2mapOptions, ::Val{D}; kwargs...) where {D}

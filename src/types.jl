@@ -97,6 +97,10 @@ end
 T2mapOptions(args...; kwargs...) = T2mapOptions{Float64}(args...; kwargs...)
 T2mapOptions(image::Array{T, 4}; kwargs...) where {T} = T2mapOptions{T}(; kwargs..., MatrixSize = size(image)[1:3], nTE = size(image)[4])
 
+Base.convert(::Type{Dict{Symbol, Any}}, o::T2mapOptions) = Dict{Symbol, Any}(Pair{Symbol, Any}[f => getfield(o, f) for f in fieldsof(T2mapOptions, Vector)])
+Base.convert(::Type{Dict{String, Any}}, o::T2mapOptions) = Dict{String, Any}(Pair{String, Any}[string(f) => getfield(o, f) for f in fieldsof(T2mapOptions, Vector)])
+Base.Dict{T, Any}(o::T2mapOptions) where {T} = convert(Dict{T, Any}, o)
+
 t2_times(o::T2mapOptions{T}) where {T} = logrange(o.T2Range..., o.nT2)
 flip_angles(o::T2mapOptions{T}) where {T} = o.SetFlipAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetFlipAngle]
 refcon_angles(o::T2mapOptions{T}) where {T} = o.RefConAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.RefConAngle]
@@ -164,6 +168,10 @@ See also:
 end
 T2partOptions(args...; kwargs...) = T2partOptions{Float64}(args...; kwargs...)
 T2partOptions(t2dist::Array{T, 4}; kwargs...) where {T} = T2partOptions{T}(; kwargs..., MatrixSize = size(t2dist)[1:3], nT2 = size(t2dist)[4])
+
+Base.convert(::Type{Dict{Symbol, Any}}, o::T2partOptions) = Dict{Symbol, Any}(Pair{Symbol, Any}[f => getfield(o, f) for f in fieldsof(T2partOptions, Vector)])
+Base.convert(::Type{Dict{String, Any}}, o::T2partOptions) = Dict{String, Any}(Pair{String, Any}[string(f) => getfield(o, f) for f in fieldsof(T2partOptions, Vector)])
+Base.Dict{T, Any}(o::T2partOptions) where {T} = convert(Dict{T, Any}, o)
 
 function T2partOptions(o::T2mapOptions{T}; kwargs...) where {T}
     return T2partOptions{T}(;

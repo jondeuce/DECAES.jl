@@ -1,5 +1,18 @@
+function test_poly()
+    @testset "degree d = $d" for d in 0:5
+        coeffs = randn(d+1)
+        for p in [DECAES.Poly(coeffs), DECAES.Poly(coeffs...)]
+            @test DECAES.coeffs(p) == coeffs
+            @test DECAES.coeffs(p') == Float64[i * coeffs[i+1] for i in 1:d]
+            @test DECAES.coeffs(cumsum(p)) == [i == 0 ? 0.0 : coeffs[i] / i for i in 0:d+1]
+            @test DECAES.coeffs(cumsum(p)') ≈ DECAES.coeffs(p) # derivative of integral is identity
+            @test DECAES.coeffs(cumsum(p')) ≈ [0.0; DECAES.coeffs(p)[2:end]] # integral of derivative is identity, up to a constant, which we fix to zero
+        end
+    end
+end
+
 function test_cubic_splines()
-    for npts in 2:5, deg_spline in 1:min(npts - 1, 3)
+    @testset "npts = $npts, deg_spline = $deg_spline" for npts in 2:5, deg_spline in 1:min(npts - 1, 3)
         X = sort!(randn(npts))
         Y = randn(npts)
 
@@ -18,6 +31,48 @@ function test_cubic_splines()
         @test X[1] <= x̄ <= X[end]
         @test spl(x̄) ≈ ȳ
     end
+end
+
+function test_cubic_hermite_splines()
+    # Two real roots
+    a, b, c = rand(), 2 + rand(), rand()
+    coeffs = (c, b, a)
+    x1, x2 = DECAES.roots_real_quadratic(coeffs)
+    @test !isnan(x1) && !isnan(x2) # both roots are real
+
+    y1, y2 = evalpoly.((x1, x2), ((c, b, a),))
+    @test !isnan(y1) && !isnan(y2) # both values are real
+    @test b^2 - 4a * c > 0 # discriminant is positive
+    @test abs(y1) < √eps() && abs(y2) < √eps() # both values are near zero
+
+    # No roots
+    a, b, c = 0.75, rand(), rand() + 0.5
+    coeffs = (c, b, a)
+    x1, x2 = DECAES.roots_real_quadratic(coeffs)
+    @test isnan(x1) && isnan(x2) # both roots NaN
+
+    y1, y2 = evalpoly.((x1, x2), ((c, b, a),))
+    @test isnan(y1) && isnan(y2) # both values NaN
+    @test b^2 - 4a * c < 0 # discriminant is negative
+end
+
+function test_cubic_hermite_interpolator()
+    u0, u1, m0, m1 = randn(4)
+    spl = DECAES.CubicHermiteInterpolator(u0, u1, m0, m1)
+    (; coeffs) = spl
+    ∇coeffs = DECAES.deriv_coeffs(coeffs)
+
+    @test evalpoly(-1.0, coeffs) ≈ u0 rtol = 1e-14 atol = 1e-14
+    @test evalpoly(1.0, coeffs) ≈ u1 rtol = 1e-14 atol = 1e-14
+    @test evalpoly(-1.0, ∇coeffs) ≈ m0 rtol = 1e-14 atol = 1e-14
+    @test evalpoly(1.0, ∇coeffs) ≈ m1 rtol = 1e-14 atol = 1e-14
+
+    @test evalpoly(0.7, coeffs) == spl(0.7)
+    @test evalpoly(0.7, ∇coeffs) ≈ DECAES.ForwardDiff.derivative(spl, 0.7) rtol = 1e-14 atol = 1e-14
+
+    xmin, umin = DECAES.minimize(spl)
+    @test umin ≈ spl(xmin) rtol = 1e-14 atol = 1e-14
+    @test all(spl(x) >= umin - 1e-14 for x in range(-1.0, 1.0; length = 1001))
 end
 
 function test_mock_surrogate_search_problem(
@@ -115,14 +170,21 @@ function test_discrete_searcher()
 end
 
 @testset "Splines" begin
+    @testset "poly" begin
+        test_poly()
+    end
     @testset "cubic" begin
         test_cubic_splines()
+    end
+    @testset "cubic hermite" begin
+        @testset "basics" test_cubic_hermite_splines()
+        @testset "interpolator" test_cubic_hermite_interpolator()
     end
     @testset "mock surrogate search problem" begin
         test_mock_surrogate_search_problem()
     end
     @testset "bounding box" begin
-        test_bounding_box()
-        test_discrete_searcher()
+        @testset "basics" test_bounding_box()
+        @testset "discrete searcher" test_discrete_searcher()
     end
 end

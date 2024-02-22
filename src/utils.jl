@@ -3,11 +3,13 @@
 ####
 
 ndigits(x::Int) = x == 0 ? 1 : floor(Int, log10(abs(x))) + 1
-logrange(a::Real, b::Real, len::Int) = (r = exp.(range(log(a), log(b); length = len)); r[begin] = a; r[end] = b; return r)
-normcdf(x::T) where {T} = erfc(-x / sqrt(T(2))) / 2 # Cumulative distribution for normal distribution
-normccdf(x::T) where {T} = erfc(x / sqrt(T(2))) / 2 # Compliment of normcdf, i.e. 1 - normcdf(x)
 
-@inline mul_im(z::Complex) = Complex(-imag(z), real(z)) # optimized i*(a+b*i) = -b+a*i
+logrange(a::Real, b::Real, len::Int) = (r = exp.(range(log(a), log(b); length = len)); r[begin] = a; r[end] = b; return r)
+
+@inline normcdf(x::T) where {T} = erfc(-x / sqrt(T(2))) / 2 # Cumulative distribution for normal distribution
+@inline normccdf(x::T) where {T} = erfc(x / sqrt(T(2))) / 2 # Compliment of normcdf, i.e. 1 - normcdf(x)
+
+@inline strictsign(x::Real) = ifelse(signbit(x), -one(x), one(x))
 
 @inline basisvector(::Type{SVector{D, T}}, i::Int) where {D, T} = SVector{D, T}(ntuple(d -> T(d == i), D))
 
@@ -463,10 +465,7 @@ function update(∇::SVector{N, T}, o::ADAM{N, T}) where {N, T}
     return Δ, ADAM{N, T}(η, β, mt, vt, βp)
 end
 
-@inline xform_periodic(t::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> clamp(((lb[i] + ub[i]) / 2) + ((ub[i] - lb[i]) / 2) * sinpi(t[i]), lb[i], ub[i]), N))
-@inline ∇xform_periodic(t::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> ((ub[i] - lb[i]) / 2) * T(π) * cospi(t[i]), N))
-@inline inv_xform_periodic(x::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> asin(clamp((x[i] - ((lb[i] + ub[i]) / 2)) / ((ub[i] - lb[i]) / 2), -one(T), one(T))) / T(π), N))
-
+#=
 function optimize(∇f, x0::SVector{N, T}, lb::SVector{N, T}, ub::SVector{N, T}, o::ADAM{N, T}; maxiter::Int = 1, xtol_rel = T(1e-3)) where {N, T}
     x = x0
     t = inv_xform_periodic(x, lb, ub)
@@ -488,40 +487,63 @@ function optimize(∇f, x0::SVector{N, T}, lb::SVector{N, T}, ub::SVector{N, T},
     return x, o
 end
 
+@inline xform_periodic(t::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> clamp(((lb[i] + ub[i]) / 2) + ((ub[i] - lb[i]) / 2) * sinpi(t[i]), lb[i], ub[i]), N))
+@inline ∇xform_periodic(t::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> ((ub[i] - lb[i]) / 2) * T(π) * cospi(t[i]), N))
+@inline inv_xform_periodic(x::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> asin(clamp((x[i] - ((lb[i] + ub[i]) / 2)) / ((ub[i] - lb[i]) / 2), -one(T), one(T))) / T(π), N))
+=#
+
 ####
 #### Generate (moderately) realistic mock images
 ####
 
-function mock_t2map_opts(::Type{T} = Float64; NumVoxels = nothing, kwargs...) where {T}
+function mock_t2map_opts(::Type{T} = Float64; kwargs...) where {T}
+    t2map_fields = fieldsof(T2mapOptions, Set)
+    t2map_kwargs = filter((k, v)::Pair -> k ∈ t2map_fields, kwargs)
     return T2mapOptions{T}(;
-        MatrixSize = NumVoxels === nothing ? (2, 2, 2) : (NumVoxels, 1, 1),
+        MatrixSize = (2, 2, 2),
         TE = 10e-3,
         nTE = 32,
         T2Range = (10e-3, 2.0),
         nT2 = 40,
         Reg = "lcurve",
         Chi2Factor = 1.02,
-        kwargs...,
+        t2map_kwargs...,
     )
 end
 
-function mock_t2parts_opts(::Type{T} = Float64; NumVoxels = nothing, kwargs...) where {T}
+function mock_t2parts_opts(::Type{T} = Float64; kwargs...) where {T}
+    t2part_fields = fieldsof(T2partOptions, Set)
+    t2part_kwargs = filter((k, v)::Pair -> k ∈ t2part_fields, kwargs)
     return T2partOptions{T}(;
-        MatrixSize = NumVoxels === nothing ? (2, 2, 2) : (NumVoxels, 1, 1),
+        MatrixSize = (2, 2, 2),
         nT2 = 40,
         T2Range = (10e-3, 2.0),
         SPWin = (10e-3, 40e-3),
         MPWin = (40e-3, 2.0),
-        kwargs...,
+        t2part_kwargs...,
     )
 end
 
-# Mock CPMG image
-function mock_image(o::T2mapOptions{T}; SNR = 50) where {T}
-    (; MatrixSize, TE, nTE) = o
+Base.@kwdef struct MockImageOpts{T}
+    MatrixSize::NTuple{3, Int} = (2, 2, 2)
+    TE::T = T(10e-3)
+    nTE::Int = 32
+    SNR::T = T(50.0)
+    SFRRange::Tuple{T, T} = (0.05, 0.25)
+    T21Range::Tuple{T, T} = (10e-3, 20e-3)
+    T22Range::Tuple{T, T} = (50e-3, 100e-3)
+    T1::T = T(1.0)
+    FlipAngle::T = T(165.0)
+end
+function mock_image_opts(::Type{T} = Float64; kwargs...) where {T}
+    image_fields = fieldsof(MockImageOpts, Set)
+    image_kwargs = filter((k, v)::Pair -> k ∈ image_fields, kwargs)
+    return MockImageOpts{T}(; image_kwargs...)
+end
+
+function mock_image(o::MockImageOpts{T}) where {T}
+    (; MatrixSize, TE, nTE, SNR, SFRRange, T21Range, T22Range, T1, FlipAngle) = o
     σ = exp10(-T(SNR) / 20)
-    α = o.SetFlipAngle === nothing ? T(165.0) : o.SetFlipAngle
-    β = o.RefConAngle === nothing ? T(180.0) : o.RefConAngle
     M = zeros(T, (MatrixSize..., nTE))
 
     function allocate(loop_body!)
@@ -534,11 +556,11 @@ function mock_image(o::T2mapOptions{T}; SNR = 50) where {T}
     indices = CartesianIndices(MatrixSize)
     blocksize = max(ceil(Int, length(indices) / Threads.nthreads()), 1)
     tforeach(allocate, indices; blocksize) do I, (m, work1, work2)
-        sfr = T(0.1) + T(0.2) * rand(T)
-        T21 = T(10e-3) + T(10e-3) * rand(T) # short T2
-        T22 = T(50e-3) + T(50e-3) * rand(T) # long T2
-        dc1 = EPGdecaycurve!(work1, EPGOptions((; ETL = nTE, α, TE, T2 = T21, T1 = one(T), β)))
-        dc2 = EPGdecaycurve!(work2, EPGOptions((; ETL = nTE, α, TE, T2 = T22, T1 = one(T), β)))
+        sfr = SFRRange[1] + (SFRRange[2] - SFRRange[1]) * rand(T) # short T2 fraction
+        T21 = T21Range[1] + (T21Range[2] - T21Range[1]) * rand(T) # short T2
+        T22 = T22Range[1] + (T22Range[2] - T22Range[1]) * rand(T) # long T2
+        dc1 = EPGdecaycurve!(work1, EPGOptions((; ETL = nTE, α = FlipAngle, TE, T2 = T21, T1, β = T(180.0))))
+        dc2 = EPGdecaycurve!(work2, EPGOptions((; ETL = nTE, α = FlipAngle, TE, T2 = T22, T1, β = T(180.0))))
         @inbounds begin
             m .= sfr .* dc1 .+ (1 - sfr) .* dc2 # bi-exponential signal with EPG correction
             σM = m[1] * σ
@@ -553,11 +575,15 @@ function mock_image(o::T2mapOptions{T}; SNR = 50) where {T}
     return M
 end
 
-function mock_image(::Type{T}; SNR = 50, kwargs...) where {T}
-    o = mock_t2map_opts(T; kwargs...)
-    return mock_image(o; SNR)
+# Mock CPMG image
+function mock_image(::Type{T} = Float64; kwargs...) where {T}
+    o = mock_image_opts(T; kwargs...)
+    return mock_image(o)
 end
-mock_image(; kwargs...) = mock_image(Float64; kwargs...)
+function mock_image(o::T2mapOptions{T}; kwargs...) where {T}
+    t2map_kwargs = Dict{Symbol, Any}(o)
+    return mock_image(; t2map_kwargs..., kwargs...)
+end
 
 # Mock T2 distribution, computed with default parameters
 function mock_T2_dist(o::T2mapOptions = mock_t2map_opts(Float64); kwargs...)
@@ -565,11 +591,11 @@ function mock_T2_dist(o::T2mapOptions = mock_t2map_opts(Float64); kwargs...)
 end
 
 # Full mock T2 pipeline
-function mock_T2_pipeline(; NumVoxels = 1024, kwargs...)
-    t2map_opts = mock_t2map_opts(; NumVoxels, kwargs...)
+function mock_T2_pipeline(; kwargs...)
+    t2map_opts = mock_t2map_opts(; kwargs...)
     t2part_opts = T2partOptions(t2map_opts; SPWin = (t2map_opts.T2Range[1], 40e-3), MPWin = (40e-3, t2map_opts.T2Range[2]))
 
-    image = mock_image(t2map_opts)
+    image = mock_image(; kwargs...)
     t2maps, t2dist = T2mapSEcorr(image, t2map_opts)
     t2part = T2partSEcorr(t2dist, t2part_opts)
 

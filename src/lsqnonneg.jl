@@ -341,7 +341,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
             return chi2factor_relerr!(get_cache(work.nnls_prob_smooth_cache), logμ; χ²target)
         end
         a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6)
-        bisect(f, a, b, fa, fb; xtol = T(0.05), ftol = (Chi2Factor - 1) / 100)
+        bisect(f, a, b, fa, fb; xatol = T(0.05), ftol = (Chi2Factor - 1) / 100)
 
         # Spline rootfinding on evaluated points to improve accuracy
         sort!(pairs(f.cache); by = ((x, f),) -> x)
@@ -404,7 +404,7 @@ function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T
         # This poses several problems:
         #   1) while unlikely, it is possible for the spline to return a negative regularization parameter
         #   2) the μ values are exponentially spaced, leading to poorly conditioned splines
-        μ = spline_root_legacy_slow(μ_cache, χ²_cache, χ²fact * χ²min)
+        μ = spline_root_legacy(μ_cache, χ²_cache, χ²fact * χ²min)
         μ = μ === nothing ? μmin : μ
     else
         if length(μ_cache) == 2
@@ -468,16 +468,19 @@ function chi2factor_search_from_guess(f, χ²min::T, χ²fact::T, μ₀::T = T(1
 end
 
 ####
-#### Rootfinding methods. `secant_method` and `bisection_method` are modified codes from Roots.jl:
+#### Rootfinding methods
 ####
-####    https://github.com/JuliaMath/Roots.jl/blob/8a5ff76e8e8305d4ad5719fe1dd665d8a7bd7ec3/src/simple.jl
-####
-#### The MIT License (MIT) Copyright (c) 2013 John C. Travers
-#### Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-#### The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-#### THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8 * eps(one(float(real(first(xs))))), maxiters = 1000)
+#=
+`secant_method` and `bisection_method` are modified codes from Roots.jl:
+    https://github.com/JuliaMath/Roots.jl/blob/8a5ff76e8e8305d4ad5719fe1dd665d8a7bd7ec3/src/simple.jl
+
+The MIT License (MIT) Copyright (c) 2013 John C. Travers
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+=#
+function secant_method(f, xs; xatol = zero(float(real(first(xs)))), xrtol = 8 * eps(one(float(real(first(xs))))), maxiters = 1000)
     if length(xs) == 1 # secant needs a, b; only a given
         a  = float(xs[1])
         h  = cbrt(eps(one(real(a))))
@@ -486,10 +489,10 @@ function secant_method(f, xs; xtol = zero(float(real(first(xs)))), xrtol = 8 * e
     else
         a, b = promote(float(xs[1]), float(xs[2]))
     end
-    return secant(f, a, b, f(a), f(b); xtol, xrtol, maxiters)
+    return secant(f, a, b, f(a), f(b); xatol, xrtol, maxiters)
 end
 
-function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), maxiters = 1000) where {T}
+function secant(f, a::T, b::T, fa::T, fb::T; xatol = zero(T), xrtol = 8 * eps(T), maxiters = 1000) where {T}
     # No function change; return arbitrary endpoint
     if fb == fa
         return (a, fa)
@@ -498,7 +501,7 @@ function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), ma
     cnt = 0
     mbest = abs(fa) < abs(fb) ? a : b
     fbest = min(abs(fa), abs(fb))
-    uatol = xtol / oneunit(xtol) * oneunit(real(a))
+    uatol = xatol / oneunit(xatol) * oneunit(real(a))
     adjustunit = oneunit(real(fb)) / oneunit(real(b))
 
     while cnt < maxiters
@@ -518,19 +521,19 @@ function secant(f, a::T, b::T, fa::T, fb::T; xtol = zero(T), xrtol = 8eps(T), ma
     return (mbest, fbest) # maxiters reached
 end
 
-function bisection_method(f, a::Number, b::Number; xtol = nothing, xrtol = nothing, ftol = nothing, maxiters = 1000)
+function bisection_method(f, a::Number, b::Number; xatol = nothing, xrtol = nothing, ftol = nothing, maxiters = 1000)
     T = promote_type(typeof(float(a)), typeof(float(b)))
     x₁, x₂ = T(a), T(b)
     y₁, y₂ = f(x₁), f(x₂)
 
-    xtol = xtol === nothing ? zero(T) : T(xtol)
+    xatol = xatol === nothing ? zero(T) : T(xatol)
     xrtol = xrtol === nothing ? zero(T) : T(xrtol)
     ftol = ftol === nothing ? zero(T) : T(ftol)
 
-    return bisect(f, x₁, x₂, y₁, y₂; xtol, xrtol, ftol, maxiters)
+    return bisect(f, x₁, x₂, y₁, y₂; xatol, xrtol, ftol, maxiters)
 end
 
-function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = zero(T), ftol = zero(T), maxiters = 1000) where {T}
+function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xatol = zero(T), xrtol = zero(T), ftol = zero(T), maxiters = 1000) where {T}
     # No sign change; return arbitrary endpoint
     if y₁ * y₂ >= 0
         return (x₁, y₁)
@@ -545,7 +548,7 @@ function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xtol = zero(T), xrtol = z
 
     cnt = 1
     while cnt < maxiters
-        if iszero(yₘ) || isnan(yₘ) || abs(x₁ - x₂) <= xtol + max(abs(x₁), abs(x₂)) * xrtol || abs(yₘ) <= ftol
+        if iszero(yₘ) || isnan(yₘ) || abs(x₁ - x₂) <= xatol + max(abs(x₁), abs(x₂)) * xrtol || abs(yₘ) <= ftol
             return (xₘ, yₘ)
         end
 
@@ -594,53 +597,57 @@ function bracketing_interval(f, a, δ, dilate = 1; maxiters = 1000)
 end
 
 ####
-#### Optimization methods. `brents_method` is a modified code from Optim.jl:
+#### Optimization methods
 ####
-####    https://github.com/JuliaNLSolvers/Optim.jl/blob/1189ba0347ba567e43d1d4de94588aaf8a9e3ac0/src/univariate/solvers/brent.jl#L23
-####
-#### Optim.jl is licensed under the MIT License:
-#### > Copyright (c) 2012: John Myles White, Tim Holy, and other contributors.
-#### > Copyright (c) 2016: Patrick Kofod Mogensen, John Myles White, Tim Holy, and other contributors.
-#### > Copyright (c) 2017: Patrick Kofod Mogensen, Asbjørn Nilsen Riseth, John Myles White, Tim Holy, and other contributors.
-#### > Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-#### > The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-#### > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function brents_method(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xtol = eps(T), maxiters::Int = 1_000) where {T <: AbstractFloat}
+#=
+Brent-Dekker minimization method. The code for `brents_method` is modified from Optim.jl:
+    https://github.com/JuliaNLSolvers/Optim.jl/blob/1189ba0347ba567e43d1d4de94588aaf8a9e3ac0/src/univariate/solvers/brent.jl#L23
+
+See:
+    R. P. Brent (2002) Algorithms for Minimization Without Derivatives. Dover edition. Chapter 6, Section 8.
+
+Optim.jl is licensed under the MIT License:
+> Copyright (c) 2012: John Myles White, Tim Holy, and other contributors.
+> Copyright (c) 2016: Patrick Kofod Mogensen, John Myles White, Tim Holy, and other contributors.
+> Copyright (c) 2017: Patrick Kofod Mogensen, Asbjørn Nilsen Riseth, John Myles White, Tim Holy, and other contributors.
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+=#
+function brents_method(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xatol = eps(T), maxiters::Int = 1_000) where {T <: AbstractFloat}
     @assert x₁ <= x₂ "x₁ must be less than x₂"
 
-    α = 2 - T(φ)
-    xᵒᵖᵗ = x₁ + α * (x₂ - x₁)
-    yᵒᵖᵗ = f(xᵒᵖᵗ)
+    α = 2 - T(φ) # α ≈ 0.381966
+    x = x₁ + α * (x₂ - x₁)
+    y = f(x)
 
     Δx_old = Δx = zero(T)
-    xᵒᵖᵗ_older = xᵒᵖᵗ_old = xᵒᵖᵗ
-    yᵒᵖᵗ_older = yᵒᵖᵗ_old = yᵒᵖᵗ
+    x_older = x_old = x
+    y_older = y_old = y
 
-    iteration = 0
-    converged = false
+    iter = 0
 
-    while iteration < maxiters
+    while iter < maxiters
         p = zero(T)
         q = zero(T)
         xₘ = (x₂ + x₁) / 2
 
-        Δx_tol = xrtol * abs(xᵒᵖᵗ) + xtol
-        if abs(xᵒᵖᵗ - xₘ) + (x₂ - x₁) / 2 <= 2 * Δx_tol
-            converged = true
-            break
+        Δx_tol = xrtol * abs(x) + xatol
+        if abs(x - xₘ) + (x₂ - x₁) / 2 <= 2 * Δx_tol
+            break # converged
         end
 
-        iteration += 1
+        iter += 1
 
         if abs(Δx_old) > Δx_tol
             # Compute parabola interpolation
-            # xᵒᵖᵗ + p/q is the optimum of the parabola
+            # x + p/q is the optimum of the parabola
             # Also, q is guaranteed to be positive
 
-            r = (xᵒᵖᵗ - xᵒᵖᵗ_old) * (yᵒᵖᵗ - yᵒᵖᵗ_older)
-            q = (xᵒᵖᵗ - xᵒᵖᵗ_older) * (yᵒᵖᵗ - yᵒᵖᵗ_old)
-            p = (xᵒᵖᵗ - xᵒᵖᵗ_older) * q - (xᵒᵖᵗ - xᵒᵖᵗ_old) * r
+            r = (x - x_old) * (y - y_older)
+            q = (x - x_older) * (y - y_old)
+            p = (x - x_older) * q - (x - x_old) * r
             q = 2 * (q - r)
 
             if q > 0
@@ -650,54 +657,57 @@ function brents_method(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xtol = eps(T),
             end
         end
 
-        if abs(p) < abs(q * Δx_old / 2) && p < q * (x₂ - xᵒᵖᵗ) && p < q * (xᵒᵖᵗ - x₁)
+        if abs(p) < abs(q * Δx_old / 2) && p < q * (x₂ - x) && p < q * (x - x₁)
+            # Parabolic interpolation step
             Δx_old = Δx
             Δx = p / q
 
-            # The function must not be evaluated too close to x₂ or x₁
-            x_tmp = xᵒᵖᵗ + Δx
+            # The function must not be evaluated too close to x₁ or x₂
+            x_tmp = x + Δx
             if (x_tmp - x₁) < 2 * Δx_tol || (x₂ - x_tmp) < 2 * Δx_tol
-                Δx = (xᵒᵖᵗ < xₘ) ? Δx_tol : -Δx_tol
+                Δx = ifelse(x < xₘ, Δx_tol, -Δx_tol)
             end
         else
-            Δx_old = (xᵒᵖᵗ < xₘ) ? x₂ - xᵒᵖᵗ : x₁ - xᵒᵖᵗ
+            # Golden section step
+            Δx_old = ifelse(x < xₘ, x₂ - x, x₁ - x)
             Δx = α * Δx_old
         end
 
-        # The function must not be evaluated too close to xᵒᵖᵗ
+        # The function must not be evaluated too close to x
         if abs(Δx) >= Δx_tol
-            xᵒᵖᵗ_new = xᵒᵖᵗ + Δx
+            x_new = x + Δx
         else
-            xᵒᵖᵗ_new = xᵒᵖᵗ + ((Δx > 0) ? Δx_tol : -Δx_tol)
+            x_new = x + ifelse(Δx > 0, Δx_tol, -Δx_tol)
         end
 
-        yᵒᵖᵗ_new = f(xᵒᵖᵗ_new)
+        y_new = f(x_new)
 
-        if yᵒᵖᵗ_new < yᵒᵖᵗ
-            if xᵒᵖᵗ_new < xᵒᵖᵗ
-                x₂ = xᵒᵖᵗ
+        # Update x's and y's
+        if y_new < y
+            if x_new < x
+                x₂ = x
             else
-                x₁ = xᵒᵖᵗ
+                x₁ = x
             end
-            xᵒᵖᵗ_older, xᵒᵖᵗ_old, xᵒᵖᵗ = xᵒᵖᵗ_old, xᵒᵖᵗ, xᵒᵖᵗ_new
-            yᵒᵖᵗ_older, yᵒᵖᵗ_old, yᵒᵖᵗ = yᵒᵖᵗ_old, yᵒᵖᵗ, yᵒᵖᵗ_new
+            x_older, x_old, x = x_old, x, x_new
+            y_older, y_old, y = y_old, y, y_new
         else
-            if xᵒᵖᵗ_new < xᵒᵖᵗ
-                x₁ = xᵒᵖᵗ_new
+            if x_new < x
+                x₁ = x_new
             else
-                x₂ = xᵒᵖᵗ_new
+                x₂ = x_new
             end
-            if yᵒᵖᵗ_new <= yᵒᵖᵗ_old || xᵒᵖᵗ_old == xᵒᵖᵗ
-                xᵒᵖᵗ_older, xᵒᵖᵗ_old = xᵒᵖᵗ_old, xᵒᵖᵗ_new
-                yᵒᵖᵗ_older, yᵒᵖᵗ_old = yᵒᵖᵗ_old, yᵒᵖᵗ_new
-            elseif yᵒᵖᵗ_new <= yᵒᵖᵗ_older || xᵒᵖᵗ_older == xᵒᵖᵗ || xᵒᵖᵗ_older == xᵒᵖᵗ_old
-                xᵒᵖᵗ_older = xᵒᵖᵗ_new
-                yᵒᵖᵗ_older = yᵒᵖᵗ_new
+            if y_new <= y_old || x_old == x
+                x_older, x_old = x_old, x_new
+                y_older, y_old = y_old, y_new
+            elseif y_new <= y_older || x_older == x || x_older == x_old
+                x_older = x_new
+                y_older = y_new
             end
         end
     end
 
-    return (xᵒᵖᵗ, yᵒᵖᵗ)
+    return (x, y)
 end
 
 ####
@@ -1191,7 +1201,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T
         opt.min_objective = (logμ, ∇logμ) -> log(Float64(gcv!(work, logμ[1])))
         minf, minx, ret   = NLopt.optimize(opt, [-4.0])
     elseif method === :brent
-        minx, minf = brents_method(-8.0, 2.0; xrtol = T(0.05), xtol = T(1e-4), maxiters = 10) do logμ
+        minx, minf = brents_method(-8.0, 2.0; xrtol = T(0.05), xatol = T(1e-4), maxiters = 10) do logμ
             return log(gcv!(work, logμ))
         end
     else

@@ -1,11 +1,12 @@
+using Aqua
 using Test
-using Pkg
-using DECAES
 
 using LinearAlgebra
+using Pkg
 using Random
 using TOML
 
+using DECAES
 using DECAES.NNLS
 using DECAES.StaticArrays
 using DECAES:
@@ -56,15 +57,6 @@ if RUN_MATLAB_TESTS && RUN_MWI_TOOLBOX_TESTS
     end
 end
 
-# Try running auto quality assurance tests
-try
-    @eval using Aqua
-    @testset "aqua" Aqua.test_all(DECAES; ambiguities = false)
-catch e
-    @warn "Failed to load Aqua.jl; skipping Aqua tests"
-    @warn sprint(showerror, e, catch_backtrace())
-end
-
 @testset "misc.jl" verbose = true begin
     include("misc.jl")
 end
@@ -91,4 +83,10 @@ end
 
 @testset "cli.jl" verbose = true begin
     include("cli.jl")
+end
+
+@testset "aqua" begin
+    # Typically causes a lot of false positives with ambiguities and/or unbound args checks;
+    # unfortunately have to periodically check this manually
+    Aqua.test_all(DECAES; ambiguities = false, unbound_args = true)
 end

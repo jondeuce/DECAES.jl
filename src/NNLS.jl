@@ -287,13 +287,13 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     if abs(a) > abs(b)
         xr = b / a
         yr = sqrt(one(T) + xr * xr)
-        c = sign(a) / yr
+        c = sign(a) / yr # note: sign(0) = 0 is consistent
         s = c * xr
         sig = abs(a) * yr
     elseif b != 0
         xr = a / b
         yr = sqrt(one(T) + xr * xr)
-        s = sign(b) / yr
+        s = sign(b) / yr # note: sign(0) = 0 is consistent
         c = s * xr
         sig = abs(b) * yr
     else

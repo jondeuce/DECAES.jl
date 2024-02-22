@@ -11,7 +11,7 @@ DECAES.redirect_to_devnull() do
     main(["--version"])
     for Reg in ["lcurve", "gcv", "chi2"]
         NumVoxels = max(4, Threads.nthreads()) * DECAES.default_blocksize()
-        DECAES.mock_T2_pipeline(; NumVoxels, Reg)
+        DECAES.mock_T2_pipeline(; MatrixSize = (NumVoxels, 1, 1), Reg)
     end
 
     # Run test suite, excluding Matlab MWI Toolbox compatibility tests

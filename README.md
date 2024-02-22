@@ -80,21 +80,23 @@ $ julia --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS> # --thre
 
 <center>
 
-| Dataset     | Matrix Size     | CPU               | Cores | MATLAB     | **DECAES** |
-| :---:       | :---:           | :---:             | :---: | :---:      | :---:      |
-| 48-echo MSE | 240 x 240 x 48  | Intel i5 4200U    | 2     | 4h:35m:18s | **7m:49s** |
-| 56-echo MSE | 240 x 240 x 113 | Xeon E5-2640 (x2) | 12    | 1h:25m:01s | **2m:39s** |
-| 48-echo MSE | 240 x 240 x 48  | Xeon E5-2640 (x2) | 12    | 59m:40s    | **1m:40s** |
-| 56-echo MSE | 240 x 240 x 113 | Ryzen 9 3950X     | 16    | 22m:33s    | **43s**    |
-| 48-echo MSE | 240 x 240 x 48  | Ryzen 9 3950X     | 16    | 17m:56s    | **27s**    |
+| Dataset     | Matrix Size     | CPU                | Cores | Threads | MATLAB     | **DECAES** |
+| :---:       | :---:           | :---:              | :---: | :---:   | :---:      | :---:      |
+| 48-echo MSE | 240 x 240 x 48  | Intel i5 4200U     | 2     | 4       | 4h:35m:18s | **6m:42s** |
+| 56-echo MSE | 240 x 240 x 113 | Intel i7-3770K     | 4     | 8       | --         | **5m:39s** |
+| 48-echo MSE | 240 x 240 x 48  | Intel i7-3770K     | 4     | 8       | --         | **3m:07s** |
+| 56-echo MSE | 240 x 240 x 113 | Intel Xeon E5-2640 | 12    | 24      | 1h:25m:01s | **2m:20s** |
+| 48-echo MSE | 240 x 240 x 48  | Intel Xeon E5-2640 | 12    | 24      | 59m:40s    | **1m:24s** |
+| 56-echo MSE | 240 x 240 x 113 | AMD Ryzen 9 3950X  | 16    | 32      | 22m:33s    | **34s**    |
+| 48-echo MSE | 240 x 240 x 48  | AMD Ryzen 9 3950X  | 16    | 32      | 17m:56s    | **21s**    |
 
 </center>
 
 Benchmarking notes:
 
 * MATLAB scripts used were from the `MWI_NNLS_toolbox_0319` subfolder of the [ubcmwf github repository](https://github.com/ubcmri/ubcmwf)
-* DECAES.jl was compiled into an [app](https://julialang.github.io/PackageCompiler.jl/stable/apps.html) using the `--compile` flag to reduce compile time overhead
-* Both implementations made use of precomputed brain masks to skip voxels outside of the brain
+* Both MATLAB and DECAES made use of precomputed brain masks to skip voxels outside of the brain
+* Image loading time and MATLAB/Julia startup time are not included
 
 ## DECAES Tutorial 2022
 
