@@ -323,7 +323,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
 
     if legacy
         # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit
-        mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor; legacy = legacy) do μ
+        mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor; legacy) do μ
             μ == 0 && return chi2_min
             solve!(work.nnls_prob_smooth_cache, μ)
             return chi2(get_cache(work.nnls_prob_smooth_cache))

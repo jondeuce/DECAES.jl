@@ -61,7 +61,7 @@ function T2partSEcorr(T2distributions::Array{T, 4}, opts::T2partOptions{T}) wher
     indices_blocks = split_indices(length(indices), blocksize)
 
     with_singlethreaded_blas() do
-        workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
+        workerpool(with_thread_buffer, indices_blocks; ntasks, verbose = !opts.Silent) do inds, thread_buffer
             @inbounds for j in inds
                 voxelwise_T2_parts!(thread_buffer, maps, T2distributions, opts, indices[j])
             end

@@ -105,8 +105,8 @@ function minimize_cubic(coeffs::NTuple{4, T}, a::T, b::T, ua::T = evalpoly(a, co
         return xend, uend
     elseif coeffs[4] == 0
         # Spline is quadratic; check sign of quadratic coefficient
-        if coeffs[3] > 0
-            x = x1 # note: x2 is NaN
+        x = x1 # note: x2 is NaN
+        if a < x < b && coeffs[3] > 0
             u = evalpoly(x, coeffs)
             return u < uend ? (x, u) : (xend, uend)
         else
@@ -190,7 +190,7 @@ function roots_real_cubic(coeffs::NTuple{4, T}) where {T <: AbstractFloat}
         # Factor out x: x * (c₃*x^2 + c₂*x + c₁) = 0
         x1, x2 = roots_real_quadratic(coeffs[2:4])
         return isnan(x1) ? (zero(T), T(NaN), T(NaN)) :
-               isnan(x2) ? (minmax(x1, zero(T))..., T(NaN)) :
+               isnan(x2) ? (minmax(zero(T), x1)..., T(NaN)) :
                TupleTools.sort((zero(T), x1, x2))
     end
     # Reduced cubic: x^3 + a*x^2 + b*x + c = 0
@@ -545,14 +545,14 @@ end
 function DiscreteSurrogateSearcher(surr::AbstractSurrogate; mineval::Int, maxeval::Int)
     @assert mineval <= maxeval
     state = DiscreteSurrogateSearcher(surr.grid, fill(false, size(surr.grid)), Ref(0))
-    return initialize!(surr, state; mineval = mineval, maxeval = maxeval)
+    return initialize!(surr, state; mineval, maxeval)
 end
 
 function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}; mineval::Int, maxeval::Int) where {D}
     # Evaluate at least `mineval` points by repeatedly bisecting the grid in a breadth-first manner
     box = BoundingBox(size(state.grid))
     for depth in 1:mineval # should never reach `mineval` depth, this is just to ensure the loop terminates in case `mineval` is greater than the number of gridpoints
-        initialize!(surr, state, box, depth; mineval = mineval, maxeval = maxeval)
+        initialize!(surr, state, box, depth; mineval, maxeval)
         state.numeval[] >= mineval && break
     end
     return state
@@ -560,11 +560,11 @@ end
 
 function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}, depth::Int; mineval::Int, maxeval::Int) where {D}
     depth <= 0 && return state
-    evaluate_box!(surr, state, box; maxeval = maxeval)
+    evaluate_box!(surr, state, box; maxeval)
     state.numeval[] ≥ mineval && return state
     left, right = bisect(box)
-    initialize!(surr, state, left, depth - 1; mineval = mineval, maxeval = maxeval)
-    initialize!(surr, state, right, depth - 1; mineval = mineval, maxeval = maxeval)
+    initialize!(surr, state, left, depth - 1; mineval, maxeval)
+    initialize!(surr, state, right, depth - 1; mineval, maxeval)
     return state
 end
 
@@ -601,7 +601,7 @@ function bisection_search(
     x, u = suggest_point(surr)
     while true
         box = minimal_bounding_box(state, x)
-        evaluate_box!(surr, state, box, x; maxeval = maxeval)
+        evaluate_box!(surr, state, box, x; maxeval)
         x, u = suggest_point(surr)
         if state.numeval[] ≥ maxeval || converged(state, box)
             return x, u
@@ -644,7 +644,7 @@ function evaluate_box!(
     cs = x === nothing ? corners(box) : sorted_corners(state, box, x)
     @inbounds for I in cs
         is_evaluated(state, box) && break # box sufficiently evaluated
-        update!(surr, state, I; maxeval = maxeval) && break # update surrogate, breaking if max evals reached
+        update!(surr, state, I; maxeval) && break # update surrogate, breaking if max evals reached
     end
     return state
 end
@@ -688,6 +688,11 @@ is_inside(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T}
 #### Local optimization using surrogate functions
 ####
 
+function local_search(surr::NormalHermiteSplineSurrogate{D, T}, x₀::SVector{D, T}) where {D, T}
+    return error("Placeholder method --- not implemented")
+end
+
+#=
 function local_search(
     surr::NormalHermiteSplineSurrogate{D, T},
     x₀::SVector{D, T},
@@ -704,7 +709,7 @@ function local_search(
         # Initialize surrogate with domain corners
         box = BoundingBox(size(surr.grid))
         for I in corners(box)
-            update!(surr, state, I; maxeval = maxeval)
+            update!(surr, state, I; maxeval)
         end
     end
 
@@ -720,7 +725,7 @@ function local_search(
                 return norm(xI - NormalHermiteSplines._unnormalize(surr.spl, p))
             end
             if dmin > xeval_radius
-                update!(surr, state, I; maxeval = maxeval)
+                update!(surr, state, I; maxeval)
             end
         end
 
@@ -738,7 +743,6 @@ function local_search(
     return x, u
 end
 
-#=
 function local_search(
         surr::NormalHermiteSplineSurrogate{D,T},
         x₀::SVector{D,T};
@@ -772,7 +776,6 @@ function local_search(
 
     return x, u
 end
-=#
 
 function nearest_gridpoint(grid::AbstractArray{SVector{D, T}, D}, x::SVector{D, T}) where {D, T}
     @inbounds xlo, xhi = first(grid), last(grid)
@@ -792,6 +795,7 @@ function nearest_interior_gridpoint(grid::AbstractArray{SVector{D, T}, D}, x::SV
     return nearest_gridpoint(@views(grid[Ilo:Ihi]), x)
 end
 nearest_interior_gridpoint(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T} = nearest_interior_gridpoint(state.grid, x)
+=#
 
 ####
 #### Global optimization for NNLS problem
@@ -883,8 +887,8 @@ function surrogate_spline_opt(
     mineval::Int = min(2^D, length(prob.αs)),
     maxeval::Int = length(prob.αs),
 ) where {D}
-    state = DiscreteSurrogateSearcher(surr; mineval = mineval, maxeval = maxeval)
-    return bisection_search(surr, state; maxeval = maxeval)
+    state = DiscreteSurrogateSearcher(surr; mineval, maxeval)
+    return bisection_search(surr, state; maxeval)
 end
 
 function spline_opt(

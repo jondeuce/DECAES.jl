@@ -26,7 +26,7 @@ function plot_echoes(img::AbstractTensor{4}; echoes)
         i > nplots && break
         ax = Axis(fig[I[1], I[2]]; aspect = AxisAspect(1))
         hidedecorations!(ax)
-        heatmap!(img[:, :, 1, echoes[i]]; limits = limits)
+        heatmap!(img[:, :, 1, echoes[i]]; limits)
         text!("$(echoes[i])"; color = :white, position = (1.5, 1.5), align = (:left, :baseline))
     end
     return fig
@@ -45,7 +45,7 @@ function plot_global_signal(img::AbstractTensor{4};
 )
     fig = Figure()
     ax = Axis(fig[1, 1])
-    plot_band!(ax, img; meankwargs = meankwargs, bandkwargs = bandkwargs)
+    plot_band!(ax, img; meankwargs, bandkwargs)
     axislegend(ax)
     return fig
 end

@@ -184,7 +184,7 @@ function T2mapSEcorr!(
     signals = permutedims(image[indices, :]) # permute image for cache locality
 
     with_singlethreaded_blas() do
-        workerpool(with_thread_buffer, indices_blocks; ntasks = ntasks, verbose = !opts.Silent) do inds, thread_buffer
+        workerpool(with_thread_buffer, indices_blocks; ntasks, verbose = !opts.Silent) do inds, thread_buffer
             @inbounds for j in inds
                 voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(signals, :, j), opts, indices[j])
             end

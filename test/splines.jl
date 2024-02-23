@@ -1,6 +1,21 @@
 function test_poly()
-    @testset "degree d = $d" for d in 0:5
-        coeffs = randn(d + 1)
+    function polyroots(coeffs)
+        if all(iszero, coeffs)
+            # All coefficients are zero; by convention, return NaN roots
+            return fill(NaN, length(coeffs) - 1)
+        end
+        rs = PolynomialRoots.roots(coeffs)
+        if length(rs) < length(coeffs) - 1
+            # If leading coefficient is zero, PolynomialRoots.roots returns one fewer root; append NaN to match length
+            @assert coeffs[end] == 0
+            push!(rs, NaN)
+        end
+        return sort!(rs; by = r -> (abs(imag(r)) > √eps(), real(r))) # sorted real roots, followed by complex roots
+    end
+
+    @testset "degree d = $d, coeffs[$i] = 0" for d in 0:5, i in 0:d+1
+        coeffs = randn(d+1)
+        i > 0 && (coeffs[i] = 0.0) # zero out i'th coefficient to test degenerate polynomials
         for p in [DECAES.Poly(coeffs), DECAES.Poly(coeffs...)]
             @test DECAES.coeffs(p) == coeffs
             @test DECAES.coeffs(p') == Float64[i * coeffs[i+1] for i in 1:d]
@@ -10,15 +25,32 @@ function test_poly()
 
             # Test root-finding (only implemented for polynomials of degree <= 3)
             d <= 3 || continue
-            rs = sort!(PolynomialRoots.roots(coeffs); by = r -> (abs(imag(r)) > √eps(), real(r))) # sorted real roots, followed by complex roots
+            rs = polyroots(coeffs)
             r̂s = DECAES.roots(p)
             @test length(r̂s) == length(rs) == d
             for i in eachindex(rs, r̂s)
                 if !isnan(r̂s[i])
                     @test isapprox(r̂s[i], rs[i]; rtol = 1e-14, atol = 1e-14) # real roots should be close
                 else
-                    @test abs(imag(rs[i])) > √eps() # NaN outputs should correspond to complex roots
+                    @test isnan(rs[i]) || abs(imag(rs[i])) > √eps() # NaN outputs should correspond to NaN or complex roots
                 end
+            end
+
+            # Test minimization on an interval [a, b] #TODO `minimize(p::Poly, a::Real, b::Real)` method?
+            a, b = sort(randn(2))
+            xs = range(a, b; length = 1024)
+            if d == 1
+                x̄, px̄ = DECAES.minimize_linear((coeffs...,), a, b)
+                @test a <= x̄ <= b
+                @test px̄ == min(p(a), p(b))
+            elseif d == 2
+                x̄, px̄ = DECAES.minimize_quadratic((coeffs...,), a, b)
+                @test a <= x̄ <= b
+                @test all(p(x) >= px̄ - 1e-14 for x in xs)
+            elseif d == 3
+                x̄, px̄ = DECAES.minimize_cubic((coeffs...,), a, b)
+                @test a <= x̄ <= b
+                @test all(p(x) >= px̄ - 1e-14 for x in xs)
             end
         end
     end
@@ -72,7 +104,7 @@ function test_cubic_splines()
         ŷ = minimum(spl, range(X[1], X[end]; length = 100))
         @test X[1] <= x <= X[end]
         @test spl(x) ≈ y
-        @test ŷ >= y - 100 * eps()
+        @test ŷ >= y - 1e-14
 
         x̄ = DECAES.spline_root(X, Y, y - 1; deg_spline)
         @test isnan(x̄)
@@ -113,7 +145,7 @@ function test_minimize_cubic_hermite_interpolator()
 
         xmin, umin = DECAES.minimize(spl)
         @test umin ≈ spl(xmin) rtol = 1e-14 atol = 1e-14
-        @test all(spl(x) >= umin - 1e-14 for x in range(-1.0, 1.0; length = 1001))
+        @test all(spl(x) >= umin - 1e-14 for x in range(-1.0, 1.0; length = 1024 + 1))
     end
 end
 

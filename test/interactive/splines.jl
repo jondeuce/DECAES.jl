@@ -67,17 +67,17 @@ function plot_bisection_search(
     end
 
     # solve discrete search problem
-    state = DECAES.DiscreteSurrogateSearcher(surr; mineval = mineval, maxeval = maxeval)
+    state = DECAES.DiscreteSurrogateSearcher(surr; mineval, maxeval)
     minx, miny = DECAES.bisection_search(surr, state; maxeval = min(D == 1 ? 5 : 12, maxeval))
     # x₀ = (minx + DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))) / 2
     # x₀ = DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))
     # x₀ = DECAES.is_inside(state, minx) ? minx : DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
     x₀ = DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
-    minx, miny = DECAES.local_search(surr, x₀, state; maxeval = maxeval)
+    minx, miny = DECAES.local_search(surr, x₀, state; maxeval)
     # xmid = DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))
     # xopt = DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
-    # minx₂, miny₂ = DECAES.local_search(surr, xopt, state; maxeval = maxeval)
-    # minx₁, miny₁ = DECAES.local_search(surr, xmid, state; maxeval = maxeval)
+    # minx₂, miny₂ = DECAES.local_search(surr, xopt, state; maxeval)
+    # minx₁, miny₁ = DECAES.local_search(surr, xmid, state; maxeval)
     # minx = ifelse(miny₁ < miny₂, minx₁, minx₂)
 
     # reconstruct surrogate from evaluated points and plot
@@ -134,7 +134,7 @@ function plot_bisection_search(
 ) where {D}
     opts = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = 32, SetFlipAngle = flip, RefConAngle = refcon, nRefAngles = npts)
     prob = DECAES.mock_surrogate_search_problem(Val(D), Val(32), opts)
-    return plot_bisection_search(Val(D), Val(32), prob, opts; npts = npts, kwargs...)
+    return plot_bisection_search(Val(D), Val(32), prob, opts; npts, kwargs...)
 end
 
 function plot_bisection_search(b::AbstractVector, opts::T2mapOptions, ::Val{D}; kwargs...) where {D}
@@ -154,7 +154,7 @@ function sequential_plot_bisection_search(;
     b = vec(DECAES.mock_image(opts; SNR = snr))
     for maxeval in 3:7
         prob = DECAES.mock_surrogate_search_problem(b, opts, Val(1), Val(32))
-        fig = plot_bisection_search(Val(1), Val(32), prob, opts; npts = npts, maxeval = maxeval, kwargs...)
+        fig = plot_bisection_search(Val(1), Val(32), prob, opts; npts, maxeval, kwargs...)
         display(fig)
         # save("hermite_spline_maxeval-$(maxeval).png", fig)
     end

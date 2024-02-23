@@ -571,6 +571,7 @@ function mock_image(o::MockImageOpts{T}) where {T}
             M[I, :] .= m
         end
     end
+    M ./= mean(@views M[:, :, :, 1]) # normalize mean of first echo to 1
 
     return M
 end
