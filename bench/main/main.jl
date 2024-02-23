@@ -1,59 +1,73 @@
 using Dates
 using ArgParse
 
-function parse_commandline()
-    s = ArgParseSettings(;
-        fromfile_prefix_chars = "@",
-    )
+settings = ArgParseSettings(;
+    fromfile_prefix_chars = "@",
+)
 
-    @add_arg_table! s begin
-        "--input", "-i"
-            help = "one or more settings files"
-            nargs = '+' # At least one input is required
-            arg_type = String
-            required = true
-        "--output", "-o"
-            help = "output folder suffix; timestamp will be prepended"
-            arg_type = String
-            required = true
-        "--julia"
-            help = "path to julia binary"
-            nargs = '*' # Zero or more inputs
-            arg_type = String
-            default = String["julia"]
-        "--decaes-version", "-v"
-            help = "tag (e.g. 0.3 or v0.3), branch (e.g. master), or git commit (e.g. 338795e)"
-            nargs = '*' # Zero or more inputs
-            arg_type = String
-            default = String["master"]
-        "--threads", "-t"
-            help = "number of threads"
-            nargs = '*' # Zero or more inputs
-            arg_type = Any
-            default = Any["auto"]
-        "--optimize", "-O"
-            help = "optimization level"
-            arg_type = Int
-            nargs = '*' # Zero or more inputs
-            default = Int[2]
-        "--warmup"
-            help = "number of warmup runs"
-            arg_type = Int
-            default = 1
-        "--min-runs"
-            help = "minimum number of runs"
-            arg_type = Int
-            default = 3
-        # "--show-output"
-        #     help = "print stdout and stderr of the benchmark instead of suppressing"
-        #     action = :store_true
-    end
-
-    return parse_args(s)
-end
+add_arg_table!(settings,
+    ["--input", "-i"],
+    Dict(
+        :help => "one or more settings files",
+        :nargs => '+', # At least one input is required
+        :arg_type => String,
+        :required => true,
+    ),
+    ["--output", "-o"],
+    Dict(
+        :help => "output folder suffix; timestamp will be prepended",
+        :arg_type => String,
+        :required => true,
+    ),
+    "--julia",
+    Dict(
+        :help => "path to julia binary",
+        :nargs => '*', # Zero or more inputs
+        :arg_type => String,
+        :default => String["julia"],
+    ),
+    ["--decaes-version", "-v"],
+    Dict(
+        :help => "tag (e.g. 0.3 or v0.3), branch (e.g. master), or git commit (e.g. 338795e)",
+        :nargs => '*', # Zero or more inputs
+        :arg_type => String,
+        :default => String["master"],
+    ),
+    ["--threads", "-t"],
+    Dict(
+        :help => "number of threads",
+        :nargs => '*', # Zero or more inputs
+        :arg_type => Any,
+        :default => Any["auto"],
+    ),
+    ["--optimize", "-O"],
+    Dict(
+        :help => "optimization level",
+        :arg_type => Int,
+        :nargs => '*', # Zero or more inputs
+        :default => Int[2],
+    ),
+    "--warmup",
+    Dict(
+        :help => "number of warmup runs",
+        :arg_type => Int,
+        :default => 1,
+    ),
+    "--min-runs",
+    Dict(
+        :help => "minimum number of runs",
+        :arg_type => Int,
+        :default => 3,
+    ),
+    "--show-output",
+    Dict(
+        :help => "print stdout and stderr of the benchmark instead of suppressing",
+        :action => :store_true,
+    ),
+)
 
 function main()
-    args = parse_commandline()
+    args = parse_args(settings)
     dateformat = "yyyy-mm-dd-T-HH-MM-SS"
     timestamp = Dates.format(Dates.now(), dateformat)
     outfolder = mkpath(joinpath(dirname(args["output"]), timestamp * "_" * basename(args["output"])))

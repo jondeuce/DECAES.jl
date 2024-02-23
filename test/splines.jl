@@ -1,14 +1,65 @@
 function test_poly()
     @testset "degree d = $d" for d in 0:5
-        coeffs = randn(d+1)
+        coeffs = randn(d + 1)
         for p in [DECAES.Poly(coeffs), DECAES.Poly(coeffs...)]
             @test DECAES.coeffs(p) == coeffs
             @test DECAES.coeffs(p') == Float64[i * coeffs[i+1] for i in 1:d]
             @test DECAES.coeffs(cumsum(p)) == [i == 0 ? 0.0 : coeffs[i] / i for i in 0:d+1]
             @test DECAES.coeffs(cumsum(p)') ≈ DECAES.coeffs(p) # derivative of integral is identity
             @test DECAES.coeffs(cumsum(p')) ≈ [0.0; DECAES.coeffs(p)[2:end]] # integral of derivative is identity, up to a constant, which we fix to zero
+
+            # Test root-finding (only implemented for polynomials of degree <= 3)
+            d <= 3 || continue
+            rs = sort!(PolynomialRoots.roots(coeffs); by = r -> (abs(imag(r)) > √eps(), real(r))) # sorted real roots, followed by complex roots
+            r̂s = DECAES.roots(p)
+            @test length(r̂s) == length(rs) == d
+            for i in eachindex(rs, r̂s)
+                if !isnan(r̂s[i])
+                    @test isapprox(r̂s[i], rs[i]; rtol = 1e-14, atol = 1e-14) # real roots should be close
+                else
+                    @test abs(imag(rs[i])) > √eps() # NaN outputs should correspond to complex roots
+                end
+            end
         end
     end
+end
+
+function test_quadratic_roots()
+    # Degenerate quadratics
+    x1, x2 = DECAES.roots_real_quadratic((randn(), 0.0, 0.0))
+    @test isnan(x1) && isnan(x2) # no roots; degenerate quadratic `const = 0`
+    x1, x2 = DECAES.roots_real_quadratic((randn(), randn(), 0.0))
+    @test !isnan(x1) && isnan(x2) # one root is real, the other at infinity NaN
+    x1, x2 = DECAES.roots_real_quadratic((0.0, randn(), randn()))
+    @test !isnan(x1) && !isnan(x2) # both roots are real
+    @test xor(x1 == 0.0, x2 == 0.0) # one root is zero, the other is not
+
+    # Repeated roots
+    x1, x2 = DECAES.roots_real_quadratic((1.0, -2.0, 1.0))
+    @test !isnan(x1) && !isnan(x2) # both roots are real
+    @test x1 == x2 # repeated root
+
+    # Two real roots
+    a, b, c = rand(), 2 + rand(), rand()
+    coeffs = (c, b, a)
+    x1, x2 = DECAES.roots_real_quadratic(coeffs)
+    @test !isnan(x1) && !isnan(x2) # both roots are real
+    @test x1 <= x2 # roots are sorted
+
+    y1, y2 = evalpoly.((x1, x2), ((c, b, a),))
+    @test !isnan(y1) && !isnan(y2) # both values are real
+    @test b^2 - 4a * c > 0 # discriminant is positive
+    @test abs(y1) < √eps() && abs(y2) < √eps() # both values are near zero
+
+    # No roots
+    a, b, c = 0.75, rand(), rand() + 0.5
+    coeffs = (c, b, a)
+    x1, x2 = DECAES.roots_real_quadratic(coeffs)
+    @test isnan(x1) && isnan(x2) # both roots NaN
+
+    y1, y2 = evalpoly.((x1, x2), ((c, b, a),))
+    @test isnan(y1) && isnan(y2) # both values NaN
+    @test b^2 - 4a * c < 0 # discriminant is negative
 end
 
 function test_cubic_splines()
@@ -33,46 +84,37 @@ function test_cubic_splines()
     end
 end
 
-function test_cubic_hermite_splines()
-    # Two real roots
-    a, b, c = rand(), 2 + rand(), rand()
-    coeffs = (c, b, a)
-    x1, x2 = DECAES.roots_real_quadratic(coeffs)
-    @test !isnan(x1) && !isnan(x2) # both roots are real
+function cubic_hermite_interpolator_params_iter()
+    # Pairs of endpoint slopes
+    ms = Iterators.flatten((
+        ((s0 * rand(), s1 * rand()) for s0 in (-1, 0, +1), s1 in (-1, 0, +1)), # differing positive, negative, and zero slopes
+        (rand() .* (s0, s1) for s0 in (-1, 0, +1), s1 in (-1, 0, +1)), # equal and/or opposite slopes
+    ))
 
-    y1, y2 = evalpoly.((x1, x2), ((c, b, a),))
-    @test !isnan(y1) && !isnan(y2) # both values are real
-    @test b^2 - 4a * c > 0 # discriminant is positive
-    @test abs(y1) < √eps() && abs(y2) < √eps() # both values are near zero
+    # Pairs of endpoint values
+    us = (randn() .+ (s * rand(), -s * rand()) for s in -1:1) # u0 < u1, u0 = u1, and u0 > u1
 
-    # No roots
-    a, b, c = 0.75, rand(), rand() + 0.5
-    coeffs = (c, b, a)
-    x1, x2 = DECAES.roots_real_quadratic(coeffs)
-    @test isnan(x1) && isnan(x2) # both roots NaN
-
-    y1, y2 = evalpoly.((x1, x2), ((c, b, a),))
-    @test isnan(y1) && isnan(y2) # both values NaN
-    @test b^2 - 4a * c < 0 # discriminant is negative
+    return ((u0, u1, m0, m1) for ((u0, u1), (m0, m1)) in Iterators.product(us, ms))
 end
 
-function test_cubic_hermite_interpolator()
-    u0, u1, m0, m1 = randn(4)
-    spl = DECAES.CubicHermiteInterpolator(u0, u1, m0, m1)
-    (; coeffs) = spl
-    ∇coeffs = DECAES.deriv_coeffs(coeffs)
+function test_minimize_cubic_hermite_interpolator()
+    for (u0, u1, m0, m1) in cubic_hermite_interpolator_params_iter()
+        spl = DECAES.CubicHermiteInterpolator(u0, u1, m0, m1)
+        (; coeffs) = spl
+        ∇coeffs = DECAES.deriv_coeffs(coeffs)
 
-    @test evalpoly(-1.0, coeffs) ≈ u0 rtol = 1e-14 atol = 1e-14
-    @test evalpoly(1.0, coeffs) ≈ u1 rtol = 1e-14 atol = 1e-14
-    @test evalpoly(-1.0, ∇coeffs) ≈ m0 rtol = 1e-14 atol = 1e-14
-    @test evalpoly(1.0, ∇coeffs) ≈ m1 rtol = 1e-14 atol = 1e-14
+        @test evalpoly(-1.0, coeffs) ≈ u0 rtol = 1e-14 atol = 1e-14
+        @test evalpoly(1.0, coeffs) ≈ u1 rtol = 1e-14 atol = 1e-14
+        @test evalpoly(-1.0, ∇coeffs) ≈ m0 rtol = 1e-14 atol = 1e-14
+        @test evalpoly(1.0, ∇coeffs) ≈ m1 rtol = 1e-14 atol = 1e-14
 
-    @test evalpoly(0.7, coeffs) == spl(0.7)
-    @test evalpoly(0.7, ∇coeffs) ≈ DECAES.ForwardDiff.derivative(spl, 0.7) rtol = 1e-14 atol = 1e-14
+        @test evalpoly(0.7, coeffs) == spl(0.7)
+        @test evalpoly(0.7, ∇coeffs) ≈ DECAES.ForwardDiff.derivative(spl, 0.7) rtol = 1e-14 atol = 1e-14
 
-    xmin, umin = DECAES.minimize(spl)
-    @test umin ≈ spl(xmin) rtol = 1e-14 atol = 1e-14
-    @test all(spl(x) >= umin - 1e-14 for x in range(-1.0, 1.0; length = 1001))
+        xmin, umin = DECAES.minimize(spl)
+        @test umin ≈ spl(xmin) rtol = 1e-14 atol = 1e-14
+        @test all(spl(x) >= umin - 1e-14 for x in range(-1.0, 1.0; length = 1001))
+    end
 end
 
 function test_mock_surrogate_search_problem(
@@ -171,14 +213,14 @@ end
 
 @testset "Splines" begin
     @testset "poly" begin
-        test_poly()
+        @testset "basics" test_poly()
+        @testset "quadratic" test_quadratic_roots()
     end
     @testset "cubic" begin
         test_cubic_splines()
     end
-    @testset "cubic hermite" begin
-        @testset "basics" test_cubic_hermite_splines()
-        @testset "interpolator" test_cubic_hermite_interpolator()
+    @testset "cubic hermite interpolator" begin
+        test_minimize_cubic_hermite_interpolator()
     end
     @testset "mock surrogate search problem" begin
         test_mock_surrogate_search_problem()

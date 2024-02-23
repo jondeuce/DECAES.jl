@@ -3,12 +3,13 @@ using Test
 
 using LinearAlgebra
 using Pkg
+using PolynomialRoots: PolynomialRoots
 using Random
+using StaticArrays
 using TOML
 
 using DECAES
 using DECAES.NNLS
-using DECAES.StaticArrays
 using DECAES:
     GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
     LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,

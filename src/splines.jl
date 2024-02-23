@@ -1,4 +1,9 @@
-# Lightweight polynomial type
+####
+#### Polynomial utilities
+####
+
+#### Lightweight polynomial type
+
 struct Poly{T <: AbstractFloat, A <: AbstractVector{T}}
     c::A
 end
@@ -17,8 +22,8 @@ sub!(p::Poly, a::Number) = (p.c[1] -= a; return p)
 # Recall: p(x) = Σᵢ cᵢ ⋅ xⁱ⁻¹
 Base.adjoint(p::Poly) = Poly(deriv_coeffs(coeffs(p))) # ∂/∂x p(x) = Σᵢ (i-1) ⋅ cᵢ ⋅ xⁱ⁻²
 Base.cumsum(p::Poly) = Poly(integral_coeffs(coeffs(p))) # ∫₀ˣ p(x) = Σᵢ (cᵢ / i) ⋅ xⁱ
-PolynomialRoots.roots(p::Poly) = PolynomialRoots.roots(coeffs(p))
-Base.extrema(p::Poly) = PolynomialRoots.roots(p')
+roots(p::Poly) = roots(coeffs(p))
+Base.extrema(p::Poly) = roots(p')
 
 deriv_coeffs(c::AbstractVector{T}) where {T} = T[i * c[i+1] for i in 1:length(c)-1]
 deriv_coeffs(c::SVector{N, T}) where {N, T} = SVector{N - 1, typeof(one(T) * 1)}(ntuple(i -> i * c[i+1], Val(N - 1)))
@@ -29,7 +34,22 @@ integral_coeffs(c::AbstractVector{T}) where {T} = [i == 0 ? zero(T) / 1 : c[i] /
 integral_coeffs(c::SVector{N, T}) where {N, T} = SVector{N + 1, typeof(one(T) / 1)}(ntuple(i -> i == 1 ? zero(T) / 1 : c[i-1] / (i - 1), Val(N + 1)))
 integral_coeffs(c::Tuple) = Tuple(integral_coeffs(SVector(c)))
 
-# Cubic Hermite interpolator
+function roots(c::AbstractVector{T}) where {T <: AbstractFloat}
+    deg = length(c) - 1
+    @assert 0 <= deg <= 3 "Degree of polynomial must be 0, 1, 2, or 3"
+    return deg == 0 ? T[] :
+           deg == 1 ? T[root_real_linear(@inbounds((c[1], c[2])))] :
+           deg == 2 ? T[roots_real_quadratic(@inbounds((c[1], c[2], c[3])))...] :
+           T[roots_real_cubic(@inbounds((c[1], c[2], c[3], c[4])))...]
+end
+roots(::SVector{1, T}) where {T <: AbstractFloat} = SA{T}[]
+roots(c::SVector{2, T}) where {T <: AbstractFloat} = SA{T}[root_real_linear(Tuple(c))]
+roots(c::SVector{3, T}) where {T <: AbstractFloat} = SVector{2, T}(roots_real_quadratic(Tuple(c)))
+roots(c::SVector{4, T}) where {T <: AbstractFloat} = SVector{3, T}(roots_real_cubic(Tuple(c)))
+roots(::SVector{5, T}) where {T <: AbstractFloat} = error("Degree of polynomial must be 0, 1, 2, or 3")
+
+#### Cubic Hermite interpolator
+
 struct CubicHermiteInterpolator{T}
     u0::T
     u1::T
@@ -49,30 +69,25 @@ end
 function minimize(spl::CubicHermiteInterpolator{T}) where {T}
     # Find the minimum of the cubic polynomial
     (; u0, u1, coeffs) = spl
-    xend, uend = u0 < u1 ? (-one(T), u0) : (one(T), u1) # endpoint minimum
+    return minimize_cubic(coeffs, -one(T), one(T), u0, u1)
+end
 
-    # Find the roots of the derivative
-    x1, x2 = roots_real_quadratic(deriv_coeffs(spl.coeffs))
+#### Minimizing polynomials
 
-    if isnan(x1) || isnan(x2) || x1 >= 1 || x2 <= -1 || (x1 <= -1 && 1 <= x2)
-        # No real local extrema in the interval; return endpoint minimum
+function minimize_linear(coeffs::NTuple{2, T}, a::T, b::T, ua::T = evalpoly(a, coeffs), ub::T = evalpoly(b, coeffs)) where {T}
+    # Minimize linear polynomial f(x) = c₁*x + c₀ over the interval [a, b].
+    return ua < ub ? (a, ua) : (b, ub) # linear function attains minimum at one of the endpoints
+end
+
+function minimize_quadratic(coeffs::NTuple{3, T}, a::T, b::T, ua::T = evalpoly(a, coeffs), ub::T = evalpoly(b, coeffs)) where {T}
+    # Minimize quadratic polynomial f(x) = c₂*x^2 + c₁*x + c₀ over the interval [a, b].
+    xend, uend = ua < ub ? (a, ua) : (b, ub) # endpoint minimum
+    if coeffs[3] == 0
         return xend, uend
-    elseif coeffs[4] == 0
-        # Spline is quadratic; check sign of quadratic coefficient
-        if coeffs[3] > 0
-            x, u = x1, spl(x1) # note: x1 == x2
-            return u < uend ? (x, u) : (xend, uend)
-        else
-            return xend, uend
-        end
-        x = x1 == 0 ? x2 : x1
-        u = spl(x)
-        return u < uend ? (x, u) : (xend, uend)
     else
-        # Two unique roots; local minimum corresponds to the larger (smaller) root when the cubic coefficient is positive (negative)
-        x = coeffs[4] > 0 ? x2 : x1
-        if -1 < x < 1
-            u = spl(x)
+        x = -coeffs[2] / (2 * coeffs[3]) # vertex of the parabola: x = -c₁ / 2c₂
+        if a < x < b
+            u = evalpoly(x, coeffs)
             return u < uend ? (x, u) : (xend, uend)
         else
             return xend, uend
@@ -80,11 +95,51 @@ function minimize(spl::CubicHermiteInterpolator{T}) where {T}
     end
 end
 
+function minimize_cubic(coeffs::NTuple{4, T}, a::T, b::T, ua::T = evalpoly(a, coeffs), ub::T = evalpoly(b, coeffs)) where {T}
+    # Minimize cubic polynomial f(x) = c₃*x^3 + c₂*x^2 + c₁*x + c₀ over the interval [a, b].
+    xend, uend = ua < ub ? (a, ua) : (b, ub) # endpoint minimum
+    x1, x2 = roots_real_quadratic(deriv_coeffs(coeffs)) # roots of the derivative
+
+    if isnan(x1) || x1 >= b || x2 <= a || (x1 <= a && x2 >= b)
+        # No real local extrema in the interval; return endpoint minimum
+        return xend, uend
+    elseif coeffs[4] == 0
+        # Spline is quadratic; check sign of quadratic coefficient
+        if coeffs[3] > 0
+            x = x1 # note: x2 is NaN
+            u = evalpoly(x, coeffs)
+            return u < uend ? (x, u) : (xend, uend)
+        else
+            return xend, uend
+        end
+    else
+        # Two real roots; local minimum corresponds to the larger (smaller) root when the cubic coefficient is positive (negative)
+        x = coeffs[4] > 0 ? x2 : x1
+        if a < x < b
+            u = evalpoly(x, coeffs)
+            return u < uend ? (x, u) : (xend, uend)
+        else
+            return xend, uend
+        end
+    end
+end
+
+#### Real roots of polynomials
+
+function root_real_linear(coeffs::NTuple{2, T}) where {T <: AbstractFloat}
+    # Root of linear equation a*x + b = 0. Returns NaN if a = 0.
+    b, a = coeffs
+    return a == 0 ? T(NaN) : -b / a
+end
+
 function roots_real_quadratic(coeffs::NTuple{3, T}) where {T <: AbstractFloat}
     # Robust solution to the quadratic equation a*x^2 + b*x + c = 0.
     # Coefficients are given in increasing order: (c, b, a).
-    # Returns NaN if no real roots are found, else returns sorted roots.
-    #    See: https://math.stackexchange.com/a/2007723
+    # Returns one of:
+    #   1) Tuple of sorted real roots (x1, x2),
+    #   2) Tuple (NaN, NaN) if no real roots exist or if quadratic degenerates to constant (a = b = 0),
+    #   3) Tuple (x1, NaN) if quadratic degenerates to linear (a = 0),
+    # See: https://math.stackexchange.com/a/2007723
     c, b, a = coeffs
     if a == 0
         if b == 0
@@ -93,7 +148,7 @@ function roots_real_quadratic(coeffs::NTuple{3, T}) where {T <: AbstractFloat}
         else
             # Linear: bx + c = 0
             x = -c / b
-            return (x, x)
+            return (x, T(NaN))
         end
     elseif c == 0
         # Factor out x: x * (ax + b) = 0
@@ -110,17 +165,61 @@ function roots_real_quadratic(coeffs::NTuple{3, T}) where {T <: AbstractFloat}
         return (x, x)
     else
         # Two real roots
-        x1 = (-b - strictsign(b) * √Δ) / 2
+        x1 = -(b + strictsign(b) * √Δ) / 2
         if x1 == 0
             x2 = x1
         else
-            x2 = c / x1 # Viete's formulas
+            x2 = c / x1 # Viète's formulas
             x1 = x1 / a
         end
         return minmax(x1, x2)
     end
 end
 roots_real_quadratic(coeffs::Tuple) = (@assert length(coeffs) == 3; return roots_real_quadratic(promote(map(float, coeffs)...)))
+
+function roots_real_cubic(coeffs::NTuple{4, T}) where {T <: AbstractFloat}
+    # Return real roots of the cubic polynomial c₃*x^3 + c₂*x^2 + c₁*x + c₀ = 0.
+    # Coefficients are given in increasing order: (c₀, c₁, c₂, c₃).
+    # Returns Tuple (x₁, x₂, x₃) such that if the cubic has `0 <= r <= 3` real roots,
+    # then (x₁, ..., xᵣ) are sorted real roots and (xᵣ₊₁, ..., x₃) are NaN.
+    if coeffs[4] == 0
+        # Spline is quadratic; third root is at infinity
+        return (roots_real_quadratic(coeffs[1:3])..., T(NaN))
+    end
+    if coeffs[1] == 0
+        # Factor out x: x * (c₃*x^2 + c₂*x + c₁) = 0
+        x1, x2 = roots_real_quadratic(coeffs[2:4])
+        return isnan(x1) ? (zero(T), T(NaN), T(NaN)) :
+               isnan(x2) ? (minmax(x1, zero(T))..., T(NaN)) :
+               TupleTools.sort((zero(T), x1, x2))
+    end
+    # Reduced cubic: x^3 + a*x^2 + b*x + c = 0
+    a = coeffs[3] / coeffs[4]
+    b = coeffs[2] / coeffs[4]
+    c = coeffs[1] / coeffs[4]
+    a² = a^2
+    R = (2 * a * a² - 9 * a * b + 27 * c) / 54
+    Q = (a² - 3 * b) / 9
+    R², Q³ = R^2, Q^3
+    if R² < Q³
+        # Three real roots
+        twopi = 2 * T(π)
+        sqrtQ³ = √Q³
+        θ = acos(R / sqrtQ³)
+        tmp = -2 * √Q
+        x₁ = tmp * cos(θ / 3) - a / 3
+        x₂ = tmp * cos((θ + twopi) / 3) - a / 3
+        x₃ = tmp * cos((θ - twopi) / 3) - a / 3
+        return TupleTools.sort((x₁, x₂, x₃))
+    else
+        # One real root, two complex roots
+        A = -strictsign(R) * cbrt(abs(R) + √(R² - Q³))
+        B = A == 0 ? zero(T) : Q / A
+        x₁ = A + B - a / 3
+        return (x₁, T(NaN), T(NaN))
+    end
+end
+roots_real_cubic(coeffs::Tuple) = (@assert length(coeffs) == 4; return roots_real_cubic(promote(map(float, coeffs)...)))
 
 ####
 #### Spline utils
@@ -173,12 +272,11 @@ function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, le
         _x, _y = x₁, p(x₁ - x₀) # check right endpoint
         (_y < y) && (x = _x; y = _y)
         for rᵢ in extrema(p) # extrema(p) returns the zeros of p'
-            if abs(imag(rᵢ)) <= atol # real roots only
-                xᵢ = x₀ + real(rᵢ)
-                if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
-                    _x, _y = clamp(xᵢ, x₀, x₁), p(real(rᵢ))
-                    (_y < y) && (x = _x; y = _y)
-                end
+            isnan(rᵢ) && break # real roots only
+            xᵢ = x₀ + rᵢ
+            if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
+                _x, _y = clamp(xᵢ, x₀, x₁), p(rᵢ)
+                (_y < y) && (x = _x; y = _y)
             end
         end
     end
@@ -208,13 +306,12 @@ function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; de
         @inbounds for (i, p) in enumerate(polys)
             # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
             x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
-            for rᵢ in PolynomialRoots.roots(sub!(p, value))
-                if abs(imag(rᵢ)) <= atol # real roots only
-                    xᵢ = x₀ + real(rᵢ)
-                    if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
-                        xᵢ = clamp(xᵢ, x₀, x₁)
-                        x = isnan(x) ? xᵢ : min(x, xᵢ) # find the leftmost root
-                    end
+            for rᵢ in roots(sub!(p, value))
+                isnan(rᵢ) && break # real roots only
+                xᵢ = x₀ + rᵢ
+                if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
+                    xᵢ = clamp(xᵢ, x₀, x₁)
+                    x = isnan(x) ? xᵢ : min(x, xᵢ) # find the leftmost root
                 end
             end
             !isnan(x) && break # found a root

@@ -42,8 +42,8 @@ function install()
     else
         @error "DECAES: CLI script output:\n" * st.stderr
         @warn "DECAES: CLI script installation failed." *
-            "\nTo run DECAES, the following command can be used instead:" *
-            "\n    julia --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS>"
+              "\nTo run DECAES, the following command can be used instead:" *
+              "\n    julia --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS>"
     end
 
     return nothing
