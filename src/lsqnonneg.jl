@@ -170,7 +170,7 @@ end
 
 function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
     (; nnls_work) = work.nnls_prob
-    B = cholesky!(NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
+    B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
     x₊ = NNLS.positive_solution(nnls_work)
     tmp = uview(work.buffers.y, 1:length(x₊))
 
@@ -184,7 +184,7 @@ end
 
 function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
     (; nnls_work) = work.nnls_prob
-    B = cholesky!(NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
+    B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
     x₊ = NNLS.positive_solution(nnls_work)
     tmp = uview(work.buffers.y, 1:length(x₊))
 
@@ -340,16 +340,14 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
             increment_cache_index!(work.nnls_prob_smooth_cache)
             return chi2factor_relerr!(get_cache(work.nnls_prob_smooth_cache), logμ; χ²target)
         end
-        a, b, fa, fb = bracketing_interval(f, T(-4.0), T(1.0), T(1.5); maxiters = 6)
-        bisect(f, a, b, fa, fb; xatol = T(0.05), ftol = (Chi2Factor - 1) / 100)
+        a, b, fa, fb = bracketing_interval_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
+        a, fa, c, fc, b, fb = bisect(f, a, b, fa, fb; xatol = T(0.05), ftol = (Chi2Factor - 1) / 100)
 
-        # Spline rootfinding on evaluated points to improve accuracy
-        sort!(pairs(f.cache); by = ((x, f),) -> x)
-        logmu_root = spline_root(keys(f.cache), values(f.cache); deg_spline = 1)
-        logmu_root !== nothing && f(logmu_root)
+        # Root of secant line through `(a, fa), (b, fb)` or `(c, fc), (b, fb)` to improve accuracy
+        logmu_tmp = fa * fc < 0 ? root_real_linear(a, c, fa, fc) : root_real_linear(c, b, fc, fb)
+        logmu_final, relerr_final = isnan(logmu_tmp) ? (c, fc) : (logmu_tmp, f(logmu_tmp))
 
         # Return regularization which minimizes relerr
-        (logmu_final, relerr_final), _, _ = mapfindmin(T, ((x, f),) -> abs(f), pairs(f.cache))
         mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
         x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
 
@@ -405,18 +403,17 @@ function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T
         #   1) while unlikely, it is possible for the spline to return a negative regularization parameter
         #   2) the μ values are exponentially spaced, leading to poorly conditioned splines
         μ = spline_root_legacy(μ_cache, χ²_cache, χ²fact * χ²min)
-        μ = μ === nothing ? μmin : μ
     else
         if length(μ_cache) == 2
             # Solution is contained in [0,μmin]; `spline_root` with two points performs root finding via simple linear interpolation
             μ = spline_root(μ_cache, χ²_cache, χ²fact * χ²min; deg_spline = 1)
-            μ = μ === nothing ? μmin : μ
+            μ = isnan(μ) ? μmin : μ
         else
             # Perform spline fit on log-log scale on data with μ > 0. This solves the above problems with the legacy algorithm:
             #   1) Root is found in terms of logμ, guaranteeing μ > 0
             #   2) logμ is linearly spaced, leading to well-conditioned splines
             logμ = spline_root(log.(μ_cache[2:end]), log.(χ²_cache[2:end]), log(χ²fact * χ²min); deg_spline = 1)
-            μ = logμ === nothing ? μmin : exp(logμ)
+            μ = isnan(logμ) ? μmin : exp(logμ)
         end
     end
 
@@ -424,290 +421,6 @@ function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T
     χ² = f(μ)
 
     return μ, χ²
-end
-
-function chi2factor_search_from_guess(f, χ²min::T, χ²fact::T, μ₀::T = T(1e-2), μfact = T(1.5), μmin::T = T(1e-4)) where {T}
-    # Find interval containing χ²target = χ²fact * χ²min
-    χ²target = χ²fact * χ²min
-    μnew = μ₀
-    χ²new = f(μnew)
-    logμ_cache = T[log(μnew)]
-    logχ²_cache = T[log(χ²new)]
-
-    if χ²new > χ²target
-        while μnew > μmin && !(μnew ≈ μmin)
-            μnew = max(μnew / μfact, μmin)
-            χ²new = f(μnew)
-            pushfirst!(logμ_cache, log(μnew))
-            pushfirst!(logχ²_cache, log(χ²new))
-            (χ²new < χ²target && length(logμ_cache) >= 3) && break
-        end
-    else
-        while true
-            μnew *= μfact
-            χ²new = f(μnew)
-            push!(logμ_cache, log(μnew))
-            push!(logχ²_cache, log(χ²new))
-            (χ²new > χ²target && length(logμ_cache) >= 3) && break
-        end
-    end
-
-    if logμ_cache[1] ≈ log(μmin) && logχ²_cache[1] > log(χ²target)
-        # μ decreased to μmin but χ²target was not reached; linearly interpolate between μ=0 and μ=μmin points
-        μ = spline_root([zero(T), μmin], [log(χ²min), logχ²_cache[1]], log(χ²target))
-        μ = μ === nothing ? μmin : μ
-        χ² = f(μ)
-    else
-        # Find optimal μ and evaluate at the interpolated solution
-        logμ = spline_root(logμ_cache, logχ²_cache, log(χ²target))
-        μ = logμ === nothing ? μmin : exp(logμ)
-        χ² = f(μ)
-    end
-
-    return μ, χ²
-end
-
-####
-#### Rootfinding methods
-####
-
-#=
-`secant_method` and `bisection_method` are modified codes from Roots.jl:
-    https://github.com/JuliaMath/Roots.jl/blob/8a5ff76e8e8305d4ad5719fe1dd665d8a7bd7ec3/src/simple.jl
-
-The MIT License (MIT) Copyright (c) 2013 John C. Travers
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-=#
-function secant_method(f, xs; xatol = zero(float(real(first(xs)))), xrtol = 8 * eps(one(float(real(first(xs))))), maxiters = 1000)
-    if length(xs) == 1 # secant needs a, b; only a given
-        a  = float(xs[1])
-        h  = cbrt(eps(one(real(a))))
-        da = h * oneunit(a) + abs(a) * h^2 # adjust for if eps(a) > h
-        b  = a + da
-    else
-        a, b = promote(float(xs[1]), float(xs[2]))
-    end
-    return secant(f, a, b, f(a), f(b); xatol, xrtol, maxiters)
-end
-
-function secant(f, a::T, b::T, fa::T, fb::T; xatol = zero(T), xrtol = 8 * eps(T), maxiters = 1000) where {T}
-    # No function change; return arbitrary endpoint
-    if fb == fa
-        return (a, fa)
-    end
-
-    cnt = 0
-    mbest = abs(fa) < abs(fb) ? a : b
-    fbest = min(abs(fa), abs(fb))
-    uatol = xatol / oneunit(xatol) * oneunit(real(a))
-    adjustunit = oneunit(real(fb)) / oneunit(real(b))
-
-    while cnt < maxiters
-        m = b - (b - a) * fb / (fb - fa)
-        fm = f(m)
-
-        abs(fm) < abs(fbest) && ((mbest, fbest) = (m, fm))
-        iszero(fm) && return (m, fm)
-        isnan(fm) || isinf(fm) && return (mbest, fbest) # function failed; bail out
-        abs(fm) <= adjustunit * max(uatol, abs(m) * xrtol) && return (m, fm)
-        fm == fb && return (m, fm)
-
-        a, b, fa, fb = b, m, fb, fm
-        cnt += 1
-    end
-
-    return (mbest, fbest) # maxiters reached
-end
-
-function bisection_method(f, a::Number, b::Number; xatol = nothing, xrtol = nothing, ftol = nothing, maxiters = 1000)
-    T = promote_type(typeof(float(a)), typeof(float(b)))
-    x₁, x₂ = T(a), T(b)
-    y₁, y₂ = f(x₁), f(x₂)
-
-    xatol = xatol === nothing ? zero(T) : T(xatol)
-    xrtol = xrtol === nothing ? zero(T) : T(xrtol)
-    ftol = ftol === nothing ? zero(T) : T(ftol)
-
-    return bisect(f, x₁, x₂, y₁, y₂; xatol, xrtol, ftol, maxiters)
-end
-
-function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xatol = zero(T), xrtol = zero(T), ftol = zero(T), maxiters = 1000) where {T}
-    # No sign change; return arbitrary endpoint
-    if y₁ * y₂ >= 0
-        return (x₁, y₁)
-    end
-
-    if y₂ < 0
-        x₁, x₂, y₁, y₂ = x₂, x₁, y₂, y₁
-    end
-
-    xₘ = (x₁ + x₂) / 2
-    yₘ = f(xₘ)
-
-    cnt = 1
-    while cnt < maxiters
-        if iszero(yₘ) || isnan(yₘ) || abs(x₁ - x₂) <= xatol + max(abs(x₁), abs(x₂)) * xrtol || abs(yₘ) <= ftol
-            return (xₘ, yₘ)
-        end
-
-        if yₘ < 0
-            x₁, y₁ = xₘ, yₘ
-        else
-            x₂, y₂ = xₘ, yₘ
-        end
-
-        xₘ = (x₁ + x₂) / 2
-        yₘ = f(xₘ)
-
-        cnt += 1
-    end
-
-    return (xₘ, yₘ)
-end
-
-function bracketing_interval(f, a, δ, dilate = 1; maxiters = 1000)
-    fa = f(a)
-    cnt = 0
-    if fa > 0
-        b = a - δ
-        fb = f(b)
-        δ *= dilate
-        while fb > 0 && cnt < maxiters
-            a, fa = b, fb
-            b = a - δ
-            fb = f(b)
-            δ *= dilate
-            cnt += 1
-        end
-    else
-        b = a + δ
-        fb = f(b)
-        δ *= dilate
-        while fb < 0 && cnt < maxiters
-            a, fa = b, fb
-            b = a + δ
-            fb = f(b)
-            δ *= dilate
-            cnt += 1
-        end
-    end
-    return a, b, fa, fb
-end
-
-####
-#### Optimization methods
-####
-
-#=
-Brent-Dekker minimization method. The code for `brents_method` is modified from Optim.jl:
-    https://github.com/JuliaNLSolvers/Optim.jl/blob/1189ba0347ba567e43d1d4de94588aaf8a9e3ac0/src/univariate/solvers/brent.jl#L23
-
-See:
-    R. P. Brent (2002) Algorithms for Minimization Without Derivatives. Dover edition. Chapter 6, Section 8.
-
-Optim.jl is licensed under the MIT License:
-> Copyright (c) 2012: John Myles White, Tim Holy, and other contributors.
-> Copyright (c) 2016: Patrick Kofod Mogensen, John Myles White, Tim Holy, and other contributors.
-> Copyright (c) 2017: Patrick Kofod Mogensen, Asbjørn Nilsen Riseth, John Myles White, Tim Holy, and other contributors.
-> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-=#
-function brents_method(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xatol = eps(T), maxiters::Int = 1_000) where {T <: AbstractFloat}
-    @assert x₁ <= x₂ "x₁ must be less than x₂"
-
-    α = 2 - T(φ) # α ≈ 0.381966
-    x = x₁ + α * (x₂ - x₁)
-    y = f(x)
-
-    Δx_old = Δx = zero(T)
-    x_older = x_old = x
-    y_older = y_old = y
-
-    iter = 0
-
-    while iter < maxiters
-        p = zero(T)
-        q = zero(T)
-        xₘ = (x₂ + x₁) / 2
-
-        Δx_tol = xrtol * abs(x) + xatol
-        if abs(x - xₘ) + (x₂ - x₁) / 2 <= 2 * Δx_tol
-            break # converged
-        end
-
-        iter += 1
-
-        if abs(Δx_old) > Δx_tol
-            # Compute parabola interpolation
-            # x + p/q is the optimum of the parabola
-            # Also, q is guaranteed to be positive
-
-            r = (x - x_old) * (y - y_older)
-            q = (x - x_older) * (y - y_old)
-            p = (x - x_older) * q - (x - x_old) * r
-            q = 2 * (q - r)
-
-            if q > 0
-                p = -p
-            else
-                q = -q
-            end
-        end
-
-        if abs(p) < abs(q * Δx_old / 2) && p < q * (x₂ - x) && p < q * (x - x₁)
-            # Parabolic interpolation step
-            Δx_old = Δx
-            Δx = p / q
-
-            # The function must not be evaluated too close to x₁ or x₂
-            x_tmp = x + Δx
-            if (x_tmp - x₁) < 2 * Δx_tol || (x₂ - x_tmp) < 2 * Δx_tol
-                Δx = ifelse(x < xₘ, Δx_tol, -Δx_tol)
-            end
-        else
-            # Golden section step
-            Δx_old = ifelse(x < xₘ, x₂ - x, x₁ - x)
-            Δx = α * Δx_old
-        end
-
-        # The function must not be evaluated too close to x
-        if abs(Δx) >= Δx_tol
-            x_new = x + Δx
-        else
-            x_new = x + ifelse(Δx > 0, Δx_tol, -Δx_tol)
-        end
-
-        y_new = f(x_new)
-
-        # Update x's and y's
-        if y_new < y
-            if x_new < x
-                x₂ = x
-            else
-                x₁ = x
-            end
-            x_older, x_old, x = x_old, x, x_new
-            y_older, y_old, y = y_old, y, y_new
-        else
-            if x_new < x
-                x₁ = x_new
-            else
-                x₂ = x_new
-            end
-            if y_new <= y_old || x_old == x
-                x_older, x_old = x_old, x_new
-                y_older, y_old = y_old, y_new
-            elseif y_new <= y_older || x_older == x || x_older == x_old
-                x_older = x_new
-                y_older = y_new
-            end
-        end
-    end
-
-    return (x, y)
 end
 
 ####
@@ -828,7 +541,7 @@ Find the corner of the L-curve via curvature maximization using Algorithm 1 from
 A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”.
 IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
 """
-function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, refine = false, backtracking = true) where {T}
+function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, backtracking = true) where {T}
     # Initialize state
     state = initial_state(f, T(xlow), T(xhigh))
 
@@ -875,13 +588,8 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         is_converged(state; xtol = T(xtol), Ptol = T(Ptol)) && break
     end
 
-    if refine
-        x = refine!(f, state, Pfilter)
-        # msg("Converged; refined solution", state)
-    else
-        x = f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
-        # msg("Converged", state)
-    end
+    x = f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
+    # msg("Converged", state)
 
     return x
 end
@@ -935,15 +643,6 @@ function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCorner
         f.point_cache[x] = LCurveCornerPoint(P, C)
     end
     return state
-end
-
-function refine!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing) where {T}
-    # Fit spline to (negative) curvature estimates on grid and minimize over the spline
-    x_opt, _ = spline_opt(state.x⃗, [-f.point_cache[x].C for x in state.x⃗])
-    _ = f(x_opt)
-    update_curvature!(f, state, Pfilter)
-    (x_opt, (_, _)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
-    return x_opt
 end
 
 function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}

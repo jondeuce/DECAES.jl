@@ -14,7 +14,7 @@ function test_poly()
     end
 
     @testset "degree d = $d, coeffs[$i] = 0" for d in 0:5, i in 0:d+1
-        coeffs = randn(d+1)
+        coeffs = randn(d + 1)
         i > 0 && (coeffs[i] = 0.0) # zero out i'th coefficient to test degenerate polynomials
         for p in [DECAES.Poly(coeffs), DECAES.Poly(coeffs...)]
             @test DECAES.coeffs(p) == coeffs
@@ -131,21 +131,25 @@ end
 
 function test_minimize_cubic_hermite_interpolator()
     for (u0, u1, m0, m1) in cubic_hermite_interpolator_params_iter()
-        spl = DECAES.CubicHermiteInterpolator(u0, u1, m0, m1)
+        a, b = sort(randn(2))
+        c, r = (a + b) / 2, (b - a) / 2
+        spl = DECAES.CubicHermiteInterpolator(a, b, u0, u1, m0, m1)
         (; coeffs) = spl
         ∇coeffs = DECAES.deriv_coeffs(coeffs)
 
         @test evalpoly(-1.0, coeffs) ≈ u0 rtol = 1e-14 atol = 1e-14
-        @test evalpoly(1.0, coeffs) ≈ u1 rtol = 1e-14 atol = 1e-14
-        @test evalpoly(-1.0, ∇coeffs) ≈ m0 rtol = 1e-14 atol = 1e-14
-        @test evalpoly(1.0, ∇coeffs) ≈ m1 rtol = 1e-14 atol = 1e-14
+        @test evalpoly(+1.0, coeffs) ≈ u1 rtol = 1e-14 atol = 1e-14
+        @test evalpoly(-1.0, ∇coeffs) ≈ r * m0 rtol = 1e-14 atol = 1e-14
+        @test evalpoly(+1.0, ∇coeffs) ≈ r * m1 rtol = 1e-14 atol = 1e-14
 
-        @test evalpoly(0.7, coeffs) == spl(0.7)
-        @test evalpoly(0.7, ∇coeffs) ≈ DECAES.ForwardDiff.derivative(spl, 0.7) rtol = 1e-14 atol = 1e-14
+        t = 2 * rand() - 1
+        x = c + r * t
+        @test evalpoly(t, coeffs) ≈ spl(x)
+        @test evalpoly(t, ∇coeffs) ≈ r * DECAES.ForwardDiff.derivative(spl, x) rtol = 1e-14 atol = 1e-14
 
         xmin, umin = DECAES.minimize(spl)
         @test umin ≈ spl(xmin) rtol = 1e-14 atol = 1e-14
-        @test all(spl(x) >= umin - 1e-14 for x in range(-1.0, 1.0; length = 1024 + 1))
+        @test all(spl(x) >= umin - 1e-14 for x in range(a, b; length = 1024 + 1))
     end
 end
 
@@ -153,10 +157,11 @@ function test_mock_surrogate_search_problem(
     opts::T2mapOptions = DECAES.mock_t2map_opts(;
         MatrixSize = (1, 1, 1),
         nRefAngles = 8,
+        nTE = 11,
     ),
 )
     function A(α, β)
-        theta = DECAES.EPGOptions((; ETL = 32, α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β))
+        theta = DECAES.EPGOptions((; ETL = opts.nTE, α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β))
         T2_times = DECAES.logrange(opts.T2Range..., opts.nT2)
         return DECAES.epg_decay_basis(theta, T2_times)
     end

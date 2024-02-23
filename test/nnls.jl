@@ -10,8 +10,8 @@ end
 
 function verify_NNLS(m, n)
     A, b = rand_NNLS_data(m, n)
-    work = NNLSWorkspace(A, b)
-    nnls!(work)
+    work = NNLS.NNLSWorkspace(A, b)
+    NNLS.nnls!(work)
 
     GC.@preserve work begin
         x  = NNLS.solution(work)
@@ -82,7 +82,7 @@ function verify_NNLS(m, n)
         @test A₊'A₊ ≈ U'U
         @test A₊'A₊ ≈ L * L'
 
-        F = cholesky!(NormalEquation(), work)
+        F = cholesky!(NNLS.NormalEquation(), work)
         if n₊ > 0
             x′ = rand(MersenneTwister(0), n₊)
             x′′ = copy(x′)
@@ -91,7 +91,7 @@ function verify_NNLS(m, n)
             ldiv!(x′, F, b′)
             @test x′ ≈ (A₊'A₊) \ b′
             @test b′ ≈ b′′ && !(x′ ≈ x′′)
-            @test @allocated(ldiv!(x′, cholesky!(NormalEquation(), work), b′)) == 0
+            @test @allocated(ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)) == 0
         end
     end # GC.@preserve
 

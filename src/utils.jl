@@ -502,7 +502,7 @@ function mock_t2map_opts(::Type{T} = Float64; kwargs...) where {T}
     return T2mapOptions{T}(;
         MatrixSize = (2, 2, 2),
         TE = 10e-3,
-        nTE = 32,
+        nTE = 48,
         T2Range = (10e-3, 2.0),
         nT2 = 40,
         Reg = "lcurve",
@@ -527,7 +527,7 @@ end
 Base.@kwdef struct MockImageOpts{T}
     MatrixSize::NTuple{3, Int} = (2, 2, 2)
     TE::T = T(10e-3)
-    nTE::Int = 32
+    nTE::Int = 48
     SNR::T = T(50.0)
     SFRRange::Tuple{T, T} = (0.05, 0.25)
     T21Range::Tuple{T, T} = (10e-3, 20e-3)

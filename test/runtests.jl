@@ -9,11 +9,11 @@ using StaticArrays
 using TOML
 
 using DECAES
-using DECAES.NNLS
+using DECAES: NNLS
 using DECAES:
     GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
     LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,
-    NNLSProblem, NNLSTikhonovRegProblem, NormalEquation,
+    NNLSProblem, NNLSTikhonovRegProblem,
     lcurve_corner
 
 # Environment flags

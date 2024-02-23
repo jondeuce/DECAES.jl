@@ -55,21 +55,37 @@ struct CubicHermiteInterpolator{T}
     u1::T
     m0::T
     m1::T
+    dom::NTuple{2, T}
     coeffs::NTuple{4, T}
 end
-@inline (spl::CubicHermiteInterpolator)(x) = evalpoly(x, spl.coeffs)
+@inline (spl::CubicHermiteInterpolator)(x) = evalpoly(tocanonical(x, spl.dom), spl.coeffs)
 
-function CubicHermiteInterpolator(u0, u1, m0, m1)
+@inline function tocanonical(x, (a, b))
+    c, r = (a + b) / 2, (b - a) / 2
+    t = (x - c) / r
+    return clamp(t, -1, 1)
+end
+
+@inline function todomain(t, (a, b))
+    c, r = (a + b) / 2, (b - a) / 2
+    x = muladd(r, t, c)
+    return clamp(x, a, b)
+end
+
+function CubicHermiteInterpolator(a, b, u0, u1, m0, m1)
+    r = (b - a) / 2
+    m0, m1 = r * m0, r * m1
     Δu, Δm = u1 - u0, m1 - m0
     Σu, Σm = u1 + u0, m1 + m0
     coeffs = (Σu / 2 - Δm / 4, (3 * Δu - Σm) / 4, Δm / 4, (Σm - Δu) / 4)
-    return CubicHermiteInterpolator(u0, u1, m0, m1, coeffs)
+    return CubicHermiteInterpolator(u0, u1, m0, m1, (a, b), coeffs)
 end
 
 function minimize(spl::CubicHermiteInterpolator{T}) where {T}
     # Find the minimum of the cubic polynomial
-    (; u0, u1, coeffs) = spl
-    return minimize_cubic(coeffs, -one(T), one(T), u0, u1)
+    (; u0, u1, dom, coeffs) = spl
+    t, u = minimize_cubic(coeffs, -one(T), one(T), u0, u1)
+    return todomain(t, dom), u
 end
 
 #### Minimizing polynomials
@@ -130,6 +146,16 @@ function root_real_linear(coeffs::NTuple{2, T}) where {T <: AbstractFloat}
     # Root of linear equation a*x + b = 0. Returns NaN if a = 0.
     b, a = coeffs
     return a == 0 ? T(NaN) : -b / a
+end
+
+function root_real_linear(a::T, b::T, ua::T, ub::T, value::T = zero(T)) where {T <: AbstractFloat}
+    # Root of linear equation `f(x) = c₁*x + c₀ = value` where `c₁, c₀` are defined implicitly by `f(a) = ua` and `f(b) = ub`.
+    min(ua, ub) <= value <= max(ua, ub) || return T(NaN)
+    ua == ub && return T(NaN) # degenerate linear function `f(x) = c₀`
+    x = ua == value ? a :
+        ub == value ? b :
+        clamp(a + (b - a) * ((value - ua) / (ub - ua)), a, b)
+    return x
 end
 
 function roots_real_quadratic(coeffs::NTuple{3, T}) where {T <: AbstractFloat}
@@ -449,7 +475,7 @@ function Base.empty!(surr::NormalHermiteSplineSurrogate)
 end
 
 function suggest_point(surr::NormalHermiteSplineSurrogate{D, T}) where {D, T}
-    _, I = findmin(evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
+    _, I = findmin(NormalHermiteSplines.evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
     @inbounds p = surr.grid[I]
     p, u = local_search(surr, p)
     return p, u
@@ -457,7 +483,7 @@ end
 
 # Specialize the 1D case to use the faster and more robust Brent-Dekker method
 function suggest_point(surr::NormalHermiteSplineSurrogate{1, T}) where {T}
-    u₀, I = findmin(evaluate!(surr.ugrid, surr.spl, surr.grid))
+    u₀, I = findmin(NormalHermiteSplines.evaluate!(surr.ugrid, surr.spl, surr.grid))
     @inbounds p₀ = surr.grid[I]
 
     @inbounds if I == 1
@@ -892,7 +918,7 @@ function surrogate_spline_opt(
 end
 
 function spline_opt(
-    spl::NormalSpline{D, T},
+    spl::NormalHermiteSplines.NormalSpline{D, T},
     prob::NNLSDiscreteSurrogateSearch{D, T};
     # alg = :LN_COBYLA,        # local, gradient-free, linear approximation of objective
     # alg = :LN_BOBYQA,        # local, gradient-free, quadratic approximation of objective
@@ -902,7 +928,7 @@ function spline_opt(
     alg = :LD_SLSQP,         # local, with-gradient, "Sequential Least-Squares Quadratic Programming"; uses dense-matrix methods (ordinary BFGS, not low-storage BFGS)
 ) where {D, T}
 
-    evaluate!(prob.u, spl, prob.αs)
+    NormalHermiteSplines.evaluate!(prob.u, spl, prob.αs)
     _, i = findmin(prob.u)
     α₀ = prob.αs[i]
 
@@ -912,9 +938,12 @@ function spline_opt(
     opt.xtol_rel = 0.001
     opt.min_objective = function (x, g)
         if length(g) > 0
-            @inbounds g[1] = Float64(evaluate_derivative(spl, x[1]))
+            u, ∇u = NormalHermiteSplines._evaluate_with_gradient(spl, SVector{D, T}(x))
+            @inbounds g .= Float64.(∇u)
+        else
+            u = NormalHermiteSplines.evaluate(spl, SVector{D, T}(x))
         end
-        @inbounds Float64(evaluate(spl, x[1]))
+        return Float64(u)
     end
     minf, minx, ret = NLopt.optimize(opt, Vector{Float64}(α₀))
     x, f = SVector{D, T}(minx), T(minf)
