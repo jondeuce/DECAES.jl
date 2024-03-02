@@ -445,7 +445,7 @@ function matlab_tests()
             _, mat_t2part_kwargs = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2partSEcorr
-            T2dist = DECAES.mock_T2_dist(; nT2 = rand(4:64))
+            T2dist = DECAES.mock_t2dist(; nT2 = rand(4:64))
             t2part_jl = DECAES.redirect_to_devnull() do
                 return T2partSEcorr(T2dist; jl_t2part_kwargs...)
             end

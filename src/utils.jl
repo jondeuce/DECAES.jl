@@ -6,8 +6,8 @@ ndigits(x::Int) = x == 0 ? 1 : floor(Int, log10(abs(x))) + 1
 
 logrange(a::Real, b::Real, len::Int) = (r = exp.(range(log(a), log(b); length = len)); r[begin] = a; r[end] = b; return r)
 
-@inline normcdf(x::T) where {T} = erfc(-x / sqrt(T(2))) / 2 # Cumulative distribution for normal distribution
-@inline normccdf(x::T) where {T} = erfc(x / sqrt(T(2))) / 2 # Compliment of normcdf, i.e. 1 - normcdf(x)
+@inline normcdf(x::T) where {T} = erfc(-x / √(T(2))) / 2 # Cumulative distribution for normal distribution
+@inline normccdf(x::T) where {T} = erfc(x / √(T(2))) / 2 # Compliment of normcdf, i.e. 1 - normcdf(x)
 
 @inline strictsign(x::Real) = ifelse(signbit(x), -one(x), one(x))
 
@@ -466,10 +466,10 @@ function update(∇::SVector{N, T}, o::ADAM{N, T}) where {N, T}
 end
 
 #=
-function optimize(∇f, x0::SVector{N, T}, lb::SVector{N, T}, ub::SVector{N, T}, o::ADAM{N, T}; maxiter::Int = 1, xtol_rel = T(1e-3)) where {N, T}
+function optimize(∇f, x0::SVector{N, T}, lb::SVector{N, T}, ub::SVector{N, T}, o::ADAM{N, T}; maxiters::Int = 1, xtol_rel = T(1e-3)) where {N, T}
     x = x0
     t = inv_xform_periodic(x, lb, ub)
-    for i in 1:maxiter
+    for i in 1:maxiters
         # Change of variables x->t
         x = xform_periodic(t, lb, ub)
         dxdt = ∇xform_periodic(t, lb, ub)
@@ -587,7 +587,7 @@ function mock_image(o::T2mapOptions{T}; kwargs...) where {T}
 end
 
 # Mock T2 distribution, computed with default parameters
-function mock_T2_dist(o::T2mapOptions = mock_t2map_opts(Float64); kwargs...)
+function mock_t2dist(o::T2mapOptions = mock_t2map_opts(Float64); kwargs...)
     return T2mapSEcorr(mock_image(o; kwargs...), T2mapOptions(o; kwargs..., Silent = true))[2]
 end
 

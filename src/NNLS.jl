@@ -179,7 +179,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@fastmath function construct_householder!(u::AbstractVector{T}, up::T) where {T}
+function construct_householder!(u::AbstractVector{T}, up::T) where {T}
     if length(u) <= 1
         return up
     end
@@ -209,7 +209,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@fastmath function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
+function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
     m = length(u)
     if m <= 1
         return nothing
@@ -237,7 +237,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     end
 end
 
-@fastmath function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int}, nsetp::Int, jup::Int) where {T}
+function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int}, nsetp::Int, jup::Int) where {T}
     m, n = size(A)
     if m - nsetp <= 0
         return nothing
@@ -283,7 +283,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
         SIG IS COMPUTED LAST TO ALLOW FOR THE POSSIBILITY THAT
         SIG MAY BE IN THE SAME LOCATION AS A OR B .
 """
-@inline @fastmath function orthogonal_rotmat(a::T, b::T) where {T}
+@inline function orthogonal_rotmat(a::T, b::T) where {T}
     if abs(a) > abs(b)
         xr = b / a
         yr = sqrt(one(T) + xr * xr)
@@ -304,7 +304,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     return c, s, sig
 end
 
-@inline @fastmath function orthogonal_rotmatvec(c::T, s::T, a::T, b::T) where {T}
+@inline function orthogonal_rotmatvec(c::T, s::T, a::T, b::T) where {T}
     x = c * a + s * b
     y = -s * a + c * b
     return x, y
@@ -317,7 +317,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@fastmath function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int, ::Val{transp} = Val(false)) where {T, transp}
+function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int, ::Val{transp} = Val(false)) where {T, transp}
     if nsetp <= 0
         return zz
     end
@@ -358,7 +358,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     return zz
 end
 
-@fastmath function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
+function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
     n = length(w)
     wmax = zero(T)
     i_wmax = 0
@@ -617,7 +617,7 @@ function nnls!(
     else
         fill!(w, zero(T))
     end
-    work.rnorm[] = @fastmath sqrt(sm)
+    work.rnorm[] = sqrt(sm)
     work.nsetp[] = nsetp
     return work.x
 end

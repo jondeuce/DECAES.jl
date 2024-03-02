@@ -99,7 +99,7 @@ Records parameter maps and T2 distributions for further partitioning.
           * `"gdn"`:          Map of general density = sum(T2distribution) (`MatrixSize` 3D array)
           * `"ggm"`:          Map of general geometric mean of T2-distribution (`MatrixSize` 3D array)
           * `"gva"`:          Map of general variance (`MatrixSize` 3D array)
-          * `"fnr"`:          Map of fit to noise ratio = gdn / sqrt(sum(residuals.^2) / (nTE-1)) (`MatrixSize` 3D array)
+          * `"fnr"`:          Map of fit to noise ratio = gdn / √(sum(residuals.^2) / (nTE-1)) (`MatrixSize` 3D array)
           * `"snr"`:          Map of signal to noise ratio = maximum(signal) / std(residuals) (`MatrixSize` 3D array)
           * `"alpha"`:        Map of optimized refocusing pulse flip angle (`MatrixSize` 3D array)
 
@@ -197,12 +197,22 @@ end
 # =========================================================
 # Main loop function
 # =========================================================
-function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps, dist::T2Distributions, signal::AbstractVector, opts::T2mapOptions, I::CartesianIndex)
-    (; decay_data, flip_angle_work, T2_dist_work) = thread_buffer
+function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T}, signal::AbstractVector{T}, opts::T2mapOptions{T}, I::CartesianIndex) where {T}
+    (; decay_scale, decay_data, flip_angle_work, T2_dist_work) = thread_buffer
 
-    # Copy decay curve into the thread buffer
-    @inbounds for j in 1:opts.nTE
-        decay_data[j] = signal[j]
+    # Copy decay curve into the thread buffer and normalize
+    @inbounds begin
+        max_signal = zero(T)
+        @simd for i in 1:opts.nTE
+            bᵢ = signal[i]
+            decay_data[i] = bᵢ
+            max_signal = max(max_signal, bᵢ)
+        end
+        @simd for i in 1:opts.nTE
+            # Note: all processed voxels have `signal[1] > opts.Threshold >= 0`, therefore `max_signal > 0`
+            decay_data[i] /= max_signal
+        end
+        decay_scale[] = max_signal
     end
 
     if is_B1map_provided(maps)
@@ -468,27 +478,46 @@ solution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
 # Save thread local results to output maps
 # =========================================================
 function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T}, o::T2mapOptions{T}, I::CartesianIndex) where {T}
-    (; T2_dist_work, flip_angle_work, logT2_times, decay_data, decay_basis, decay_calc, residuals, gva_buf) = thread_buffer
+    (; logT2_times, decay_basis, decay_scale, decay_data, decay_curvefit, residuals, flip_angle_work, T2_dist_work) = thread_buffer
     T2_dist = solution(T2_dist_work)
 
-    # Compute and save parameters of distribution
-    (; gdn, ggm, gva, fnr, snr, alpha) = maps
     @inbounds begin
-        mul!(decay_calc, decay_basis, T2_dist)
+        # Rescale results to original signal scale
+        max_signal = decay_scale[]
+        @simd for i in 1:o.nTE
+            decay_data[i] *= max_signal
+        end
+        @simd for j in 1:o.nT2
+            T2_dist[j] *= max_signal
+        end
+
+        # Compute signal decay curve fit and residuals
+        mul!(decay_curvefit, decay_basis, T2_dist)
+        @simd for i in 1:o.nTE
+            residuals[i] = decay_curvefit[i] - decay_data[i]
+        end
+
+        # Compute distribution parameters
         Σ_dist = sum(T2_dist)
-        residuals .= decay_calc .- decay_data
+        Σ_res² = sum(abs2, residuals)
+        σ_res = std(residuals)
         log_ggm = dot(T2_dist, logT2_times) / Σ_dist
         log1p_gva = zero(T)
         @simd for j in 1:o.nT2
             log1p_gva += abs2(logT2_times[j] - log_ggm) * T2_dist[j]
         end
         log1p_gva /= Σ_dist
-        gdn[I] = Σ_dist
-        ggm[I] = exp(log_ggm)
-        gva[I] = expm1(log1p_gva)
-        fnr[I] = Σ_dist / sqrt(sum(abs2, residuals) / (o.nTE - 1))
-        snr[I] = maximum(decay_data) / std(residuals)
-        alpha[I] = flip_angle_work.α[]
+    end
+
+    # Compute and save parameters of distribution
+    (; gdn, ggm, gva, fnr, snr, alpha) = maps
+    @inbounds begin
+        gdn[I] = Σ_dist # general density
+        ggm[I] = exp(log_ggm) # general geometric mean
+        gva[I] = expm1(log1p_gva) # general variance
+        fnr[I] = Σ_dist / √(Σ_res² / (o.nTE - 1)) # fit to noise ratio
+        snr[I] = max_signal / σ_res # signal to noise ratio
+        alpha[I] = flip_angle_work.α[] # optimized refocusing pulse flip angle
     end
 
     # Save distribution
@@ -505,14 +534,14 @@ function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T},
     # Optionally save ℓ²-norm of residuals
     if maps.resnorm !== nothing # o.SaveResidualNorm == true
         local resnorm::Array{T, 3} = maps.resnorm
-        @inbounds resnorm[I] = sqrt(sum(abs2, residuals))
+        @inbounds resnorm[I] = √Σ_res²
     end
 
     # Optionally save signal decay curve from fit
     if maps.decaycurve !== nothing # o.SaveDecayCurve == true
         local decaycurve::Array{T, 4} = maps.decaycurve
-        @inbounds for j in 1:o.nTE
-            decaycurve[I, j] = decay_calc[j]
+        @inbounds for i in 1:o.nTE
+            decaycurve[I, i] = decay_curvefit[i]
         end
     end
 
@@ -541,10 +570,10 @@ function thread_buffer_maker(o::T2mapOptions{T}) where {T}
         flip_angles      = flip_angles(o),
         refcon_angles    = refcon_angles(o),
         decay_basis      = decay_basis,
+        decay_scale      = Ref(one(T)),
         decay_data       = decay_data,
-        decay_calc       = zeros(T, o.nTE),
+        decay_curvefit   = zeros(T, o.nTE),
         residuals        = zeros(T, o.nTE),
-        gva_buf          = zeros(T, o.nT2),
         decay_curve_work = EPGdecaycurve_work(T, o.nTE),
         flip_angle_work  = FlipAngleOptimizationWorkspace(o, decay_basis, decay_data),
         T2_dist_work     = T2DistWorkspace(regularization_method(o), decay_basis, decay_data),

@@ -79,7 +79,7 @@ end
 @inline Base.getindex(::SymbolVector{Fs}, i::Int) where {Fs} = Fs[i] #TODO uncomment
 
 @generated function constructorof(::Type{T}) where {T}
-    return getfield(parentmodule(T), nameof(T))
+    return :($(getfield(parentmodule(T), nameof(T))))
 end
 @inline constructorof(θ) = constructorof(typeof(θ))
 
@@ -88,14 +88,14 @@ end
 
 @generated function restructure(θ, xs, ::Val{Fs}) where {Fs}
     idxmap = NamedTuple{Fs}(ntuple(i -> i, length(Fs)))
-    vals   = [F ∈ Fs ? :(@inbounds(xs[$(getproperty(idxmap, F))])) : :(getproperty(θ, $(QuoteNode(F)))) for F in fieldsof(θ)]
-    return :(Base.@_inline_meta; restructure(θ, tuple($(vals...))))
+    vals = [F ∈ Fs ? :(@inbounds(xs[$(idxmap[F])])) : :(getfield(θ, $(QuoteNode(F)))) for F in fieldsof(θ)]
+    return :(Base.@_inline_meta; $restructure(θ, tuple($(vals...))))
 end
 @inline restructure(θ, xs, Fs::SymbolVector) = restructure(θ, xs, Fs.fields)
 
 @generated function destructure(θ, ::Val{Fs}) where {Fs}
-    vals = [:(getproperty(θ, $(QuoteNode(F)))) for F in Fs]
-    return :(Base.@_inline_meta; SVector{$(length(Fs)), $(eltype(θ))}(tuple($(vals...))))
+    vals = [:(convert(eltype(θ), getfield(θ, $(QuoteNode(F))))) for F in Fs]
+    return :(Base.@_inline_meta; $SVector{$(length(Fs)), eltype(θ)}(tuple($(vals...))))
 end
 @inline destructure(θ, Fs::SymbolVector) = destructure(θ, Fs.fields)
 
@@ -160,13 +160,13 @@ EPGWorkCacheDict(ETL) = EPGWorkCacheDict(ETL, Dict{DataType, Any}())
 @inline Base.length(caches::EPGWorkCacheDict) = Base.length(caches.dict)
 @inline Base.iterate(caches::EPGWorkCacheDict, state...) = Base.iterate(caches.dict, state...)
 
-@inline function Base.getindex(caches::EPGWorkCacheDict, ::Type{T}) where {T}
+@inline function Base.getindex(caches::EPGWorkCacheDict{ETL}, ::Type{T}) where {ETL, T}
     R = cachetype(caches, T)
     get!(caches.dict, T) do
         return EPGWork_ReIm_DualVector_Split_Dynamic(T, caches.ETL)::R
     end::R
 end
-@inline cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T, ETL} = EPGWork_ReIm_DualVector_Split_Dynamic{T, ETL, Vector{SVector{3, T}}, Vector{T}}
+@generated cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T, ETL} = :($EPGWork_ReIm_DualVector_Split_Dynamic{$T, $ETL, Vector{$SVector{3, $T}}, Vector{$T}})
 
 struct EPGFunctor{T, ETL, Fs, TC <: EPGWorkCacheDict{ETL}, Tθ <: EPGParameterization{T, ETL}}
     θ::Tθ
@@ -184,7 +184,6 @@ function (f!::EPGFunctor)(y::AbstractVector{D}, epg_work::AbstractEPGWorkspace{D
     θ = restructure(parameters(f!), x, optfields(f!))
     return EPGdecaycurve!(y, epg_work, θ)
 end
-(f!::EPGFunctor)(x::AbstractVector{D}) where {D} = f!(decaycurve(f!.caches[D]), f!.caches[D], x)
 (f!::EPGFunctor)(y::AbstractVector{D}, x::AbstractVector{D}) where {D} = f!(y, f!.caches[D], x)
 
 struct EPGJacobianFunctor{T, ETL, Fs, F <: EPGFunctor{T, ETL, Fs}, R <: DiffResults.DiffResult, C <: ForwardDiff.JacobianConfig}
@@ -196,7 +195,7 @@ function EPGJacobianFunctor(θ::EPGParameterization{T}, fields::SymbolVector) wh
     ETL, N = echotrainlength(θ), length(fields)
     f! = EPGFunctor(θ, fields)
     res = DiffResults.JacobianResult(zeros(T, ETL), zeros(T, N))
-    cfg = ForwardDiff.JacobianConfig(nothing, zeros(T, ETL), zeros(T, N), ForwardDiff.Chunk{N}())
+    cfg = ForwardDiff.JacobianConfig(f!, zeros(T, ETL), zeros(T, N), ForwardDiff.Chunk{N}())
     return EPGJacobianFunctor(f!, res, cfg)
 end
 EPGJacobianFunctor(θ::EPGParameterization, fields::Val) = EPGJacobianFunctor(θ, SymbolVector(fields))
@@ -1076,7 +1075,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T}, θ::EPGOp
         c1z     = shufflevector(c1F * Mz3, Val((1, 0)))
         Mz2     = muladd(c3, Vx, muladd(c4, Vy, -c1z)) # flipmat: 2 -> dc
         Mz4     = muladd(b4, Vx, muladd(b3, Vy, E2_half * c1z)) # relaxmat: 1 -> 4, save in buffer
-        dc[i]   = sqrt(sum(Mz2 * Mz2)) # decay curve coefficient
+        dc[i]   = √(sum(Mz2 * Mz2)) # decay curve coefficient
         MPSV[1] = E2_half * Mz2 # relaxmat: 2 -> 1
         b5xy    = shufflevector(b5F * (Vx - Vy), Val((1, 0)))
         Mz3     = muladd(b2, Mz3, b5xy) # relaxmat: 3 -> 3, save in buffer
@@ -1110,7 +1109,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T}, θ::EPGOp
     @inbounds begin
         c1z     = shufflevector(c1F * Mz3, Val((1, 0)))
         Mz2     = muladd(c3, MPSV[1], muladd(c4, MPSV[2], -c1z)) # last iteration of flipmat unrolled
-        dc[end] = sqrt(sum(Mz2 * Mz2))
+        dc[end] = √(sum(Mz2 * Mz2))
     end
 
     return dc

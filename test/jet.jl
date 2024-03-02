@@ -1,6 +1,6 @@
 using DECAES, JET
 
-function test_mock_T2_dist()
+function test_T2mapSEcorr()
     # Mock T2 distribution, computed with default parameters
     opts = DECAES.mock_t2map_opts(Float64; Silent = true)
     image = DECAES.mock_image(opts)

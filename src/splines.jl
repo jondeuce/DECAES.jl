@@ -42,8 +42,8 @@ function roots(c::AbstractVector{T}) where {T <: AbstractFloat}
            deg == 2 ? T[roots_real_quadratic(@inbounds((c[1], c[2], c[3])))...] :
            T[roots_real_cubic(@inbounds((c[1], c[2], c[3], c[4])))...]
 end
-roots(::SVector{1, T}) where {T <: AbstractFloat} = SA{T}[]
-roots(c::SVector{2, T}) where {T <: AbstractFloat} = SA{T}[root_real_linear(Tuple(c))]
+roots(::SVector{1, T}) where {T <: AbstractFloat} = SVector{0, T}()
+roots(c::SVector{2, T}) where {T <: AbstractFloat} = SVector{1, T}(root_real_linear(Tuple(c)))
 roots(c::SVector{3, T}) where {T <: AbstractFloat} = SVector{2, T}(roots_real_quadratic(Tuple(c)))
 roots(c::SVector{4, T}) where {T <: AbstractFloat} = SVector{3, T}(roots_real_cubic(Tuple(c)))
 roots(::SVector{5, T}) where {T <: AbstractFloat} = error("Degree of polynomial must be 0, 1, 2, or 3")
@@ -63,13 +63,13 @@ end
 @inline function tocanonical(x, (a, b))
     c, r = (a + b) / 2, (b - a) / 2
     t = (x - c) / r
-    return clamp(t, -1, 1)
+    return t
 end
 
 @inline function todomain(t, (a, b))
     c, r = (a + b) / 2, (b - a) / 2
     x = muladd(r, t, c)
-    return clamp(x, a, b)
+    return x
 end
 
 function CubicHermiteInterpolator(a, b, u0, u1, m0, m1)
@@ -229,17 +229,16 @@ function roots_real_cubic(coeffs::NTuple{4, T}) where {T <: AbstractFloat}
     R², Q³ = R^2, Q^3
     if R² < Q³
         # Three real roots
-        twopi = 2 * T(π)
-        sqrtQ³ = √Q³
-        θ = acos(R / sqrtQ³)
-        tmp = -2 * √Q
-        x₁ = tmp * cos(θ / 3) - a / 3
-        x₂ = tmp * cos((θ + twopi) / 3) - a / 3
-        x₃ = tmp * cos((θ - twopi) / 3) - a / 3
+        tmpsqrtQ = -6 * √Q
+        thirdθ = acos(R / √Q³) / 3 #TODO: more accurate than `atan(√(Q³ - R²), R) / 3`?
+        twothirdsπ = 2 * T(π) / 3
+        x₁ = muladd(tmpsqrtQ, cos(thirdθ), -a) / 3
+        x₂ = muladd(tmpsqrtQ, cos(thirdθ + twothirdsπ), -a) / 3
+        x₃ = muladd(tmpsqrtQ, cos(thirdθ - twothirdsπ), -a) / 3
         return TupleTools.sort((x₁, x₂, x₃))
     else
         # One real root, two complex roots
-        A = -strictsign(R) * cbrt(abs(R) + √(R² - Q³))
+        A = -strictsign(R) * ∛(abs(R) + √(R² - Q³))
         B = A == 0 ? zero(T) : Q / A
         x₁ = A + B - a / 3
         return (x₁, T(NaN), T(NaN))
@@ -450,17 +449,27 @@ struct NormalHermiteSplineSurrogate{D, T, F, RK} <: AbstractSurrogate{D, T}
     fg::F
     grid::Array{SVector{D, T}, D}
     ugrid::Array{T, D}
+    ∇ugrid::Array{SVector{D, T}, D}
     spl::NormalHermiteSplines.ElasticNormalSpline{D, T, RK}
 end
 
 function NormalHermiteSplineSurrogate(fg, grid::Array{SVector{D, T}, D}, kernel = RK_H1(one(T))) where {D, T}
-    spl = NormalHermiteSplines.ElasticNormalSpline(first(grid), last(grid), maximum(size(grid)), kernel)
-    return NormalHermiteSplineSurrogate(fg, grid, zeros(T, size(grid)), spl)
+    return NormalHermiteSplineSurrogate(
+        fg,
+        grid,
+        fill(T(NaN), size(grid)),
+        fill(fill(T(NaN), SVector{D, T}), size(grid)),
+        NormalHermiteSplines.ElasticNormalSpline(first(grid), last(grid), maximum(size(grid)), kernel),
+    )
 end
 
 function update!(surr::NormalHermiteSplineSurrogate{D, T}, I::CartesianIndex{D}) where {D, T}
     u, ∇u = surr.fg(I)
-    @inbounds p = surr.grid[I]
+    @inbounds begin
+        p = surr.grid[I]
+        surr.ugrid[I] = u
+        surr.∇ugrid[I] = ∇u
+    end
     insert!(surr.spl, p, u)
     @inbounds for i in 1:D
         eᵢ = basisvector(SVector{D, T}, i)
@@ -469,8 +478,10 @@ function update!(surr::NormalHermiteSplineSurrogate{D, T}, I::CartesianIndex{D})
     return surr
 end
 
-function Base.empty!(surr::NormalHermiteSplineSurrogate)
+function Base.empty!(surr::NormalHermiteSplineSurrogate{D, T}) where {D, T}
     empty!(surr.spl)
+    surr.ugrid .= T(NaN)
+    surr.∇ugrid .= (fill(T(NaN), SVector{D, T}),)
     return surr
 end
 
@@ -483,23 +494,27 @@ end
 
 # Specialize the 1D case to use the faster and more robust Brent-Dekker method
 function suggest_point(surr::NormalHermiteSplineSurrogate{1, T}) where {T}
-    u₀, I = findmin(NormalHermiteSplines.evaluate!(surr.ugrid, surr.spl, surr.grid))
-    @inbounds p₀ = surr.grid[I]
-
-    @inbounds if I == 1
-        # Grid minimizer is at the left endpoint
-        p₁, p₂ = p₀, surr.grid[I+1]
-    elseif I == length(surr.ugrid)
-        # Grid minimizer is at the right endpoint
-        p₁, p₂ = surr.grid[I-1], p₀
-    else
-        # Check gradient at grid minimizer
-        ∇u₀ = NormalHermiteSplines.evaluate_gradient(surr.spl, p₀)
-        if ∇u₀[1] < 0
-            p₁, p₂ = p₀, surr.grid[I+1] # negative gradient -> minimum is to the right
-        else
-            p₁, p₂ = surr.grid[I-1], p₀ # positive gradient -> minimum is to the left
+    @assert length(surr.grid) >= 2 "Grid must have at least 2 points"
+    @inbounds p₀, u₀, ∇u₀, I = surr.grid[1], surr.ugrid[1], surr.∇ugrid[1], 1
+    @inbounds for i in 2:length(surr.grid)
+        pᵢ = surr.grid[i]
+        uᵢ, ∇uᵢ = NormalHermiteSplines._evaluate_with_gradient(surr.spl, pᵢ)
+        surr.ugrid[i], surr.∇ugrid[i] = uᵢ, ∇uᵢ
+        if uᵢ < u₀
+            p₀, u₀, ∇u₀, I = pᵢ, uᵢ, ∇uᵢ, i
         end
+    end
+
+    @inbounds if I == 1 || (I < length(surr.grid) && ∇u₀[1] < 0)
+        # Grid minimizer is at the left endpoint, or downhill to the right
+        p₁, p₂ = p₀, surr.grid[I+1]
+        u₁, u₂ = u₀, surr.ugrid[I+1]
+        ∇u₁, ∇u₂ = ∇u₀, surr.∇ugrid[I+1]
+    else # I == length(surr.grid) || (I > 1 && ∇u₀[1] >= 0)
+        # Grid minimizer is at the right endpoint, or downhill to the left
+        p₁, p₂ = surr.grid[I-1], p₀
+        u₁, u₂ = surr.ugrid[I-1], u₀
+        ∇u₁, ∇u₂ = surr.∇ugrid[I-1], ∇u₀
     end
 
     # Use Brent's method to search for a minimum on the interval (p₁, p₂)
@@ -538,7 +553,7 @@ BoundingBox(bounds::NTuple{D, NTuple{2, Int}}) where {D} = BoundingBox(bounds, c
     corners = Iterators.product([(true, false) for d in 1:D]...)
     S = Tuple{ntuple(d -> 2, D)...}
     vals = [:(CartesianIndex($(ntuple(d -> I[d] ? :(bounds[$d][1]) : :(bounds[$d][2]), D)...))) for I in corners]
-    return :(Base.@_inline_meta; SArray{$S, CartesianIndex{$D}, $D, $(2^D)}(tuple($(vals...))))
+    return :(Base.@_inline_meta; $SArray{$S, CartesianIndex{$D}, $D, $(2^D)}(tuple($(vals...))))
 end
 
 function opposite_corner(box::BoundingBox{D}, I::CartesianIndex{D}) where {D}
@@ -723,12 +738,12 @@ function local_search(
     surr::NormalHermiteSplineSurrogate{D, T},
     x₀::SVector{D, T},
     state::Union{Nothing, DiscreteSurrogateSearcher{D, T}} = nothing;
-    maxiter::Int = 100,
-    maxeval::Int = maxiter,
+    maxiters::Int = 100,
+    maxeval::Int = maxiters,
     xtol_rel = 1e-4,
     xtol_abs = 1e-4,
     initial_step = maximum(gridwidths(surr)) / 100,
-    xeval_radius = √sum(abs2, gridspacings(surr)) - sqrt(eps(T)),
+    xeval_radius = √sum(abs2, gridspacings(surr)) - √eps(T),
 ) where {D, T}
 
     if state !== nothing
@@ -743,7 +758,7 @@ function local_search(
     xlo, xhi = first(surr.grid), last(surr.grid)
     opt = ADAM{D, T}(initial_step)
 
-    for _ in 1:maxiter
+    for _ in 1:maxiters
         if state !== nothing
             # Find nearest gridpoint to `x` and update surrogate
             I, xI = nearest_gridpoint(state, x)

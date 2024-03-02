@@ -21,7 +21,7 @@ Analyzes T2 distributions produced by [`T2mapSEcorr`](@ref) to produce data maps
 # Examples
 
 ```julia-repl
-julia> dist = DECAES.mock_T2_dist(; MatrixSize = (100, 100, 1), nT2 = 40); # mock distribution with size 100x100x1x40
+julia> dist = DECAES.mock_t2dist(; MatrixSize = (100, 100, 1), nT2 = 40); # mock distribution with size 100x100x1x40
 
 julia> maps = T2partSEcorr(dist; T2Range = (10e-3, 2.0), SPWin = (10e-3, 25e-3), MPWin = (25e-3, 200e-3), Silent = true); # compute T2-parts maps
 
@@ -157,7 +157,7 @@ function sigmoid_weights(o::T2partOptions{T}) where {T}
     if o.Sigmoid !== nothing
         # Curve reaches 50% at T2_50perc and is (k and 1-k)*100 percent at T2_50perc +/- T2_kperc
         k, T2_kperc, T2_50perc = T(0.1), o.Sigmoid, o.SPWin[2]
-        sigma = abs(T2_kperc / (sqrt(T(2)) * erfinv(2 * k - 1)))
+        sigma = abs(T2_kperc / (√(T(2)) * erfinv(2 * k - 1)))
         (x -> x <= eps(T) ? zero(T) : x).(normccdf.((logrange(o.T2Range..., o.nT2) .- T2_50perc) ./ sigma))
     else
         nothing

@@ -1,6 +1,7 @@
 using Aqua
 using Test
 
+using DoubleFloats
 using LinearAlgebra
 using Pkg
 using PolynomialRoots: PolynomialRoots
@@ -62,10 +63,6 @@ end
     include("misc.jl")
 end
 
-@testset "nnls.jl" verbose = true begin
-    include("nnls.jl")
-end
-
 @testset "nhs.jl" verbose = true begin
     include("nhs.jl")
 end
@@ -74,8 +71,16 @@ end
     include("utils.jl")
 end
 
+@testset "optimization.jl" verbose = true begin
+    include("optimization.jl")
+end
+
 @testset "splines.jl" verbose = true begin
     include("splines.jl")
+end
+
+@testset "nnls.jl" verbose = true begin
+    include("nnls.jl")
 end
 
 @testset "epg.jl" verbose = true begin

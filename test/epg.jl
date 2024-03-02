@@ -35,4 +35,60 @@ end
     end
 end
 
+@testset "EPGOptions" begin
+    θ = DECAES.EPGOptions((; ETL = 10, α = 169.0, TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = 176.0))
+
+    @testset "basics" begin
+        @test Tuple(θ) == (10, 169.0, 9.0e-3, 10.1e-3, 0.98, 176.0)
+        @test NamedTuple(θ) == (; ETL = 10, α = 169.0, TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = 176.0)
+    end
+
+    @testset "destructure/restructure" begin
+        @test @allocated(DECAES.restructure(θ, (2.0, 1.0), Val((:T1, :TE)))) == 0
+        @test @allocated(DECAES.destructure(θ, Val((:T2, :ETL)))) == 0
+
+        θ′ = DECAES.restructure(θ, (2.0, 1.0), Val((:β, :α)))
+        @test Tuple(θ′) == (θ.ETL, 1.0, θ.TE, θ.T2, θ.T1, 2.0)
+
+        x′ = DECAES.destructure(θ, Val((:TE, :α)))
+        @test x′ == SA[θ.TE, θ.α]
+    end
+end
+
+@testset "EPGFunctor" begin
+    T = Float64
+    ETL = 8
+    θ = DECAES.EPGOptions((; ETL, α = 169.0, TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = 176.0))
+    fun! = DECAES.EPGFunctor(θ, Val((:α, :T2)))
+    jac! = DECAES.EPGJacobianFunctor(θ, Val((:α, :T2)))
+
+    # EPGFunctor
+    x = [θ.α, θ.T2]
+    y = zeros(T, ETL)
+    @test @allocated(fun!(y, x)) > 0 # Dual cache created on first call
+    @test @allocated(fun!(y, x)) == 0 # Dual cache reused on second call
+    @test y == DECAES.EPGdecaycurve(θ)
+
+    # EPGJacobianFunctor
+    y .= 0
+    J = zeros(T, ETL, 2)
+    @test @allocated(jac!(y, θ)) > 0 # Dual cache created on first call
+    @test @allocated(jac!(J, y, θ)) == 0 # Dual cache reused on second call
+    @test y ≈ DECAES.EPGdecaycurve(θ) atol = 10 * eps(T) # note: not exact because Dual's likely lead to different SIMD instructions etc.
+    @test J == DECAES.DiffResults.jacobian(jac!.res)
+
+    # Finite difference test; error should decrease as 𝒪(δx^2)
+    δx = x .* T(1e-2)
+    θ′ = DECAES.restructure(θ, x .+ δx, Val((:α, :T2)))
+    @test J * δx ≈ DECAES.EPGdecaycurve(θ′) - y atol = 5e-4
+
+    δx = x .* T(1e-4)
+    θ′ = DECAES.restructure(θ, x .+ δx, Val((:α, :T2)))
+    @test J * δx ≈ DECAES.EPGdecaycurve(θ′) - y atol = 5e-8
+
+    δx = x .* T(1e-6)
+    θ′ = DECAES.restructure(θ, x .+ δx, Val((:α, :T2)))
+    @test J * δx ≈ DECAES.EPGdecaycurve(θ′) - y atol = 5e-12
+end
+
 nothing

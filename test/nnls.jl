@@ -127,14 +127,29 @@ end
     @test run_lcurve_corner(f) ≈ 0 atol = 1e-3
 end
 
+@testset "gcv" begin
+    for (m, n) in NNLS_SIZES
+        A, b = rand_NNLS_data(m, n)
+        work = DECAES.NNLSGCVRegProblem(A, b)
+        logμ = randn()
+        gcv = DECAES.gcv!(work, logμ)
+        χ² = DECAES.chi2(DECAES.get_cache(work.nnls_prob_smooth_cache))
+        @test gcv ≈ χ² / DECAES.gcv_tr(A, exp(logμ))^2
+        @test gcv ≈ χ² / DECAES.gcv_tr_brute(A, exp(logμ))^2
+    end
+end
+
 function mock_nnls_data(m, n)
     opts = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = m, nT2 = n)
     prob = DECAES.mock_surrogate_search_problem(Val(1), Val(m), opts)
     return (; A = prob.As[:, :, end], b = prob.b)
 end
 
-∇finitediff(f, x, h = 1e-8) = (f(x .+ h) .- f(x .- h)) ./ (2h)
-∇²finitediff(f, x, h = 1e-4) = (f(x .+ h) .- 2 .* f(x) .+ f(x .- h)) ./ h^2
+∇finitediff(f, x, h = √eps(one(x))) = (f(x .+ h) .- f(x .- h)) ./ 2h
+∇²finitediff(f, x, h = ∛eps(one(x))) = (f(x .+ h) .- 2 .* f(x) .+ f(x .- h)) ./ h^2
+
+∇logfinitediff(f, logx, h = √eps(one(logx))) = ∇finitediff(f, logx, h) ./ exp(logx)
+∇²logfinitediff(f, logx, h = ∛eps(one(logx))) = (∇²finitediff(f, logx, h) - ∇finitediff(f, logx, h)) ./ exp(2 * logx)
 
 @testset "Least Squares Gradients" begin
     #=
@@ -195,62 +210,71 @@ end
 end
 
 function verify_NNLSTikhonovRegProblem(m, n)
+    T = Double64 # need higher precision for finite differences
     A, b = rand_NNLS_data(m, n)
+    A, b = T.(A), T.(b)
     work = NNLSTikhonovRegProblem(A, b)
-    f_reg(μ) = (DECAES.solve!(work, μ); DECAES.reg(work))
-    f_chi2(μ) = (DECAES.solve!(work, μ); DECAES.chi2(work))
-    f_resnorm_sq(μ) = (DECAES.solve!(work, μ); DECAES.resnorm_sq(work))
-    f_seminorm_sq(μ) = (DECAES.solve!(work, μ); DECAES.seminorm_sq(work))
+    withsolve(f, μ) = (DECAES.solve!(work, μ); return f(work))
 
-    GC.@preserve work begin
-        μ = 0.99
-        @test isnan(DECAES.mu(work))
+    GC.@preserve work for (i, μ) in enumerate([0.01, 0.05, 0.25, 0.99])
+        @test xor(i > 1, isnan(DECAES.mu(work))) # μ should be initialized to NaN
         @test DECAES.mu!(work, μ) == μ
         @test DECAES.mu(work) == μ
-        @test all(>=(0), DECAES.solve!(work, μ))
+
+        x = DECAES.solve!(work, μ)
+        @test all(>=(0), x)
+        @test withsolve(DECAES.reg, μ) ≈ μ^2 * sum(abs2, x)
+        @test withsolve(DECAES.chi2, μ) ≈ sum(abs2, A * x - b)
+        @test withsolve(DECAES.resnorm_sq, μ) ≈ sum(abs2, A * x - b)
+        @test withsolve(DECAES.seminorm_sq, μ) ≈ sum(abs2, x)
 
         @test @allocated(DECAES.solve!(work, μ)) == 0
         @test @allocated(DECAES.mu(work)) == 0
 
         ∇μ = DECAES.∇reg(work)
-        @test ∇μ ≈ ∇finitediff(f_reg, μ) rtol = 1e-4
+        @test ∇μ ≈ ∇logfinitediff(logμ -> withsolve(DECAES.reg, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-4
         @test @allocated(DECAES.∇reg(work)) == 0
-        @test @inferred(DECAES.∇reg(work)) isa Float64
+        @test @inferred(DECAES.∇reg(work)) isa T
 
         ∇μ = DECAES.∇chi2(work)
-        @test ∇μ ≈ ∇finitediff(f_chi2, μ) rtol = 1e-4
+        @test ∇μ ≈ ∇logfinitediff(logμ -> withsolve(DECAES.chi2, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-4
         @test @allocated(DECAES.∇chi2(work)) == 0
-        @test @inferred(DECAES.∇chi2(work)) isa Float64
+        @test @inferred(DECAES.∇chi2(work)) isa T
 
         ∇μ = DECAES.∇resnorm_sq(work)
-        @test ∇μ ≈ ∇finitediff(f_resnorm_sq, μ) rtol = 1e-4
+        @test ∇μ ≈ ∇logfinitediff(logμ -> withsolve(DECAES.resnorm_sq, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-4
         @test @allocated(DECAES.∇resnorm_sq(work)) == 0
-        @test @inferred(DECAES.∇resnorm_sq(work)) isa Float64
+        @test @inferred(DECAES.∇resnorm_sq(work)) isa T
 
         ∇μ = DECAES.∇seminorm_sq(work)
-        @test ∇μ ≈ ∇finitediff(f_seminorm_sq, μ) rtol = 1e-4
+        @test ∇μ ≈ ∇logfinitediff(logμ -> withsolve(DECAES.seminorm_sq, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-4
         @test @allocated(DECAES.∇seminorm_sq(work)) == 0
-        @test @inferred(DECAES.∇seminorm_sq(work)) isa Float64
+        @test @inferred(DECAES.∇seminorm_sq(work)) isa T
+
+        ∇μ = DECAES.solution_gradnorm(work)
+        @test ∇μ ≈ norm(∇logfinitediff(logμ -> withsolve(copy ∘ DECAES.solution, exp(logμ)), log(μ), T(1e-6))) rtol = 1e-4
+        @test @allocated(DECAES.solution_gradnorm(work)) == 0
+        @test @inferred(DECAES.solution_gradnorm(work)) isa T
 
         ∇²μ = DECAES.∇²resnorm_sq(work)
-        @test ∇²μ ≈ ∇²finitediff(f_resnorm_sq, μ) rtol = 1e-3 atol = 1e-4
+        @test ∇²μ ≈ ∇²logfinitediff(logμ -> withsolve(DECAES.resnorm_sq, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-3 atol = 1e-4
         @test @allocated(DECAES.∇²resnorm_sq(work)) == 0
-        @test @inferred(DECAES.∇²resnorm_sq(work)) isa Float64
+        @test @inferred(DECAES.∇²resnorm_sq(work)) isa T
 
         ∇²μ = DECAES.∇²seminorm_sq(work)
-        @test ∇²μ ≈ ∇²finitediff(f_seminorm_sq, μ) rtol = 1e-3 atol = 1e-4
+        @test ∇²μ ≈ ∇²logfinitediff(logμ -> withsolve(DECAES.seminorm_sq, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-3 atol = 1e-4
         @test @allocated(DECAES.∇²seminorm_sq(work)) == 0
-        @test @inferred(DECAES.∇²seminorm_sq(work)) isa Float64
+        @test @inferred(DECAES.∇²seminorm_sq(work)) isa T
 
         # Curvature computation
         DECAES.solve!(work, μ)
         ξ = DECAES.resnorm_sq(work)
         η = DECAES.seminorm_sq(work)
         if η > 0
-            ξ_fun = t -> (DECAES.solve!(work, t); DECAES.resnorm_sq(work))
-            η_fun = t -> (DECAES.solve!(work, t); DECAES.seminorm_sq(work))
-            C_fun = t -> (DECAES.solve!(work, t); DECAES.curvature(identity, work))
-            C_menger = DECAES.menger(ξ_fun, η_fun; h = 1e-4)
+            ξ_fun = logμ -> (DECAES.solve!(work, exp(logμ)); DECAES.resnorm_sq(work))
+            η_fun = logμ -> (DECAES.solve!(work, exp(logμ)); DECAES.seminorm_sq(work))
+            C_fun = logμ -> (DECAES.solve!(work, exp(logμ)); DECAES.curvature(identity, work))
+            C_menger = DECAES.menger(ξ_fun, η_fun; h = T(1e-4))
 
             ξ′ = DECAES.∇resnorm_sq(work)
             η′ = DECAES.∇seminorm_sq(work)
@@ -258,22 +282,20 @@ function verify_NNLSTikhonovRegProblem(m, n)
             η′′ = DECAES.∇²seminorm_sq(work)
             C = (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
 
-            @test C_fun(μ) ≈ C
-            @test C_fun(μ) ≈ C_menger(μ) rtol = 1e-3
+            @test C_fun(log(μ)) ≈ C
+            @test C_fun(log(μ)) ≈ C_menger(log(μ)) rtol = 1e-4
 
-            ξ̄_fun = t -> (DECAES.solve!(work, t); log(DECAES.resnorm_sq(work)))
-            η̄_fun = t -> (DECAES.solve!(work, t); log(DECAES.seminorm_sq(work)))
-            C̄_fun = t -> (DECAES.solve!(work, t); DECAES.curvature(log, work))
-            C̄_menger = DECAES.menger(ξ̄_fun, η̄_fun; h = 1e-4)
+            C̄_fun = logμ -> (DECAES.solve!(work, exp(logμ)); DECAES.curvature(log, work))
+            C̄_menger = DECAES.menger(log ∘ ξ_fun, log ∘ η_fun; h = T(1e-4))
 
-            ξ̄′ = ξ′ / ξ
-            η̄′ = η′ / η
-            ξ̄′′ = ξ′′ / ξ - ξ̄′^2
-            η̄′′ = η′′ / η - η̄′^2
-            C̄ = (ξ̄′ * η̄′′ - η̄′ * ξ̄′′) / √((ξ̄′^2 + η̄′^2)^3)
+            _ξ′ = ξ′ / ξ # d/dlogμ ξ(μ) = ξ'(μ) / ξ(μ)
+            _η′ = η′ / η
+            _ξ′′ = ξ′′ / ξ - _ξ′^2 # d²/d(logμ)² ξ(μ) = ξ''(μ) / ξ(μ) - (ξ'(μ) / ξ(μ))^2
+            _η′′ = η′′ / η - _η′^2
+            C̄ = (_ξ′ * _η′′ - _η′ * _ξ′′) / √((_ξ′^2 + _η′^2)^3)
 
-            @test C̄_fun(μ) ≈ C̄
-            @test C̄_fun(μ) ≈ C̄_menger(μ) rtol = 1e-3
+            @test C̄_fun(log(μ)) ≈ C̄
+            @test C̄_fun(log(μ)) ≈ C̄_menger(log(μ)) rtol = 1e-4
         end
     end # GC.@preserve
 end

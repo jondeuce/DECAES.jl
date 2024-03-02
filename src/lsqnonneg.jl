@@ -99,9 +99,6 @@ function Base.copyto!(B::AbstractMatrix{T}, P::TikhonovPaddedMatrix{T}) where {T
     return B
 end
 
-lin_interp(x, x₁, x₂, y₁, y₂) = y₁ + (y₂ - y₁) * (x - x₁) / (x₂ - x₁)
-exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x₁) / (x₂ - x₁))
-
 ####
 #### Tikhonov regularized NNLS problem
 ####
@@ -141,30 +138,35 @@ solution(work::NNLSTikhonovRegProblem) = NNLS.solution(work.nnls_prob.nnls_work)
 
 loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_prob.nnls_work)^2
 
-reg(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work)
-∇reg(work::NNLSTikhonovRegProblem) = 2 * mu(work) * seminorm_sq(work) + mu(work)^2 * ∇seminorm_sq(work)
+reg(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work) # μ²||x||²
+∇reg(work::NNLSTikhonovRegProblem) = 2 * mu(work) * seminorm_sq(work) + mu(work)^2 * ∇seminorm_sq(work) # d/dμ [μ²||x||²] = 2μ||x||² + μ² d/dμ [||x||²]
 
-chi2(work::NNLSTikhonovRegProblem) = resnorm_sq(work)
-∇chi2(work::NNLSTikhonovRegProblem) = ∇resnorm_sq(work)
+chi2(work::NNLSTikhonovRegProblem) = resnorm_sq(work) # ||Ax-b||²
+∇chi2(work::NNLSTikhonovRegProblem) = ∇resnorm_sq(work) # d/dμ [||Ax-b||²]
 
-resnorm(work::NNLSTikhonovRegProblem) = sqrt(resnorm_sq(work))
-resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - reg(work), 0)
-∇resnorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = 4 * ∇.μ^3 * ∇.xᵀB⁻¹x
-∇²resnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 12 * ∇².μ^2 * ∇².xᵀB⁻¹x - 24 * ∇².μ^4 * ∇².xᵀB⁻ᵀB⁻¹x
+resnorm(work::NNLSTikhonovRegProblem) = √(resnorm_sq(work)) # ||Ax-b||
+resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - reg(work), 0) # ||Ax-b||²
+∇resnorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = 4 * ∇.μ^3 * ∇.xᵀB⁻¹x # d/dμ [||Ax-b||²]
+∇²resnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 12 * ∇².μ^2 * ∇².xᵀB⁻¹x - 24 * ∇².μ^4 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [||Ax-b||²]
 
-seminorm(work::NNLSTikhonovRegProblem) = sqrt(seminorm_sq(work))
-seminorm_sq(work::NNLSTikhonovRegProblem) = sum(abs2, NNLS.positive_solution(work.nnls_prob.nnls_work))
-∇seminorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = -4 * ∇.μ * ∇.xᵀB⁻¹x
-∇²seminorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = -4 * ∇².xᵀB⁻¹x + 24 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x
+seminorm(work::NNLSTikhonovRegProblem) = √(seminorm_sq(work)) # ||x||
+seminorm_sq(work::NNLSTikhonovRegProblem) = sum(abs2, NNLS.positive_solution(work.nnls_prob.nnls_work)) # ||x||²
+∇seminorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = -4 * ∇.μ * ∇.xᵀB⁻¹x # d/dμ [||x||²]
+∇²seminorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = -4 * ∇².xᵀB⁻¹x + 24 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [||x||²]
+
+solution_gradnorm(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = √(solution_gradnorm_sq(work, ∇²)) # ||dx/dμ|| = ||-2μ * B⁻¹x|| = 2μ * ||B⁻¹x||
+solution_gradnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 4 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x # ||dx/dμ||² = ||-2μ * B⁻¹x||² = 4μ² * xᵀB⁻ᵀB⁻¹x
 
 # L-curve: (ξ(μ), η(μ)) = (||Ax-b||^2, ||x||^2)
-curvature(::typeof(identity), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = inv(2 * ∇.xᵀB⁻¹x * sqrt(1 + ∇.μ^4)^3)
+curvature(::typeof(identity), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = inv(2 * ∇.xᵀB⁻¹x * √(1 + ∇.μ^4)^3)
 
 # L-curve: (ξ̄(μ), η̄(μ)) = (log||Ax-b||^2, log||x||^2)
 function curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work))
-    ξ = DECAES.resnorm_sq(work)
-    η = DECAES.seminorm_sq(work)
-    C̄ = ξ * η * ((ξ * η / (2 * ∇.xᵀB⁻¹x)) - ∇.μ^2 * (ξ + ∇.μ^2 * η)) / sqrt(ξ^2 + ∇.μ^4 * η^2)^3
+    ℓ² = loss(work) # ℓ² = ||Ax-b||^2 + μ²||x||^2 = ξ² + μ²η²
+    ξ² = resnorm_sq(work)
+    η² = seminorm_sq(work)
+    ξ⁴, η⁴ = ξ²^2, η²^2
+    C̄ = ξ² * η² * (ξ² * η² - (2 * ∇.xᵀB⁻¹x) * ∇.μ^2 * ℓ²) / (2 * ∇.xᵀB⁻¹x * √(ξ⁴ + ∇.μ^4 * η⁴)^3)
     return C̄
 end
 
@@ -200,8 +202,8 @@ function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
 end
 
 function chi2factor_relerr!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = nothing; χ²target)
+    # NOTE: Assumes `solve!(work, μ)` has been called and that the solution is ready
     μ = exp(logμ)
-    solve!(work, μ)
     χ² = chi2(work)
     relerr = log(χ² / χ²target) # better behaved than χ² / χ²target - 1 for large χ²
     if ∇logμ !== nothing && length(∇logμ) > 0
@@ -214,6 +216,7 @@ end
 chi2factor_relerr⁻¹(relerr; χ²target) = χ²target * exp(relerr)
 
 function chi2factor_loss!(work::NNLSTikhonovRegProblem, logμ, ∇logμ = nothing; χ²target)
+    # NOTE: Assumes `solve!(work, μ)` has been called and that the solution is ready
     relerr = chi2factor_relerr!(work, logμ, ∇logμ; χ²target)
     loss = abs(relerr)
     if ∇logμ !== nothing && length(∇logμ) > 0
@@ -312,7 +315,7 @@ function lsqnonneg_chi2(A, b, Chi2Factor; kwargs...)
 end
 lsqnonneg_chi2_work(A, b) = NNLSChi2RegProblem(A, b)
 
-function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection = true, legacy = false) where {T}
+function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; legacy = false, method = legacy ? :legacy : :bisect) where {T}
     # Non-regularized solution
     solve!(work.nnls_prob)
     chi2_min = chi2(work.nnls_prob)
@@ -321,7 +324,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
     χ²target = Chi2Factor * chi2_min
     reset_cache!(work.nnls_prob_smooth_cache)
 
-    if legacy
+    if method === :legacy
         # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit
         mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor; legacy) do μ
             μ == 0 && return chi2_min
@@ -334,24 +337,40 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         end
 
-    elseif bisection
-        # Find bracketing interval containing root, then perform bisection search
-        f = CachedFunction{T, T}(0, isapprox) do logμ
-            increment_cache_index!(work.nnls_prob_smooth_cache)
+    elseif method === :bisect
+        f = function (logμ)
+            solve!(work.nnls_prob_smooth_cache, exp(logμ))
             return chi2factor_relerr!(get_cache(work.nnls_prob_smooth_cache), logμ; χ²target)
         end
+
+        # Find bracketing interval containing root, then perform bisection search with slightly higher tolerance to not waste f evals
         a, b, fa, fb = bracketing_interval_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
-        a, fa, c, fc, b, fb = bisect(f, a, b, fa, fb; xatol = T(0.05), ftol = (Chi2Factor - 1) / 100)
+        a, fa, c, fc, b, fb = bisect_root(f, a, b, fa, fb; xatol = T(0.05), xrtol = T(0.0), ftol = (Chi2Factor - 1) / 100)
 
-        # Root of secant line through `(a, fa), (b, fb)` or `(c, fc), (b, fb)` to improve accuracy
-        logmu_tmp = fa * fc < 0 ? root_real_linear(a, c, fa, fc) : root_real_linear(c, b, fc, fb)
-        logmu_final, relerr_final = isnan(logmu_tmp) ? (c, fc) : (logmu_tmp, f(logmu_tmp))
+        # Root of secant line through `(a, fa), (b, fb)` or `(c, fc), (b, fb)` to improve bisection accuracy
+        tmp = fa * fc < 0 ? root_real_linear(a, c, fa, fc) : root_real_linear(c, b, fc, fb)
+        d, fd = isnan(tmp) ? (c, fc) : (tmp, f(tmp))
 
-        # Return regularization which minimizes relerr
+        # Return regularization parameter with lowest abs(relerr)
+        logmu_final, relerr_final = abs(fd) < abs(fc) ? (d, fd) : (c, fc)
         mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
         x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
 
-    else
+    elseif method === :brent
+        f = function (logμ)
+            solve!(work.nnls_prob_smooth_cache, exp(logμ))
+            return chi2factor_relerr!(get_cache(work.nnls_prob_smooth_cache), logμ; χ²target)
+        end
+
+        # Find bracketing interval containing root
+        a, b, fa, fb = bracketing_interval_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 100)
+
+        # Find root using Brent's method
+        logmu_final, relerr_final = brent_root(f, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = (Chi2Factor - 1) / 1000, maxiters = 100)
+        mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(relerr_final; χ²target)
+        x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
+
+    elseif method === :nlopt
         # Instead of rootfinding, reformulate as a minimization problem. Solve using NLopt.
         alg = :LN_COBYLA # local, gradient-free, linear approximation of objective
         # alg = :LN_BOBYQA # local, gradient-free, quadratic approximation of objective
@@ -363,10 +382,13 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
         opt               = NLopt.Opt(alg, 1)
         opt.lower_bounds  = -8.0
         opt.upper_bounds  = 2.0
-        opt.xtol_rel      = 0.05
+        opt.xtol_abs      = 0.00
+        opt.xtol_rel      = 0.00
+        opt.ftol_abs      = (Chi2Factor - 1) / 1000
+        opt.ftol_rel      = 0.00
         opt.min_objective = function (logμ, ∇logμ)
             @inbounds _logμ = logμ[1]
-            increment_cache_index!(work.nnls_prob_smooth_cache)
+            solve!(work.nnls_prob_smooth_cache, exp(_logμ))
             loss = chi2factor_loss!(get_cache(work.nnls_prob_smooth_cache), _logμ, ∇logμ; χ²target)
             return Float64(loss)
         end
@@ -375,9 +397,11 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; bisection =
         mu_final = exp(T(minx[1]))
         x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         chi2_final = chi2(get_cache(work.nnls_prob_smooth_cache))
+    else
+        error("Unknown root-finding method: :$method")
     end
 
-    return (x = x_final, mu = mu_final, chi2factor = chi2_final / chi2_min)
+    return (; x = x_final, mu = mu_final, chi2factor = chi2_final / chi2_min)
 end
 
 function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0); legacy = false) where {T}
@@ -488,7 +512,7 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T, N}) where {T, N}
 
     # A point on the L-curve is given by (ξ(μ), η(μ)) = (log||Ax-b||^2, log||x||^2)
     #   Note: Squaring the norms is convenient for computing gradients of (ξ(μ), η(μ));
-    #         this shifts the L-curve by a constant, but does not change the curvature
+    #         this scales the L-curve, but does not change μ* = argmax C(ξ(μ), η(μ)).
     function f_lcurve(logμ)
         solve!(work.nnls_prob_smooth_cache, exp(logμ))
         ξ = log(resnorm_sq(get_cache(work.nnls_prob_smooth_cache)))
@@ -509,7 +533,7 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T, N}) where {T, N}
     x_unreg = solve!(work.nnls_prob)
     chi2factor_final = chi2(get_cache(work.nnls_prob_smooth_cache)) / chi2(work.nnls_prob)
 
-    return (x = x_final, mu = mu_final, chi2factor = chi2factor_final)
+    return (; x = x_final, mu = mu_final, chi2factor = chi2factor_final)
 end
 
 struct LCurveCornerState{T}
@@ -547,14 +571,12 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
 
     # Tolerances are relative to initial curve size
     Ptopleft, Pbottomright = state.P⃗[1], state.P⃗[4]
-    Ptol = norm(Ptopleft - Pbottomright) * T(Ptol)
-    Ctol = norm(Ptopleft - Pbottomright) * T(Ctol)
+    Pdiam = norm(Ptopleft - Pbottomright)
+    Ptol = Pdiam * T(Ptol) # convergence occurs when diameter of L-curve state is less than Ptol
+    Ctol = Pdiam * T(Ctol) # note: *not* a tolerance on curvature, but on the minimum diameter of the L-curve state used to estimate curvature (see `Pfilter` below)
 
-    # For very small regularization, points on the L-curve may be extremely close,
-    # and curvature calculations will be highly ill-posed. Similarly, while it should
-    # not typically occur, additionally check for points on the L-curve becoming
-    # extremely close for large regularization. Points which don't satisfy `Pfilter`
-    # are assigned curvature -Inf.
+    # For very small regularization points on the L-curve may be extremely close, leading to
+    # numerically unstable curvature estimates. Assign these points -Inf curvature.
     Pfilter = P -> min(norm(P - Ptopleft), norm(P - Pbottomright)) > T(Ctol)
     update_curvature!(f, state, Pfilter)
 
@@ -670,6 +692,10 @@ function menger(x, y; h = 1e-3)
     end
 end
 
+#=
+lin_interp(x, x₁, x₂, y₁, y₂) = y₁ + (y₂ - y₁) * (x - x₁) / (x₂ - x₁)
+exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x₁) / (x₂ - x₁))
+
 function menger(x::Dierckx.Spline1D, y::Dierckx.Spline1D)
     function menger_curvature_inner(t)
         x′  = Dierckx.derivative(x, t; nu = 1)
@@ -688,7 +714,6 @@ function menger(y::Dierckx.Spline1D)
     end
 end
 
-#=
 function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2, T}}
     if interp_uniform
         h = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / T(φ)
@@ -913,7 +938,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T
     x_unreg = solve!(work.nnls_prob)
     chi2factor_final = chi2(get_cache(work.nnls_prob_smooth_cache)) / chi2(work.nnls_prob)
 
-    return (x = x_final, mu = mu_final, chi2factor = chi2factor_final)
+    return (; x = x_final, mu = mu_final, chi2factor = chi2factor_final)
 end
 
 # Implements equation (32) from:
@@ -922,7 +947,7 @@ end
 #   Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115)
 #
 # where here A = A, b = b, λ = μ, and L = identity.
-function gcv!(work::NNLSGCVRegProblem, logμ; extract_subproblem = false)
+function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(false)) where {extract_subproblem}
     # Unpack buffers
     (; A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf) = work
 

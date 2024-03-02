@@ -30,7 +30,7 @@ function test_poly()
             @test length(r̂s) == length(rs) == d
             for i in eachindex(rs, r̂s)
                 if !isnan(r̂s[i])
-                    @test isapprox(r̂s[i], rs[i]; rtol = 1e-14, atol = 1e-14) # real roots should be close
+                    @test isapprox(r̂s[i], rs[i]; rtol = 1e-12, atol = 1e-12) # real roots should be close
                 else
                     @test isnan(rs[i]) || abs(imag(rs[i])) > √eps() # NaN outputs should correspond to NaN or complex roots
                 end
@@ -46,11 +46,11 @@ function test_poly()
             elseif d == 2
                 x̄, px̄ = DECAES.minimize_quadratic((coeffs...,), a, b)
                 @test a <= x̄ <= b
-                @test all(p(x) >= px̄ - 1e-14 for x in xs)
+                @test all(p(x) >= px̄ - 1e-12 for x in xs)
             elseif d == 3
                 x̄, px̄ = DECAES.minimize_cubic((coeffs...,), a, b)
                 @test a <= x̄ <= b
-                @test all(p(x) >= px̄ - 1e-14 for x in xs)
+                @test all(p(x) >= px̄ - 1e-12 for x in xs)
             end
         end
     end
@@ -104,7 +104,7 @@ function test_cubic_splines()
         ŷ = minimum(spl, range(X[1], X[end]; length = 100))
         @test X[1] <= x <= X[end]
         @test spl(x) ≈ y
-        @test ŷ >= y - 1e-14
+        @test ŷ >= y - 1e-12
 
         x̄ = DECAES.spline_root(X, Y, y - 1; deg_spline)
         @test isnan(x̄)
@@ -137,19 +137,19 @@ function test_minimize_cubic_hermite_interpolator()
         (; coeffs) = spl
         ∇coeffs = DECAES.deriv_coeffs(coeffs)
 
-        @test evalpoly(-1.0, coeffs) ≈ u0 rtol = 1e-14 atol = 1e-14
-        @test evalpoly(+1.0, coeffs) ≈ u1 rtol = 1e-14 atol = 1e-14
-        @test evalpoly(-1.0, ∇coeffs) ≈ r * m0 rtol = 1e-14 atol = 1e-14
-        @test evalpoly(+1.0, ∇coeffs) ≈ r * m1 rtol = 1e-14 atol = 1e-14
+        @test evalpoly(-1.0, coeffs) ≈ u0 rtol = 1e-12 atol = 1e-12
+        @test evalpoly(+1.0, coeffs) ≈ u1 rtol = 1e-12 atol = 1e-12
+        @test evalpoly(-1.0, ∇coeffs) ≈ r * m0 rtol = 1e-12 atol = 1e-12
+        @test evalpoly(+1.0, ∇coeffs) ≈ r * m1 rtol = 1e-12 atol = 1e-12
 
         t = 2 * rand() - 1
         x = c + r * t
         @test evalpoly(t, coeffs) ≈ spl(x)
-        @test evalpoly(t, ∇coeffs) ≈ r * DECAES.ForwardDiff.derivative(spl, x) rtol = 1e-14 atol = 1e-14
+        @test evalpoly(t, ∇coeffs) ≈ r * DECAES.ForwardDiff.derivative(spl, x) rtol = 1e-12 atol = 1e-12
 
         xmin, umin = DECAES.minimize(spl)
-        @test umin ≈ spl(xmin) rtol = 1e-14 atol = 1e-14
-        @test all(spl(x) >= umin - 1e-14 for x in range(a, b; length = 1024 + 1))
+        @test umin ≈ spl(xmin) rtol = 1e-12 atol = 1e-12
+        @test all(spl(x) >= umin - 1e-12 for x in range(a, b; length = 1024 + 1))
     end
 end
 

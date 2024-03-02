@@ -3,74 +3,35 @@
 ####
 
 #=
-`secant_method` and `bisection_method` are modified codes from Roots.jl:
+`bisect_root` and `brent_root` are modified codes from Roots.jl:
     https://github.com/JuliaMath/Roots.jl/blob/8a5ff76e8e8305d4ad5719fe1dd665d8a7bd7ec3/src/simple.jl
+    https://github.com/JuliaMath/Roots.jl/blob/c1684335e891e518ce304cf99015af0f1a2cb2f4/src/Bracketing/brent.jl#L1
 
 The MIT License (MIT) Copyright (c) 2013 John C. Travers
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 =#
-function secant_method(f, xs; xatol = zero(float(real(first(xs)))), xrtol = 8 * eps(one(float(real(first(xs))))), maxiters = 100)
-    if length(xs) == 1 # secant needs a, b; only a given
-        a  = float(xs[1])
-        h  = cbrt(eps(one(real(a))))
-        da = h * oneunit(a) + abs(a) * h^2 # adjust for if eps(a) > h
-        b  = a + da
-    else
-        a, b = promote(float(xs[1]), float(xs[2]))
-    end
-    return secant(f, a, b, f(a), f(b); xatol, xrtol, maxiters)
-end
 
-function secant(f, a::T, b::T, fa::T, fb::T; xatol = zero(T), xrtol = 8 * eps(T), maxiters = 100) where {T}
-    # No function change; return arbitrary endpoint
-    if fb == fa
-        return (a, fa)
-    end
+#### Bisection
 
-    cnt = 0
-    mbest = abs(fa) < abs(fb) ? a : b
-    fbest = min(abs(fa), abs(fb))
-    uatol = xatol / oneunit(xatol) * oneunit(real(a))
-    adjustunit = oneunit(real(fb)) / oneunit(real(b))
-
-    while cnt < maxiters
-        m = b - (b - a) * fb / (fb - fa)
-        fm = f(m)
-
-        abs(fm) < abs(fbest) && ((mbest, fbest) = (m, fm))
-        iszero(fm) && return (m, fm)
-        !isfinite(fm) && return (mbest, fbest) # function failed; bail out
-        abs(fm) <= adjustunit * max(uatol, abs(m) * xrtol) && return (m, fm)
-        fm == fb && return (m, fm)
-
-        a, b, fa, fb = b, m, fb, fm
-        cnt += 1
-    end
-
-    return (mbest, fbest) # maxiters reached
-end
-
-function bisection_method(f, a::Number, b::Number; xatol = nothing, xrtol = nothing, ftol = nothing, maxiters = 100)
+function bisect_root(f, a::Number, b::Number; xatol = nothing, xrtol = nothing, ftol = nothing, maxiters::Int = 100)
     T = promote_type(typeof(float(a)), typeof(float(b)))
     x₁, x₂ = T(a), T(b)
     y₁, y₂ = f(x₁), f(x₂)
-
-    xatol = xatol === nothing ? zero(T) : T(xatol)
-    xrtol = xrtol === nothing ? zero(T) : T(xrtol)
-    ftol = ftol === nothing ? zero(T) : T(ftol)
-
-    return bisect(f, x₁, x₂, y₁, y₂; xatol, xrtol, ftol, maxiters)[3:4]
+    return bisect_root(
+        f, x₁, x₂, y₁, y₂;
+        xatol = xatol === nothing ? zero(T) : T(xatol),
+        xrtol = xrtol === nothing ? zero(T) : T(xrtol),
+        ftol = ftol === nothing ? zero(T) : T(ftol),
+        maxiters,
+    )[3:4]
 end
 
-function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xatol = zero(T), xrtol = zero(T), ftol = zero(T), maxiters = 100) where {T}
-    if x₁ == x₂
-        xₘ, yₘ = x₁, y₁
-        return (x₁, y₁, xₘ, yₘ, x₂, y₂)
-    elseif y₁ * y₂ >= 0
-        # No sign change; return endpoint closest to zero
-        xₘ, yₘ = abs(y1) <= abs(y2) ? (x₁, y₁) : (x₂, y₂)
+function bisect_root(f, x₁::T, x₂::T, y₁::T, y₂::T; xatol::T = zero(T), xrtol::T = zero(T), ftol::T = zero(T), maxiters::Int = 100) where {T}
+    if x₁ == x₂ || y₁ * y₂ >= 0
+        # Degenerate interval; return endpoint closest to zero
+        xₘ, yₘ = abs(y₁) <= abs(y₂) ? (x₁, y₁) : (x₂, y₂)
         return (x₁, y₁, xₘ, yₘ, x₂, y₂)
     end
 
@@ -81,10 +42,9 @@ function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xatol = zero(T), xrtol = 
     xₘ = (x₁ + x₂) / 2
     yₘ = f(xₘ)
 
-    cnt = 1
-    while cnt < maxiters
-        if !isfinite(yₘ) || abs(yₘ) <= ftol || 2 * min(abs(xₘ - x₁), abs(x₂ - xₘ)) <= xatol + max(abs(x₁), abs(x₂)) * xrtol
-            return (x₁, y₁, xₘ, yₘ, x₂, y₂)
+    for iter in 1:maxiters
+        if abs(yₘ) <= ftol || 2 * min(abs(xₘ - x₁), abs(x₂ - xₘ)) <= xatol + xrtol * abs(xₘ)
+            break
         end
 
         if yₘ < 0
@@ -96,16 +56,149 @@ function bisect(f, x₁::T, x₂::T, y₁::T, y₂::T; xatol = zero(T), xrtol = 
         xₘ = (x₁ + x₂) / 2
         yₘ = f(xₘ)
 
-        cnt += 1
+        if !isfinite(yₘ)
+            # Evaluation failed; return endpoint with smallest function value
+            xₘ, yₘ = abs(y₁) <= abs(y₂) ? (x₁, y₁) : (x₂, y₂)
+            break
+        end
     end
 
     return (x₁, y₁, xₘ, yₘ, x₂, y₂)
 end
 
-function bracketing_interval_monotonic(f, a, δ; dilate = 1, mono = +1, maxiters = 100)
+#### Brent's method (root-finding)
+
+function brent_root(f, x₀::T, x₁::T, fx₀::T = f(x₀), fx₁::T = f(x₁); xatol::T = zero(T), xrtol::T = zero(T), ftol::T = zero(T), maxiters::Int = 100) where {T}
+    # Assert bracketing
+    fx₀ == 0 && return (x₀, fx₀)
+    fx₁ == 0 && return (x₁, fx₁)
+    @assert fx₀ * fx₁ < 0 "Root must be bracketed, but f(x = $x₀) = $fx₀ and f(x = $x₁) = $fx₁"
+
+    # Initialize Brent state
+    a, b, fa, fb = x₀, x₁, fx₀, fx₁
+    if abs(fa) < abs(fb)
+        a, b, fa, fb = b, a, fb, fa
+    end
+    c, d, fc, mflag = x₀, x₀, fx₀, true
+
+    for iter in 1:maxiters
+        # Check for sufficiently small bracketing interval
+        abs(b - a) <= 2 * (xatol + xrtol * abs(b)) && return (b, fb)
+
+        # Next step depends on points; inverse quadratic
+        s::T = inverse_quadratic_step(a, b, c, fa, fb, fc)
+        (isnan(s) || isinf(s)) && (s = secant_step(a, b, fa, fb))
+
+        # Guard step
+        u, v = (3a + b) / 4, b
+        if u > v
+            u, v = v, u
+        end
+
+        tol = max(xatol, xrtol * max(abs(b), abs(c), abs(d)))
+        if !(u < s < v) ||
+           (mflag && abs(s - b) >= abs(b - c) / 2) ||
+           (!mflag && abs(s - b) >= abs(b - c) / 2) ||
+           (mflag && abs(b - c) <= tol) ||
+           (!mflag && abs(c - d) <= tol)
+            s = (a + b) / 2
+            mflag = true
+        else
+            mflag = false
+        end
+
+        fs::T = f(s)
+        iszero(fs) && return (s, fs) # exact root found
+        (isnan(fs) || isinf(fs)) && return (b, fb) # function failed; return current best guess
+        abs(fs) <= ftol && return (s, fs) # function value is below tolerance
+
+        c, fc, d = b, fb, c
+        if sign(fa) * sign(fs) < 0
+            b, fb = s, fs
+        else
+            a, fa = s, fs
+        end
+
+        if abs(fa) < abs(fb)
+            a, b, fa, fb = b, a, fb, fa
+        end
+    end
+
+    return (b, fb)
+end
+
+#### Newton's method with bisection
+
+function newton_bisect_root(f_df, x0::T, x1::T, x2::T, y1::T = f_df(x1)[1], y2::T = f_df(x2)[1]; xrtol::T = √eps(T), xatol::T = eps(T), ftol::T = zero(T), maxiters::Int = 100) where {T <: AbstractFloat}
+    # Check initial points
+    y1 == 0 && return (x1, y1)
+    y2 == 0 && return (x2, y2)
+    @assert y1 * y2 < 0 "Root must be bracketed, but f(x = $x1) = $y1 and f(x = $x2) = $y2"
+    (y1 > 0) && ((x1, x2, y1, y2) = (x2, x1, y2, y1))
+
+    # Initialize the estimate for the root
+    y = T(NaN)
+    x = x_old = x0
+    Δx = Δx_old = x2 - x1
+
+    for iter in 1:maxiters
+        # Evaluate function and derivative at the current estimate
+        y, dy = f_df(x)
+        abs(y) <= ftol && return (x, y)
+
+        # Update bracketing interval
+        if y < 0
+            x1 = x
+        else
+            x2 = x
+        end
+
+        # Take bisection step if Newton step is outside interval, or not converging fast enough
+        if (((x - x2) * dy - y) * ((x - x1) * dy - y) > 0) || (2 * abs(y) > abs(Δx_old * dy))
+            x_old, Δx_old = x, Δx
+            Δx = (x2 - x1) / 2 # bisection step
+            x = (x1 + x2) / 2
+        else
+            x_old, Δx_old = x, Δx
+            Δx = -y / dy # Newton step
+            x += Δx
+        end
+
+        # Check for convergence
+        Δx_tol = xatol + xrtol * abs(x)
+        min(abs(Δx), abs(x - x_old)) <= Δx_tol && break
+    end
+
+    return (x, y)
+end
+
+#### Root-finding helper functions
+
+@inline function secant_step(a, b, fa, fb)
+    # See: https://github.com/JuliaMath/Roots.jl/blob/c1684335e891e518ce304cf99015af0f1a2cb2f4/src/utils.jl#L70
+    return a - fa * (b - a) / (fb - fa)
+end
+
+@inline function inverse_quadratic_step(a::T, b, c, fa, fb, fc) where {T}
+    # See: https://github.com/JuliaMath/Roots.jl/blob/c1684335e891e518ce304cf99015af0f1a2cb2f4/src/utils.jl#L114
+    s = zero(T)
+    s += a * fb * fc / (fa - fb) / (fa - fc) # quad step
+    s += b * fa * fc / (fb - fa) / (fb - fc)
+    s += c * fa * fb / (fc - fa) / (fc - fb)
+    return s
+end
+
+function bracketing_interval_monotonic(f, a, δ; dilate = 1, mono = +1, maxiters::Int = 100)
+    # Find bracketing interval for the root of a monotonic function.
+    # The function is assumed to be increasing (decreasing) when `mono` is positive (negative).
+    # Begin at point `a` and step by `δ` until the function changes sign.
+    # The step size is multiplied by `dilate` after each step.
+    @assert δ > 0 "Initial step size must be positive"
+    @assert dilate >= 1 "Dilation factor must be at least 1"
+    @assert mono != 0 "Monotonicity must be non-zero"
     fa = f(a)
     fa == 0 && return (a, a, fa, fa)
-    sgn_δ = mono * sign(fa)
+    sgn_δ = sign(mono) * sign(fa)
     b = a - sgn_δ * δ
     fb = f(b)
     fb == 0 && return (b, b, fb, fb)
@@ -141,7 +234,10 @@ Optim.jl is licensed under the MIT License:
 > The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 =#
-function brents_method(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xatol = eps(T), maxiters::Int = 1_000) where {T <: AbstractFloat}
+
+#### Brent's method (minimization)
+
+function brents_method(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
     @assert x₁ <= x₂ "x₁ must be less than x₂"
 
     α = 2 - T(φ) # α ≈ 0.381966
@@ -159,7 +255,7 @@ function brents_method(f, x₁::T, x₂::T; xrtol = sqrt(eps(T)), xatol = eps(T)
         q = zero(T)
         xₘ = (x₂ + x₁) / 2
 
-        Δx_tol = xrtol * abs(x) + xatol
+        Δx_tol = xatol + xrtol * abs(x)
         if abs(x - xₘ) + (x₂ - x₁) / 2 <= 2 * Δx_tol
             break # converged
         end
