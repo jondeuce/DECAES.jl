@@ -23,16 +23,12 @@ function status = decaes(varargin)
 %   --runtime:  Path to Julia binary runtime. Defaults to 'julia'.
 %   --threads:  Number of computational threads for DECAES to use.
 %               Defaults to 'auto', deferring to Julia to choose the optimal value.
+%   --update:   Update to the latest version of DECAES. This is done by deleting and
+%               reinstalling the DECAES project folder (see --project). If you are using
+%               a custom project folder via --project, you must update it manually.
 %   --project:  Julia project into which DECAES is installed. By default, a
 %               folder '.decaes' is created in the directory containing this file.
-%   --server:   (Experimental) start a local Julia server for running DECAES.
-%               The first time DECAES is called with the --server flag, a background
-%               Julia process will be instantiated with DECAES loaded. Subsequent
-%               calls to DECAES with the --server flag will run DECAES on this
-%               local Julia server, leading to greatly reduced startup time and
-%               much friendlier interactive use. The Julia server will be killed
-%               automatically when Matlab exits. Do not use this flag if DECAES
-%               only needs to be run once.
+%               Typically, this flag does not need to be used.
 %
 % OUTPUTS:
 %   status:     (optional) System call status; see SYSTEM for details
@@ -86,9 +82,9 @@ function status = decaes(varargin)
 %       lcurve
 %       --SaveRegParam
 %
-%   Run the example using the above settings file 'settings.txt' on a local Julia server:
+%   Run the example using the above settings file 'settings.txt' using four Julia threads:
 %
-%       decaes --server @settings.txt
+%       decaes --threads 4 @settings.txt
 %
 %   Note the separation of the Matlab-specific flags from the DECAES settings file.
 %
@@ -100,6 +96,17 @@ function status = decaes(varargin)
 
     % Instantiate the default project, if necessary
     jl_instantiate_project(opts);
+
+    % If DECAES was updated and no other args were passed, print help message and exit
+    if opts.update && isempty(decaes_args)
+        status = decaes('--help');
+        if status == 0
+            fprintf('[ Info: Updated DECAES\n');
+        else
+            fprintf('[ Error: Failed to update DECAES\n');
+        end
+        return
+    end
 
     % Call DECAES command line interface
     if opts.server
@@ -118,6 +125,11 @@ end
 function jl_instantiate_project(opts)
 
     if strcmpi(opts.project, default_project)
+        if opts.update
+            % Delete and reinstall DECAES project folder
+            rmdir(opts.project, 's');
+        end
+
         % Check if project folder exists with a Project.toml file
         proj_folder_exists = exist(opts.project, 'dir');
         proj_file_exists = exist(fullfile(opts.project, 'Project.toml'), 'file');
@@ -147,8 +159,8 @@ function cmd = jl_build_cmd(opts)
     jl_cmd_args = {
         opts.runtime
         '--startup-file=no'
+        '--color=no'
         '--quiet'
-        '--optimize=3'
         sprintf('--threads=%s', opts.threads)
     };
     if ~isempty(opts.project)
@@ -346,7 +358,7 @@ function runtime = try_find_julia_runtime()
     jl_sys_bindir = tempname;
     cleanup_fid = onCleanup(@() delete([jl_sys_bindir, '*']));
 
-    cmd = sprintf('%s --startup-file=no --quiet -e ''open(raw"%s"; write = true) do io; print(io, joinpath(Base.Sys.BINDIR, Base.julia_exename())); end''', runtime, jl_sys_bindir);
+    cmd = sprintf('%s --startup-file=no --color=no --quiet -e ''open(raw"%s"; write = true) do io; print(io, joinpath(Base.Sys.BINDIR, Base.julia_exename())); end''', runtime, jl_sys_bindir);
     [st, ~] = system(cmd);
 
     if st == 0
@@ -392,6 +404,9 @@ function [opts, decaes_args] = parse_args(varargin)
                 case '--project'
                     mat_args = {mat_args{:}, 'project', varargin{ii+1}}; %#ok
                     ii = ii + 2;
+                case '--update'
+                    mat_args = {mat_args{:}, 'update', true}; %#ok
+                    ii = ii + 1;
                 case '--server'
                     mat_args = {mat_args{:}, 'server', true}; %#ok
                     ii = ii + 1;
@@ -415,9 +430,15 @@ function [opts, decaes_args] = parse_args(varargin)
     addParameter(p, 'runtime', '', @ischar);
     addParameter(p, 'threads', 'auto', @(x) strcmpi(x, 'auto') || ~isnan(check_positive_int(x)));
     addParameter(p, 'project', default_project, @ischar);
+    addParameter(p, 'update', false, @islogical);
     addParameter(p, 'server', false, @islogical);
     parse(p, mat_args{:});
     opts = p.Results;
+
+    if opts.server
+        % Server is deprecated; precompilation on Julia v1.9+ and DECAES v0.5.2+ makes it unnecessary
+        warning('The --server flag is deprecated and will be removed in a future release. Please upgrade to the latest Julia and DECAES versions, where DECAES startup overhead is negligible and therefore the --server flag is no longer needed. To update DECAES, run ''decaes --update''.');
+    end
 
     if isempty(opts.runtime)
         opts.runtime = try_find_julia_runtime;
