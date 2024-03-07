@@ -344,7 +344,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; legacy = fa
         end
 
         # Find bracketing interval containing root, then perform bisection search with slightly higher tolerance to not waste f evals
-        a, b, fa, fb = bracketing_interval_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
+        a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
         a, fa, c, fc, b, fb = bisect_root(f, a, b, fa, fb; xatol = T(0.05), xrtol = T(0.0), ftol = (Chi2Factor - 1) / 100)
 
         # Root of secant line through `(a, fa), (b, fb)` or `(c, fc), (b, fb)` to improve bisection accuracy
@@ -363,7 +363,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T; legacy = fa
         end
 
         # Find bracketing interval containing root
-        a, b, fa, fb = bracketing_interval_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 100)
+        a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 100)
 
         # Find root using Brent's method
         logmu_final, relerr_final = brent_root(f, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = (Chi2Factor - 1) / 1000, maxiters = 100)

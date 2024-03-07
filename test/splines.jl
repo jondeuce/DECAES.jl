@@ -37,7 +37,7 @@ function test_poly()
             end
 
             # Test minimization on an interval [a, b] #TODO `minimize(p::Poly, a::Real, b::Real)` method?
-            a, b = sort(randn(2))
+            a, b = randn() .+ (1 + rand()) .* (-0.5, 0.5)
             xs = range(a, b; length = 1024)
             if d == 1
                 x̄, px̄ = DECAES.minimize_linear((coeffs...,), a, b)
@@ -51,6 +51,10 @@ function test_poly()
                 x̄, px̄ = DECAES.minimize_cubic((coeffs...,), a, b)
                 @test a <= x̄ <= b
                 @test all(p(x) >= px̄ - 1e-12 for x in xs)
+
+                x̄, px̄ = DECAES.maximize_cubic((coeffs...,), a, b)
+                @test a <= x̄ <= b
+                @test all(p(x) <= px̄ + 1e-12 for x in xs)
             end
         end
     end
@@ -116,7 +120,7 @@ function test_cubic_splines()
     end
 end
 
-function cubic_hermite_interpolator_params_iter()
+function hermite_boundary_conditions_iter()
     # Pairs of endpoint slopes
     ms = Iterators.flatten((
         ((s0 * rand(), s1 * rand()) for s0 in (-1, 0, +1), s1 in (-1, 0, +1)), # differing positive, negative, and zero slopes
@@ -124,14 +128,15 @@ function cubic_hermite_interpolator_params_iter()
     ))
 
     # Pairs of endpoint values
-    us = (randn() .+ (s * rand(), -s * rand()) for s in -1:1) # u0 < u1, u0 = u1, and u0 > u1
+    us = (randn() .+ (s * rand(), -s * rand()) for s in (-1, 0, +1)) # u0 < u1, u0 = u1, and u0 > u1
 
-    return ((u0, u1, m0, m1) for ((u0, u1), (m0, m1)) in Iterators.product(us, ms))
+    iter = ((u0, u1, m0, m1) for ((u0, u1), (m0, m1)) in Iterators.product(us, ms))
+    return Iterators.take(Iterators.cycle(iter), 1_000)
 end
 
 function test_minimize_cubic_hermite_interpolator()
-    for (u0, u1, m0, m1) in cubic_hermite_interpolator_params_iter()
-        a, b = sort(randn(2))
+    for (u0, u1, m0, m1) in hermite_boundary_conditions_iter()
+        a, b = randn() .+ (1 + rand()) .* (-0.5, 0.5)
         c, r = (a + b) / 2, (b - a) / 2
         spl = DECAES.CubicHermiteInterpolator(a, b, u0, u1, m0, m1)
         (; coeffs) = spl
@@ -145,11 +150,72 @@ function test_minimize_cubic_hermite_interpolator()
         t = 2 * rand() - 1
         x = c + r * t
         @test evalpoly(t, coeffs) ≈ spl(x)
-        @test evalpoly(t, ∇coeffs) ≈ r * DECAES.ForwardDiff.derivative(spl, x) rtol = 1e-12 atol = 1e-12
+        @test evalpoly(t, ∇coeffs) ≈ r * DECAES.ForwardDiff.derivative(spl, x)
 
         xmin, umin = DECAES.minimize(spl)
         @test umin ≈ spl(xmin) rtol = 1e-12 atol = 1e-12
         @test all(spl(x) >= umin - 1e-12 for x in range(a, b; length = 1024 + 1))
+
+        xmax, umax = DECAES.maximize(spl)
+        @test umax ≈ spl(xmax) rtol = 1e-12 atol = 1e-12
+        @test all(spl(x) <= umax + 1e-12 for x in range(a, b; length = 1024 + 1))
+    end
+end
+
+function test_minimize_normal_hermite_interpolator()
+    @testset "$(nameof(typeof(kernel)))" for kernel in (DECAES.RK_H1(1.0), DECAES.RK_H2(1.0))
+        for (u0, u1, m0, m1) in hermite_boundary_conditions_iter()
+            dom = randn() .+ (1 + rand()) .* (-0.5, 0.5)
+            spl = NormalHermiteSplines.interpolate([dom...], [u0, u1], [dom...], [m0, m1], kernel)
+
+            f = Base.Fix1(NormalHermiteSplines.evaluate, spl)
+            ∂f = Base.Fix1(NormalHermiteSplines.evaluate_derivative, spl)
+            cache = ForwardDiff.DiffResults.ImmutableDiffResult(1.0, (1.0,))
+            function ∂f_and_∂²f(x)
+                res = ForwardDiff.derivative!(cache, ∂f, x)
+                return ForwardDiff.DiffResults.value(res), ForwardDiff.DiffResults.derivative(res)
+            end
+
+            xatol = xrtol = 1e-12
+            xs = range(dom...; length = 1024 + 1)
+            us = f.(xs)
+            ulo, ilo = findmin(us)
+            isbdry = ilo ∈ (1, length(xs))
+
+            # Minimize via Brent's method
+            xmin, umin = DECAES.brents_method(f, dom...; xatol, xrtol)
+            ∂xmin, ∂²xmin = ∂f_and_∂²f(xmin)
+            isbdry_brent = min(xmin - dom[1], dom[2] - xmin) < 1e-6
+            islocal_brent = abs(∂xmin) < 1e-3 && ∂²xmin > 0
+
+            if isbdry
+                # Brent's method should converge towards an endpoint or a local minimum
+                @test isbdry_brent || islocal_brent
+                @test ulo ≈ min(u0, u1) # min should be achieved at one of the endpoints
+                @test umin == f(xmin)
+            else
+                # Should converge to a local minimum
+                @test abs(∂xmin) < 1e-3
+                @test ∂²xmin > 0
+                @test umin == f(xmin)
+            end
+
+            # Minimize via Newton-Bisect
+            xmin, umin = DECAES.newton_bisect_minimum(f, ∂f_and_∂²f, dom...; xatol, xrtol)
+            ∂xmin, ∂²xmin = ∂f_and_∂²f(xmin)
+
+            if isnan(xmin)
+                # Newton-Bisect returns NaN if no local minimum is found, therefore global min should be at boundary
+                @test isnan(umin)
+                @test isbdry
+                @test ulo ≈ min(u0, u1) # min should be achieved at one of the endpoints
+            else
+                # Should converge to a local minimum
+                @test abs(∂xmin) < 1e-8
+                @test ∂²xmin > 0
+                @test umin == f(xmin)
+            end
+        end
     end
 end
 
@@ -256,8 +322,9 @@ end
     @testset "cubic" begin
         test_cubic_splines()
     end
-    @testset "cubic hermite interpolator" begin
-        test_minimize_cubic_hermite_interpolator()
+    @testset "hermite interpolators" begin
+        @testset "cubic" test_minimize_cubic_hermite_interpolator()
+        @testset "normal" test_minimize_normal_hermite_interpolator()
     end
     @testset "mock surrogate search problem" begin
         test_mock_surrogate_search_problem()

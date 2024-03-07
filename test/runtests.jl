@@ -2,6 +2,7 @@ using Aqua
 using Test
 
 using DoubleFloats
+using ForwardDiff
 using LinearAlgebra
 using Pkg
 using PolynomialRoots: PolynomialRoots
@@ -11,6 +12,7 @@ using TOML
 
 using DECAES
 using DECAES: NNLS
+using DECAES: NormalHermiteSplines
 using DECAES:
     GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
     LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,

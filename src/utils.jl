@@ -11,6 +11,8 @@ logrange(a::Real, b::Real, len::Int) = (r = exp.(range(log(a), log(b); length = 
 
 @inline strictsign(x::Real) = ifelse(signbit(x), -one(x), one(x))
 
+@inline lt_nan(x, y) = ifelse(isnan(x), typemax(typeof(x)), x) < ifelse(isnan(y), typemax(typeof(y)), y) # <(x, y), treating NaN as Inf
+
 @inline basisvector(::Type{SVector{D, T}}, i::Int) where {D, T} = SVector{D, T}(ntuple(d -> T(d == i), D))
 
 function meshgrid(::Type{T}, iters...) where {T}
@@ -47,57 +49,9 @@ function with_singlethreaded_blas(f)
     end
 end
 
-function with_random_seed(f, rng = Random.default_rng(); seed::Int = 0)
-    state = copy(rng)
-    try
-        Random.seed!(rng, seed)
-        f(rng)
-    finally
-        copy!(rng, state)
-    end
-end
-
-function set_diag!(A::AbstractMatrix, val)
-    @inbounds @simd for i in 1:min(size(A)...)
-        A[i, i] = val
-    end
-    return A
-end
-
-function set_top!(A::AbstractArray, B::AbstractArray)
-    @inbounds @simd for I in CartesianIndices(B)
-        A[I] = B[I]
-    end
-    return A
-end
-
-function find_nearest(r::AbstractRange, x::Number)
-    idx = x <= r[1] ? 1 :
-          x >= r[end] ? length(r) :
-          clamp(round(Int, 1 + (x - r[1]) / step(r)), 1, length(r))
-    return r[idx], idx # nearest value in r to x and corresponding index
-end
-
-function local_gridsearch(f, xs, i0)
-    get(j) = @inbounds xs[clamp(j, firstindex(xs), lastindex(xs))]
-    i = i0
-    x⁻, x, x⁺ = get(i - 1), get(i), get(i + 1)
-    y⁻, y, y⁺ = f(x⁻), f(x), f(x⁺)
-    while !(y⁻ ≥ y ≤ y⁺) # search for local min
-        if y⁻ < y
-            i -= 1 # shift left
-            x⁻, x, x⁺ = get(i - 1), x⁻, x
-            y⁻, y, y⁺ = f(x⁻), y⁻, y
-        elseif y⁺ < y
-            i += 1 # shift right
-            x⁻, x, x⁺ = x, x⁺, get(i + 1)
-            y⁻, y, y⁺ = y, y⁺, f(x⁺)
-        else
-            break
-        end
-    end
-    return (; x, y, i)
-end
+####
+#### Dynamically sized caches
+####
 
 struct GrowableCache{K, V, C}
     keys::Vector{K}

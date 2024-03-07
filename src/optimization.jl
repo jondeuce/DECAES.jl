@@ -129,7 +129,7 @@ end
 
 #### Newton's method with bisection
 
-function newton_bisect_root(f_df, x0::T, x1::T, x2::T, y1::T = f_df(x1)[1], y2::T = f_df(x2)[1]; xrtol::T = √eps(T), xatol::T = eps(T), ftol::T = zero(T), maxiters::Int = 100) where {T <: AbstractFloat}
+function newton_bisect_root(f_∂f, x0::T, x1::T, x2::T, y1::T = f_∂f(x1)[1], y2::T = f_∂f(x2)[1]; xrtol::T = √eps(T), xatol::T = eps(T), ftol::T = zero(T), maxiters::Int = 100) where {T <: AbstractFloat}
     # Check initial points
     y1 == 0 && return (x1, y1)
     y2 == 0 && return (x2, y2)
@@ -143,7 +143,7 @@ function newton_bisect_root(f_df, x0::T, x1::T, x2::T, y1::T = f_df(x1)[1], y2::
 
     for iter in 1:maxiters
         # Evaluate function and derivative at the current estimate
-        y, dy = f_df(x)
+        y, dy = f_∂f(x)
         abs(y) <= ftol && return (x, y)
 
         # Update bracketing interval
@@ -188,7 +188,7 @@ end
     return s
 end
 
-function bracketing_interval_monotonic(f, a, δ; dilate = 1, mono = +1, maxiters::Int = 100)
+function bracket_root_monotonic(f, a::T, δ::T; dilate = 1, mono = +1, maxiters::Int = 100) where {T <: AbstractFloat}
     # Find bracketing interval for the root of a monotonic function.
     # The function is assumed to be increasing (decreasing) when `mono` is positive (negative).
     # Begin at point `a` and step by `δ` until the function changes sign.
@@ -198,21 +198,97 @@ function bracketing_interval_monotonic(f, a, δ; dilate = 1, mono = +1, maxiters
     @assert mono != 0 "Monotonicity must be non-zero"
     fa = f(a)
     fa == 0 && return (a, a, fa, fa)
-    sgn_δ = sign(mono) * sign(fa)
+    sgn_δ = sign(T(mono)) * sign(fa)
     b = a - sgn_δ * δ
     fb = f(b)
     fb == 0 && return (b, b, fb, fb)
-    δ *= dilate
+    δ *= T(dilate)
     cnt = 0
     while fa * fb > 0 && cnt < maxiters
         a, fa = b, fb
         b = a - sgn_δ * δ
         fb = f(b)
         fb == 0 && return (b, b, fb, fb)
-        δ *= dilate
+        δ *= T(dilate)
         cnt += 1
     end
     return a < b ? (a, b, fa, fb) : (b, a, fb, fa)
+end
+
+function bracket_local_minimum(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxdepth::Int = 5) where {T <: AbstractFloat}
+    a, b = minmax(x1, x2)
+    tol = xatol + xrtol * max(abs(a), abs(b))
+
+    # Search space is interior to [a, b] and slightly assymetric to avoid hitting exact zeros, midpoints, etc., which are susceptible to numerical issues
+    a⁺ = a + T(1 - 0.004849834917525) * tol / 2
+    b⁻ = b - T(1 + 0.004849834917525) * tol / 2
+    ∂ua⁺, ∂²ua⁺ = ∂f_∂²f(a⁺)
+    ∂ub⁻, ∂²ub⁻ = ∂f_∂²f(b⁻)
+
+    return bracket_local_minimum(f, ∂f_∂²f, a⁺, b⁻, ∂ua⁺, ∂ub⁻, ∂²ua⁺, ∂²ub⁻, tol, 0, maxdepth)
+end
+
+function bracket_local_minimum(f, ∂f_∂²f, a::T, b::T, ∂ua::T, ∂ub::T, ∂²ua::T, ∂²ub::T, tol::T, depth::Int, maxdepth::Int) where {T <: AbstractFloat}
+    spl = CubicHermiteInterpolator(a, b, ∂ua, ∂ub, ∂²ua, ∂²ub)
+    (x1, x2, x3), (s1, s2, s3) = signedroots(spl, tol / 2) # roots must be at least `tol / 2` from the interval endpoints
+
+    bracket, succ = if isnan(x1)
+        # No local minimum found; return failed bracket
+        (a, b, ∂ua, ∂ub, ∂²ua, ∂²ub), false
+    elseif isnan(x2)
+        # One local extremum found; return success if it is a minimum
+        (a, b, ∂ua, ∂ub, ∂²ua, ∂²ub), s1 > 0 && ∂ua * ∂ub < 0
+    elseif isnan(x3)
+        # Two local extrema found; evaluate midpoint
+        x = (x1 + x2) / 2
+        ∂ux, ∂²ux = ∂f_∂²f(x)
+        if s1 > 0
+            (a, x, ∂ua, ∂ux, ∂²ua, ∂²ux), ∂ua * ∂ux < 0
+        elseif s2 > 0
+            (x, b, ∂ux, ∂ub, ∂²ux, ∂²ub), ∂ux * ∂ub < 0
+        else
+            (a, b, ∂ua, ∂ub, ∂²ua, ∂²ub), false
+        end
+    else
+        if s2 > 0
+            # One local minimum, two local maxima
+            x⁻, x⁺ = (x1 + x2) / 2, (x2 + x3) / 2
+            ∂ux⁻, ∂²ux⁻ = ∂f_∂²f(x⁻)
+            ∂ux⁺, ∂²ux⁺ = ∂f_∂²f(x⁺)
+            (x⁻, x⁺, ∂ux⁻, ∂ux⁺, ∂²ux⁻, ∂²ux⁺), ∂ux⁻ * ∂ux⁺ < 0
+        elseif s1 > 0 && s3 > 0
+            # Two local minima, one local maximum
+            if spl(x1) < spl(x3)
+                x = (x1 + x2) / 2
+                ∂ux, ∂²ux = ∂f_∂²f(x)
+                (a, x, ∂ua, ∂ux, ∂²ua, ∂²ux), ∂ua * ∂ux < 0
+            else
+                x = (x2 + x3) / 2
+                ∂ux, ∂²ux = ∂f_∂²f(x)
+                (x, b, ∂ux, ∂ub, ∂²ux, ∂²ub), ∂ux * ∂ub < 0
+            end
+        else
+            # No local minima; return failed bracket
+            (a, b, ∂ua, ∂ub, ∂²ua, ∂²ub), false
+        end
+    end
+
+    if succ || depth >= maxdepth
+        # Successful, or reached maximum depth
+        return bracket, succ
+    else
+        # Bisect the bracket and continue searching
+        x = (a + b) / 2
+        ∂ux, ∂²ux = ∂f_∂²f(x)
+
+        bracket1, succ1 = bracket_local_minimum(f, ∂f_∂²f, a, x, ∂ua, ∂ux, ∂²ua, ∂²ux, tol, depth + 1, maxdepth)
+        succ1 && return bracket1, succ1
+
+        bracket2, succ2 = bracket_local_minimum(f, ∂f_∂²f, x, b, ∂ux, ∂ub, ∂²ux, ∂²ub, tol, depth + 1, maxdepth)
+        succ2 && return bracket2, succ2
+
+        return bracket, succ
+    end
 end
 
 ####
@@ -237,7 +313,7 @@ Optim.jl is licensed under the MIT License:
 
 #### Brent's method (minimization)
 
-function brents_method(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
+function brents_method(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
     @assert x₁ <= x₂ "x₁ must be less than x₂"
 
     α = 2 - T(φ) # α ≈ 0.381966
@@ -330,4 +406,14 @@ function brents_method(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = eps
     end
 
     return (x, y)
+end
+
+function newton_bisect_minimum(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxdepth::Int = 5, kwargs...) where {T <: AbstractFloat}
+    (x⁻, x⁺, ∂ux⁻, ∂ux⁺, ∂²ux⁻, ∂²ux⁺), succ = bracket_local_minimum(f, ∂f_∂²f, x1, x2; xrtol, xatol, maxdepth)
+    if !succ
+        return (T(NaN), T(NaN))
+    else
+        x, dx = newton_bisect_root(∂f_∂²f, (x⁻ + x⁺) / 2, x⁻, x⁺, ∂ux⁻, ∂ux⁺; xrtol, xatol, kwargs...)
+        return (x, f(x))
+    end
 end

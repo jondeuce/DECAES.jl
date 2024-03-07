@@ -66,7 +66,7 @@ end
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = UpperTriangular(uview(work.A, 1:ncomponents(work), components(work)))
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = choleskyfactor(work, Val(:U))'
 
-function NNLSWorkspace{T}(m, n) where {T}
+function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
     return NNLSWorkspace(
         zeros(T, m, n), # A
         zeros(T, m),    # b
@@ -83,13 +83,9 @@ end
 function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
     @assert size(b) == (m,)
-    work = NNLSWorkspace{T}(m, n)
+    work = NNLSWorkspace(T, m, n)
     load!(work, A, b)
     return work
-end
-
-function NNLSWorkspace(m::Int, n::Int, ::Type{T} = Float64) where {T}
-    return NNLSWorkspace{T}(m, n)
 end
 
 function load!(work::NNLSWorkspace{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
