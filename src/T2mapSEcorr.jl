@@ -451,35 +451,40 @@ struct T2DistWorkspace{Reg, T, W}
     μ::Base.RefValue{T}
     χ²fact::Base.RefValue{T}
 end
-function T2DistWorkspace(reg::RegularizationMethod, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, μ::Base.RefValue{T} = Ref(T(NaN)), χ²fact::Base.RefValue{T} = Ref(T(NaN))) where {T}
+
+function T2DistWorkspace(reg::RegularizationMethod, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
+    μ, χ²fact = Ref(T(NaN)), Ref(T(NaN))
     return T2DistWorkspace(reg, nnls_workspace(reg, decay_basis, decay_data), μ, χ²fact)
 end
 
-function nnls!(t2work::T2DistWorkspace{NoRegularization, T}) where {T}
-    return x, t2work.μ[], t2work.χ²fact[] = lsqnonneg!(t2work.nnls_work), zero(T), one(T)
+function t2_distribution!(t2work::T2DistWorkspace{NoRegularization, T}) where {T}
+    t2work.μ[], t2work.χ²fact[] = zero(T), one(T)
+    return lsqnonneg!(t2work.nnls_work)
 end
 
-function nnls!(t2work::T2DistWorkspace{ChiSquared{T}, T}) where {T}
-    return x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_chi2!(t2work.nnls_work, t2work.reg.Chi2Factor; legacy = t2work.reg.legacy)
+function t2_distribution!(t2work::T2DistWorkspace{ChiSquared{T}, T}) where {T}
+    x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_chi2!(t2work.nnls_work, t2work.reg.Chi2Factor, t2work.reg.legacy)
+    return x
 end
 
-function nnls!(t2work::T2DistWorkspace{GCV, T}) where {T}
-    return x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_gcv!(t2work.nnls_work)
+function t2_distribution!(t2work::T2DistWorkspace{GCV, T}) where {T}
+    x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_gcv!(t2work.nnls_work)
+    return x
 end
 
-function nnls!(t2work::T2DistWorkspace{LCurve, T}) where {T}
-    return x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_lcurve!(t2work.nnls_work)
+function t2_distribution!(t2work::T2DistWorkspace{LCurve, T}) where {T}
+    x, t2work.μ[], t2work.χ²fact[] = lsqnonneg_lcurve!(t2work.nnls_work)
+    return x
 end
 
-t2_distribution!(t2work::T2DistWorkspace) = nnls!(t2work)
-solution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
+t2_distribution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
 
 # =========================================================
 # Save thread local results to output maps
 # =========================================================
 function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T}, o::T2mapOptions{T}, I::CartesianIndex) where {T}
     (; logT2_times, decay_basis, decay_scale, decay_data, decay_curvefit, residuals, flip_angle_work, T2_dist_work) = thread_buffer
-    T2_dist = solution(T2_dist_work)
+    T2_dist = t2_distribution(T2_dist_work)
 
     @inbounds begin
         # Rescale results to original signal scale

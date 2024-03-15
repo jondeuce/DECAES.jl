@@ -554,5 +554,5 @@ function mock_T2_pipeline(; kwargs...)
     t2maps, t2dist = T2mapSEcorr(image, t2map_opts)
     t2part = T2partSEcorr(t2dist, t2part_opts)
 
-    return t2maps, t2dist, t2part
+    return image, t2maps, t2dist, t2part
 end

@@ -1,4 +1,4 @@
-NNLS_SIZES = vec(collect(Iterators.product([1, 2, 5, 8, 16, 32], [1, 2, 5, 8, 16, 32])))
+const NNLS_SIZES = vec(collect(Iterators.product([1, 2, 5, 8, 16, 32], [1, 2, 5, 8, 16, 32])))
 
 function rand_NNLS_data(m, n)
     # A strictly positive, unconstrained x has negative entries
@@ -31,6 +31,29 @@ function verify_NNLS(m, n)
         @test NNLS.components(work) == i₊
         @test setdiff(1:n, NNLS.components(work)) == sort(i₀)
 
+        # Solution
+        @test all(>(0), x₊)
+        @test all(==(0), x₀)
+        @test x₊ ≈ (A₊'A₊) \ (A₊'b)
+        @test x₊ ≈ A₊ \ b
+
+        # Dual (i.e. gradient)
+        if NNLS.residualnorm(work) > 0
+            # Solution is not exact and gradient has negative components
+            @test all(<(0), w₋)
+            @test all(==(0), w₀)
+            @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-12 atol = 1e-8
+            @test w ≈ -A' * (A * x - b) rtol = 1e-12 atol = 1e-8
+        else
+            # Solution is exact, gradient is zero
+            @test all(==(0), w)
+        end
+
+        # KKT conditions
+        @test all(>=(0), x) # primal feasibility
+        @test all(<=(0), w) # dual feasibility
+        @test all(==(0), x .* w) # complementary slackness
+
         # Internals
         @test U == work.A[1:n₊, i₊]
         @test L == work.A[1:n₊, i₊]'
@@ -58,24 +81,6 @@ function verify_NNLS(m, n)
             L⁻¹b₊ = copy(b₊)
             NNLS.solve_triangular_system!(L⁻¹b₊, work.A, work.idx, n₊, Val(true))
             @test L⁻¹b₊ ≈ L \ b₊
-        end
-
-        # Solution
-        @test all(>(0), x₊)
-        @test all(==(0), x₀)
-        @test x₊ ≈ (A₊'A₊) \ (A₊'b)
-        @test x₊ ≈ A₊ \ b
-
-        # Dual (i.e. gradient)
-        if NNLS.residualnorm(work) > 0
-            # Solution is not exact and gradient has negative components
-            @test all(<(0), w₋)
-            @test all(==(0), w₀)
-            @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-12 atol = 1e-8
-            @test w ≈ -A' * (A * x - b) rtol = 1e-12 atol = 1e-8
-        else
-            # Solution is exact, gradient is zero
-            @test all(==(0), w)
         end
 
         # Cholesky factors
@@ -115,7 +120,7 @@ function run_lcurve_corner(f)
     return lcurve_corner(f, log(0.1), log(10.0); xtol = 1e-6, Ptol = 1e-6, Ctol = 0)
 end
 
-@testset "lsqnonneg_lcurve" begin
+@testset "lcurve_corner" begin
     # Test allocations
     f = build_lcurve_corner_cached_fun()
     empty!(f)
@@ -127,15 +132,67 @@ end
     @test run_lcurve_corner(f) ≈ 0 atol = 1e-3
 end
 
-@testset "gcv" begin
+@testset "lsqnonneg_lcurve" begin
+    for (m, n) in NNLS_SIZES
+        A, b = rand_NNLS_data(m, n)
+        work = DECAES.lsqnonneg_lcurve_work(A, b)
+        @test @allocated(DECAES.lsqnonneg_lcurve!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+    end
+end
+
+@testset "lsqnonneg_chi2" begin
+    for (m, n) in NNLS_SIZES
+        A, b = rand_NNLS_data(m, n)
+        work = DECAES.lsqnonneg_chi2_work(A, b)
+
+        # Test solver
+        chi2_target = 1.01 + 0.02 * rand()
+        x_unreg = DECAES.solve!(work.nnls_prob)
+        chi2_min = DECAES.chi2(work.nnls_prob)
+
+        for (method, atol) in [
+            :bisect => (chi2_target - 1) / 100,
+            :brent => (chi2_target - 1) / 1000,
+        ]
+            (; x, mu, chi2factor) = DECAES.lsqnonneg_chi2!(work, chi2_target; method)
+
+            if chi2_min <= 0
+                # Unregularized solution should be returned
+                @test x === x_unreg
+                @test mu == 0
+                @test chi2factor == 1
+            elseif sum(abs2, x_unreg) == 0
+                # Unsure what should be returned here; unreg solution is x = 0, and regularization can only reduce ||x||.
+                # Since ||x|| = 0 is already minimized, mu is undefined; should we enforce that mu = 0 is returned? Would be consistent with chi2factor = 1.
+                # Doesn't really matter, since this *really* should never occur in practice, but still, should probably make a choice.
+                @test x == x_unreg
+                @test isfinite(mu) && mu > 0 # any value of mu should result in x == x_unreg and chi2factor == 1
+                @test chi2factor == 1
+            else
+                @test mu > 0
+                @test chi2factor ≈ chi2_target atol = atol
+            end
+
+            @test @allocated(DECAES.lsqnonneg_chi2!(work, chi2_target; method)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+        end
+    end
+end
+
+@testset "lsqnonneg_gcv" begin
     for (m, n) in NNLS_SIZES
         A, b = rand_NNLS_data(m, n)
         work = DECAES.NNLSGCVRegProblem(A, b)
+
+        # Test loss function
         logμ = randn()
         gcv = DECAES.gcv!(work, logμ)
         χ² = DECAES.chi2(DECAES.get_cache(work.nnls_prob_smooth_cache))
         @test gcv ≈ χ² / DECAES.gcv_tr(A, exp(logμ))^2
         @test gcv ≈ χ² / DECAES.gcv_tr_brute(A, exp(logμ))^2
+        @test @allocated(DECAES.gcv!(work, logμ)) == 0
+
+        # Test solver
+        @test @allocated(DECAES.lsqnonneg_gcv!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
     end
 end
 

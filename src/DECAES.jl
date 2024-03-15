@@ -48,9 +48,9 @@ include("main.jl")
 
 # Exported symbols
 export MAT, NIfTI, ParXRec, load_image
-export T2mapSEcorr, T2mapOptions, T2partSEcorr, T2partOptions
+export T2mapOptions, T2mapSEcorr, T2partOptions, T2partSEcorr
 export EPGdecaycurve, EPGdecaycurve!, EPGdecaycurve_work
-export lsqnonneg, lsqnonneg_chi2, lsqnonneg_gcv, lsqnonneg_lcurve, lcurve_corner
+export lcurve_corner, lsqnonneg, lsqnonneg_chi2, lsqnonneg_gcv, lsqnonneg_lcurve, lsqnonneg_tikh
 export main
 
 # Precompile

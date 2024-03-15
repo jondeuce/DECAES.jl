@@ -83,14 +83,29 @@ end
     return x
 end
 
-function extremize(spl::CubicHermiteInterpolator{T}) where {T}
-    # Find the minimum of the cubic polynomial
-    (; u0, u1, dom, coeffs) = spl
-    (tlo, ulo), (thi, uhi) = extremize_cubic(coeffs, -one(T), one(T), u0, u1)
-    return (todomain(tlo, dom), ulo), (todomain(thi, dom), uhi)
+function minimize(spl::CubicHermiteInterpolator{T}) where {T}
+    (; u0, u1, m0, m1, dom, coeffs) = spl
+    xend, uend = u0 < u1 ? (dom[1], u0) : (dom[2], u1)
+
+    # See: https://github.com/ZJU-FAST-Lab/LBFGS-Lite/blob/35450d6256aad2e1c137ec955adfdc90710da80b/include/lbfgs.hpp#L391
+    Δ = 3 * (u0 - u1)
+    θ = Δ / 2 + (m0 + m1)
+    γ = θ^2 - m0 * m1
+    γ = γ > 0 ? -√γ : zero(T)
+    p = -(Δ + (m0 + m1))
+    q = 2 * γ + (m0 - m1)
+    if abs(p) < abs(q)
+        t = p / q
+        y = evalpoly(t, coeffs)
+        if y < uend
+            return todomain(t, dom), y
+        else
+            return xend, uend
+        end
+    else
+        return xend, uend
+    end
 end
-minimize(spl::CubicHermiteInterpolator) = extremize(spl)[1]
-maximize(spl::CubicHermiteInterpolator) = extremize(spl)[2]
 
 function signedroots(spl::CubicHermiteInterpolator{T}, atol::T = zero(T)) where {T}
     (; dom, coeffs) = spl
@@ -99,8 +114,8 @@ function signedroots(spl::CubicHermiteInterpolator{T}, atol::T = zero(T)) where 
     x1, s1 = !isnan(t1) ? (x = todomain(t1, dom); xlo <= x <= xhi ? (x, s1) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
     x2, s2 = !isnan(t2) ? (x = todomain(t2, dom); xlo <= x <= xhi ? (x, s2) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
     x3, s3 = !isnan(t3) ? (x = todomain(t3, dom); xlo <= x <= xhi ? (x, s3) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
-    I = TupleTools.sortperm((x1, x2, x3); lt = lt_nan) # sort, treating NaN's as Inf
-    return getindex.(((x1, x2, x3),), I), getindex.(((s1, s2, s3),), I)
+    (x1, s1), (x2, s2), (x3, s3) = TupleTools.sort(((x1, s1), (x2, s2), (x3, s3)); by = first, lt = lt_nan) # sort, treating NaN's as Inf
+    return (x1, x2, x3), (s1, s2, s3)
 end
 roots(spl::CubicHermiteInterpolator) = signedroots(spl)[1]
 
@@ -262,7 +277,7 @@ function signed_roots_real_cubic(coeffs::NTuple{4, T}) where {T <: AbstractFloat
     b = coeffs[2] / coeffs[4]
     c = coeffs[1] / coeffs[4]
     a² = a^2
-    R = (2 * a * a² - 9 * a * b + 27 * c) / 54
+    R = (a * (2 * a² - 9 * b) + 27 * c) / 54
     Q = (a² - 3 * b) / 9
     R², Q³ = R^2, Q^3
     if R² < Q³

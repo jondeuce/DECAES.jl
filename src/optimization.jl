@@ -197,10 +197,12 @@ function bracket_root_monotonic(f, a::T, δ::T; dilate = 1, mono = +1, maxiters:
     @assert dilate >= 1 "Dilation factor must be at least 1"
     @assert mono != 0 "Monotonicity must be non-zero"
     fa = f(a)
+    !isfinite(fa) && return (a, a, T(NaN), T(NaN))
     fa == 0 && return (a, a, fa, fa)
     sgn_δ = sign(T(mono)) * sign(fa)
     b = a - sgn_δ * δ
     fb = f(b)
+    !isfinite(fb) && return (a, a, fa, fa)
     fb == 0 && return (b, b, fb, fb)
     δ *= T(dilate)
     cnt = 0
@@ -208,6 +210,7 @@ function bracket_root_monotonic(f, a::T, δ::T; dilate = 1, mono = +1, maxiters:
         a, fa = b, fb
         b = a - sgn_δ * δ
         fb = f(b)
+        !isfinite(fb) && return (a, a, fa, fa)
         fb == 0 && return (b, b, fb, fb)
         δ *= T(dilate)
         cnt += 1

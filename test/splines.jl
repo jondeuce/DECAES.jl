@@ -155,10 +155,6 @@ function test_minimize_cubic_hermite_interpolator()
         xmin, umin = DECAES.minimize(spl)
         @test umin ≈ spl(xmin) rtol = 1e-12 atol = 1e-12
         @test all(spl(x) >= umin - 1e-12 for x in range(a, b; length = 1024 + 1))
-
-        xmax, umax = DECAES.maximize(spl)
-        @test umax ≈ spl(xmax) rtol = 1e-12 atol = 1e-12
-        @test all(spl(x) <= umax + 1e-12 for x in range(a, b; length = 1024 + 1))
     end
 end
 
