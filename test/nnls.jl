@@ -161,14 +161,15 @@ end
             if chi2_min <= 0
                 # Unregularized solution should be returned
                 @test x === x_unreg
+                @test isfinite(mu)
                 @test mu == 0
                 @test chi2factor == 1
             elseif sum(abs2, x_unreg) == 0
-                # Unsure what should be returned here; unreg solution is x = 0, and regularization can only reduce ||x||.
-                # Since ||x|| = 0 is already minimized, mu is undefined; should we enforce that mu = 0 is returned? Would be consistent with chi2factor = 1.
-                # Doesn't really matter, since this *really* should never occur in practice, but still, should probably make a choice.
+                # Unreg solution is x = 0, and regularization can only reduce ||x||.
+                # Since ||x|| = 0 is already minimized, μ is undefined; we enforce that μ = 0 is returned which is consistent with chi2factor = 1.
                 @test x == x_unreg
-                @test isfinite(mu) && mu > 0 # any value of mu should result in x == x_unreg and chi2factor == 1
+                @test isfinite(mu)
+                @test mu == 0 # any value of μ should result in x == x_unreg and chi2factor == 1
                 @test chi2factor == 1
             else
                 @test mu > 0

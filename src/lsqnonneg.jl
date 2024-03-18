@@ -23,9 +23,10 @@ function solve!(work::NNLSProblem, A, b)
 end
 solve!(work::NNLSProblem) = solve!(work, work.A, work.b)
 
-solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
-
-chi2(work::NNLSProblem) = NNLS.residualnorm(work.nnls_work)^2
+@inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
+@inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
+@inline residualnorm(work::NNLSProblem) = NNLS.residualnorm(work.nnls_work)
+@inline chi2(work::NNLSProblem) = residualnorm(work)^2
 
 """
     lsqnonneg(A::AbstractMatrix, b::AbstractVector)
@@ -157,7 +158,8 @@ function solve!(work::NNLSTikhonovRegProblem, μ::Real)
     return solution(work)
 end
 
-solution(work::NNLSTikhonovRegProblem) = NNLS.solution(work.nnls_prob.nnls_work)
+@inline solution(work::NNLSTikhonovRegProblem) = NNLS.solution(work.nnls_prob.nnls_work)
+@inline ncomponents(work::NNLSTikhonovRegProblem) = NNLS.ncomponents(work.nnls_prob.nnls_work)
 
 loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_prob.nnls_work)^2
 
@@ -286,7 +288,8 @@ function NNLSChi2RegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T
     return NNLSChi2RegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache)
 end
 
-solution(work::NNLSChi2RegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
+@inline solution(work::NNLSChi2RegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
+@inline ncomponents(work::NNLSChi2RegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
 
 """
     lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, Chi2Factor::Real)
@@ -331,11 +334,13 @@ lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector) = NNLSChi2RegProblem(A
 function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :bisect) where {T}
     # Non-regularized solution
     solve!(work.nnls_prob)
+    x_unreg = solution(work.nnls_prob)
     chi2_min = chi2(work.nnls_prob)
 
-    # Non-regularized solution is exact. The only solution to chi2(μ) = Chi2Factor * chi2_min = 0 is μ = 0, since chi2(μ) > 0 for all μ > 0
-    if chi2_min == 0
-        x_final = solution(work.nnls_prob)
+    if chi2_min == 0 || ncomponents(work.nnls_prob) == 0
+        # 1. If non-regularized solution is exact, the only solution to chi2(μ) = Chi2Factor * chi2_min = 0 is μ = 0, since chi2(μ) > 0 for all μ > 0.
+        # 2. If non-regularized solution is zero, any value of μ > 0 also results in x(μ) = 0, and so chi2(μ) = Chi2Factor * chi2_min has either no solutions if Chi2Factor > 1, or infinitely many solutions if Chi2Factor = 1; choose μ = 0 and Chi2Factor = 1.
+        x_final = x_unreg
         return (; x = x_final, mu = zero(T), chi2factor = one(T))
     end
 
@@ -351,7 +356,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Boo
             return chi2(get_cache(work.nnls_prob_smooth_cache))
         end
         if mu_final == 0
-            x_final = solution(work.nnls_prob)
+            x_final = x_unreg
         else
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         end
@@ -384,7 +389,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Boo
             mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(chi2_target, relerr_final)
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         else
-            x_final, mu_final, chi2_final = solution(work.nnls_prob), zero(T), one(T)
+            x_final, mu_final, chi2_final = x_unreg, zero(T), one(T)
         end
 
     elseif method === :brent
@@ -408,7 +413,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Boo
             mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(chi2_target, relerr_final)
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         else
-            x_final, mu_final, chi2_final = solution(work.nnls_prob), zero(T), one(T)
+            x_final, mu_final, chi2_final = x_unreg, zero(T), one(T)
         end
     else
         error("Unknown root-finding method: :$method")
@@ -486,7 +491,8 @@ function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where 
     return NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches)
 end
 
-solution(work::NNLSLCurveRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
+@inline solution(work::NNLSLCurveRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
+@inline ncomponents(work::NNLSLCurveRegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
 
 """
     lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector)
@@ -889,7 +895,8 @@ function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     return NNLSGCVRegProblem(A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf, nnls_prob, nnls_prob_smooth_cache)
 end
 
-solution(work::NNLSGCVRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
+@inline solution(work::NNLSGCVRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
+@inline ncomponents(work::NNLSGCVRegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
 
 """
     lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector)
