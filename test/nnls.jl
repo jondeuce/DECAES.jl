@@ -146,15 +146,17 @@ end
         work = DECAES.lsqnonneg_chi2_work(A, b)
 
         # Test solver
-        chi2_target = 1.01 + 0.02 * rand()
         x_unreg = DECAES.solve!(work.nnls_prob)
         chi2_min = DECAES.chi2(work.nnls_prob)
+        chi2_max = sum(abs2, b) # lim_{μ -> ∞} ||A*x(μ) - b||² = ||b||², since lim_{μ -> ∞} x(μ) = 0
+        chi2_target = √(chi2_min * chi2_max)
+        chi2factor_target = chi2_target / chi2_min #TODO: add some randomness?
 
         for (method, atol) in [
-            :bisect => (chi2_target - 1) / 100,
-            :brent => (chi2_target - 1) / 1000,
+            :bisect => 0.01 * (chi2factor_target - 1),
+            :brent => 0.005 * (chi2factor_target - 1),
         ]
-            (; x, mu, chi2factor) = DECAES.lsqnonneg_chi2!(work, chi2_target; method)
+            (; x, mu, chi2factor) = DECAES.lsqnonneg_chi2!(work, chi2factor_target; method)
 
             if chi2_min <= 0
                 # Unregularized solution should be returned
@@ -170,10 +172,10 @@ end
                 @test chi2factor == 1
             else
                 @test mu > 0
-                @test chi2factor ≈ chi2_target atol = atol
+                @test chi2factor ≈ chi2factor_target atol = atol
             end
 
-            @test @allocated(DECAES.lsqnonneg_chi2!(work, chi2_target; method)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+            @test @allocated(DECAES.lsqnonneg_chi2!(work, chi2factor_target; method)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
         end
     end
 end
