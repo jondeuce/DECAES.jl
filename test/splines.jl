@@ -120,6 +120,132 @@ function test_cubic_splines()
     end
 end
 
+function test_cubic_spline_surrogate()
+    npts = 4
+    x = sort!(randn(npts))
+
+    coeffs = (-2, 1, -4, 3) # 3x^3 - 4x^2 + x - 2
+    f = i -> evalpoly(x[i], coeffs)
+    surr = DECAES.CubicSplineSurrogate(f, SVector.(x))
+
+    @test surr.seen[3] == false
+    @test all(iszero, surr.idx)
+    @test surr.npts[] == 0
+
+    DECAES.update!(surr, CartesianIndex(3))
+    @test surr.seen[3] == true
+    @test surr.idx == [3; zeros(Int, npts - 1)]
+    @test surr.npts[] == 1
+
+    DECAES.update!(surr, CartesianIndex(3))
+    @test surr.seen[3] == true
+    @test surr.idx == [3; zeros(Int, npts - 1)]
+    @test surr.npts[] == 1
+
+    for i in 1:npts
+        i == 3 && continue
+        @test surr.seen[i] == false
+        DECAES.update!(surr, CartesianIndex(i))
+        @test issorted(surr.idx[1:surr.npts[]])
+        @test surr.seen[i] == true
+    end
+
+    @test all(==(true), surr.seen)
+    @test surr.idx == 1:npts
+    @test surr.npts[] == npts
+    @test surr.u == f.(1:npts)
+
+    # Four points should make a Cubic spline an exact surrogate of a cubic function
+    p, u = DECAES.suggest_point(surr)
+    xtrue, utrue = DECAES.minimize_cubic(float.(coeffs), x[1], x[end])
+    @test p[1] ≈ xtrue
+    @test u ≈ utrue
+end
+
+function test_cubic_hermite_spline_surrogate()
+    npts = 4
+    x = sort!(randn(npts))
+
+    coeffs = (-2, 1, -4, 3) # 3x^3 - 4x^2 + x - 2
+    ∇coeffs = (1, -8, 9) # 9x^2 - 8x + 1
+    fg = i -> (evalpoly(x[i], coeffs), SVector(evalpoly(x[i], ∇coeffs)))
+    surr = DECAES.CubicHermiteSplineSurrogate(fg, SVector.(x))
+
+    @test surr.seen[3] == false
+    @test all(iszero, surr.idx)
+    @test surr.npts[] == 0
+
+    DECAES.update!(surr, CartesianIndex(3))
+    @test surr.seen[3] == true
+    @test surr.idx == [3; zeros(Int, npts - 1)]
+    @test surr.npts[] == 1
+
+    DECAES.update!(surr, CartesianIndex(3))
+    @test surr.seen[3] == true
+    @test surr.idx == [3; zeros(Int, npts - 1)]
+    @test surr.npts[] == 1
+
+    @test surr.seen[1] == false
+    DECAES.update!(surr, CartesianIndex(1))
+    @test surr.seen[1] == true
+    @test surr.idx == [1; 3; zeros(Int, npts - 2)]
+    @test surr.npts[] == 2
+
+    second(x) = x[2]
+    @test surr.u[surr.idx[1:2]] == first.(fg.([1, 3]))
+    @test surr.∇u[surr.idx[1:2]] == second.(fg.([1, 3]))
+
+    # Two points + two gradients should make a Cubic Hermite spline an exact surrogate of a cubic function
+    p, u = DECAES.suggest_point(surr)
+    xtrue, utrue = DECAES.minimize_cubic(float.(coeffs), x[1], x[end])
+    @test p[1] ≈ xtrue
+    @test u ≈ utrue
+end
+
+function test_normal_hermite_spline_surrogate()
+    npts = 10
+    x = sort!(randn(npts))
+
+    coeffs = (-2, 1, -4, 3) # 3x^3 - 4x^2 + x - 2
+    ∇coeffs = (1, -8, 9) # 9x^2 - 8x + 1
+    fg = i -> (evalpoly(x[i], coeffs), SVector(evalpoly(x[i], ∇coeffs)))
+    surr = DECAES.NormalHermiteSplineSurrogate(fg, SVector.(x))
+
+    @test all(==(false), surr.seen)
+    @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == 0
+
+    DECAES.update!(surr, CartesianIndex(3))
+    @test surr.seen[3] == true
+    @test all(==(false), surr.seen[[1:2; 4:end]])
+    @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == 1
+
+    DECAES.update!(surr, CartesianIndex(3))
+    @test surr.seen[3] == true
+    @test all(==(false), surr.seen[[1:2; 4:end]])
+    @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == 1
+
+    for i in 1:npts
+        i == 3 && continue
+        @test surr.seen[i] == false
+        DECAES.update!(surr, CartesianIndex(i))
+        @test surr.seen[i] == true
+        @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == i + (i < 3)
+    end
+
+    @test all(==(true), surr.seen)
+    @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == npts
+
+    second(x) = x[2]
+    @test surr.ugrid == first.(fg.(1:npts))
+    @test surr.∇ugrid == second.(fg.(1:npts))
+
+    # Ten points should be sufficient to make a Normal Hermite spline a near-exact surrogate of a cubic function
+    p, u = DECAES.suggest_point(surr)
+    xtrue, utrue = DECAES.minimize_cubic(float.(coeffs), x[1], x[end])
+    @test p[1] ≈ xtrue
+    @test u ≈ utrue
+end
+
 function hermite_boundary_conditions_iter()
     # Pairs of endpoint slopes
     ms = Iterators.flatten((
@@ -314,7 +440,12 @@ end
         @testset "quadratic" test_quadratic_roots()
     end
     @testset "cubic" begin
-        test_cubic_splines()
+        @testset "utils" test_cubic_splines()
+    end
+    @testset "surrogate splines" begin
+        @testset "cubic" test_cubic_spline_surrogate()
+        @testset "cubic hermite" test_cubic_hermite_spline_surrogate()
+        @testset "normal hermite" test_normal_hermite_spline_surrogate()
     end
     @testset "hermite interpolators" begin
         @testset "cubic" test_minimize_cubic_hermite_interpolator()
