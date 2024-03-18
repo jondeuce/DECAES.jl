@@ -658,26 +658,19 @@ function move_right(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T
     return LCurveCornerState(x⃗, P⃗)
 end
 
-function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing; global_search = false) where {T}
+function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing) where {T}
     (; x⃗, P⃗) = state
     for i in 1:4
         x, P, C = x⃗[i], P⃗[i], T(-Inf)
         if Pfilter === nothing || Pfilter(P)
-            if global_search
-                # Search for maximum curvature over all neighbours
-                for (x₋, (P₋, _)) in pairs(f.point_cache), (x₊, (P₊, _)) in pairs(f.point_cache)
-                    (x₋ < x⃗[i] < x₊) && (C = max(C, menger(P₋, P, P₊)))
-                end
-            else
-                # Compute curvature from nearest neighbours
-                x₋, x₊ = T(-Inf), T(+Inf)
-                P₋, P₊ = P, P
-                for (_x, (_P, _)) in pairs(f.point_cache)
-                    (x₋ < _x < x) && ((x₋, P₋) = (_x, _P))
-                    (x < _x < x₊) && ((x₊, P₊) = (_x, _P))
-                end
-                C = menger(P₋, P, P₊)
+            # Compute curvature from nearest neighbours
+            x₋, x₊ = T(-Inf), T(+Inf)
+            P₋, P₊ = P, P
+            for (_x, (_P, _)) in pairs(f.point_cache)
+                (x₋ < _x < x) && ((x₋, P₋) = (_x, _P))
+                (x < _x < x₊) && ((x₊, P₊) = (_x, _P))
             end
+            C = menger(P₋, P, P₊)
         end
         f.point_cache[x] = LCurveCornerPoint(P, C)
     end
@@ -950,7 +943,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T
         opt.min_objective = (logμ, ∇logμ) -> log(Float64(gcv!(work, logμ[1])))
         minf, minx, ret   = NLopt.optimize(opt, [-4.0])
     elseif method === :brent
-        minx, minf = brents_method(-8.0, 2.0; xrtol = T(0.05), xatol = T(1e-4), maxiters = 10) do logμ
+        minx, minf = brent_minimize(-8.0, 2.0; xrtol = T(0.05), xatol = T(1e-4), maxiters = 10) do logμ
             return log(gcv!(work, logμ))
         end
     else

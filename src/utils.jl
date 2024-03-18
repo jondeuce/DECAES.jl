@@ -49,6 +49,15 @@ function with_singlethreaded_blas(f)
     end
 end
 
+function insertsorted!(x, val, len = length(x))
+    len = min(len, length(x))
+    @inbounds for i in 1:len-1
+        x[i], val = minmax(x[i], val)
+    end
+    @inbounds x[len] = val
+    return x
+end
+
 ####
 #### Dynamically sized caches
 ####

@@ -34,11 +34,11 @@ end
     @test abs(fx) <= 1e-8
 end
 
-@testset "brents_method" begin
+@testset "brent_minimize" begin
     f = abs2 ∘ sin
-    x, fx = DECAES.brents_method(f, 3.0, 4.5; xatol = 1e-6, xrtol = 0.0)
+    x, fx = DECAES.brent_minimize(f, 3.0, 4.5; xatol = 1e-6, xrtol = 0.0)
     @test abs(x - π) <= 1e-6
 
-    x, fx = DECAES.brents_method(f, 2.5, 4.0; xatol = 0.0, xrtol = 1e-7)
+    x, fx = DECAES.brent_minimize(f, 2.5, 4.0; xatol = 0.0, xrtol = 1e-7)
     @test abs(x - π) <= 1e-7 * π
 end

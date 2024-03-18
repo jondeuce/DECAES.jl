@@ -69,17 +69,19 @@ function CubicHermiteInterpolator(a::T, b::T, u0::T, u1::T, m0::T, m1::T) where 
 end
 CubicHermiteInterpolator(a, b, u0, u1, m0, m1) = CubicHermiteInterpolator(promote(map(float, (a, b, u0, u1, m0, m1))...)...)
 
-@inline (spl::CubicHermiteInterpolator)(x) = evalpoly(tocanonical(x, spl.dom), spl.coeffs)
+@inline (spl::CubicHermiteInterpolator)(x, bc::Val = Val(:extrapolate)) = evalpoly(tocanonical(x, spl.dom, bc), spl.coeffs)
 
-@inline function tocanonical(x, (a, b))
+@inline function tocanonical(x, (a, b), ::Val{bc} = Val(:extrapolate)) where {bc}
     c, r = (a + b) / 2, (b - a) / 2
     t = (x - c) / r
+    (bc === :nearest) && (t = clamp(t, -one(typeof(t)), one(typeof(t))))
     return t
 end
 
-@inline function todomain(t, (a, b))
+@inline function todomain(t, (a, b), ::Val{bc} = Val(:extrapolate)) where {bc}
     c, r = (a + b) / 2, (b - a) / 2
     x = muladd(r, t, c)
+    (bc === :nearest) && (x = clamp(x, a, b))
     return x
 end
 
@@ -98,7 +100,7 @@ function minimize(spl::CubicHermiteInterpolator{T}) where {T}
         t = p / q
         y = evalpoly(t, coeffs)
         if y < uend
-            return todomain(t, dom), y
+            return todomain(t, dom, Val(:nearest)), y
         else
             return xend, uend
         end
@@ -111,9 +113,9 @@ function signedroots(spl::CubicHermiteInterpolator{T}, atol::T = zero(T)) where 
     (; dom, coeffs) = spl
     (t1, t2, t3), (s1, s2, s3) = signed_roots_real_cubic(coeffs)
     xlo, xhi = dom[1] + atol, dom[2] - atol
-    x1, s1 = !isnan(t1) ? (x = todomain(t1, dom); xlo <= x <= xhi ? (x, s1) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
-    x2, s2 = !isnan(t2) ? (x = todomain(t2, dom); xlo <= x <= xhi ? (x, s2) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
-    x3, s3 = !isnan(t3) ? (x = todomain(t3, dom); xlo <= x <= xhi ? (x, s3) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
+    x1, s1 = !isnan(t1) ? (x = todomain(t1, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s1) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
+    x2, s2 = !isnan(t2) ? (x = todomain(t2, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s2) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
+    x3, s3 = !isnan(t3) ? (x = todomain(t3, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s3) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
     (x1, s1), (x2, s2), (x3, s3) = TupleTools.sort(((x1, s1), (x2, s2), (x3, s3)); by = first, lt = lt_nan) # sort, treating NaN's as Inf
     return (x1, x2, x3), (s1, s2, s3)
 end
@@ -449,62 +451,126 @@ spline_root_legacy(X::AbstractVector, Y::AbstractVector, value = 0; deg_spline =
 
 abstract type AbstractSurrogate{D, T} end
 
-gridwidths(surr::AbstractSurrogate) = Tuple(abs.(last(surr.grid) - first(surr.grid)))
-gridspacings(surr::AbstractSurrogate) = gridwidths(surr) ./ size(surr.grid)
+#### CubicSplineSurrogate
 
 struct CubicSplineSurrogate{T, F} <: AbstractSurrogate{1, T}
     f::F
     grid::Vector{SVector{1, T}}
-    p::Vector{SVector{1, T}}
+    seen::Vector{Bool}
     u::Vector{T}
+    idx::Vector{Int}
     npts::Base.RefValue{Int}
     legacy::Bool
 end
 
 function CubicSplineSurrogate(f, grid::Vector{SVector{1, T}}; legacy = false) where {T}
-    return CubicSplineSurrogate(f, grid, SVector{1, T}[], T[], Ref(0), legacy)
-end
-
-function update!(surr::CubicSplineSurrogate, I::CartesianIndex{1})
-    p = surr.grid[I]
-    pos = surr.npts[] + 1
-    @inbounds for i in 1:surr.npts[]
-        (p[1] <= surr.p[i][1]) && (pos = i; break)
-    end
-    u = surr.f(I)
-    insertat!(surr.p, pos, p, surr.npts[] + 1)
-    insertat!(surr.u, pos, u, surr.npts[] + 1)
-    surr.npts[] += 1
-    return surr
-end
-
-function insertat!(x::AbstractVector{T}, i, v::T, len = length(x)) where {T}
-    if len > length(x)
-        append!(x, similar(x, max(length(x), 1)))
-    end
-    last = v
-    @inbounds for j in i:len
-        x[j], last = last, x[j]
-    end
-    return x
+    return CubicSplineSurrogate(
+        f,
+        grid,
+        fill(false, length(grid)),
+        fill(T(NaN), length(grid)),
+        zeros(Int, length(grid)),
+        Ref(0),
+        legacy,
+    )
 end
 
 function Base.empty!(surr::CubicSplineSurrogate)
     surr.npts[] = 0
+    surr.seen .= false
+    return surr
+end
+
+function update!(surr::CubicSplineSurrogate, I::CartesianIndex{1})
+    @inbounds(surr.seen[I]) && return surr
+    u = surr.f(I)
+    @inbounds surr.seen[I] = true
+    @inbounds surr.u[I] = u
+    insertsorted!(surr.idx, I[1], surr.npts[] += 1)
     return surr
 end
 
 function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
     npts = surr.npts[]
-    ps = reinterpret(T, view(surr.p, 1:npts))
-    us = view(surr.u, 1:npts)
+    idx = @views surr.idx[1:npts]
+    ps = @views reinterpret(T, surr.grid)[idx]
+    us = @views surr.u[idx]
     p, u = surr.legacy ? spline_opt_legacy(ps, us) : spline_opt(ps, us)
     return SVector{1, T}(p), T(u)
 end
 
+#### CubicHermiteSplineSurrogate
+
+struct CubicHermiteSplineSurrogate{T, F} <: AbstractSurrogate{1, T}
+    fg::F
+    grid::Vector{SVector{1, T}}
+    seen::Vector{Bool}
+    u::Vector{T}
+    ∇u::Vector{SVector{1, T}}
+    idx::Vector{Int}
+    npts::Base.RefValue{Int}
+end
+
+function CubicHermiteSplineSurrogate(fg, grid::Vector{SVector{1, T}}) where {T}
+    return CubicHermiteSplineSurrogate(
+        fg,
+        grid,
+        fill(false, size(grid)),
+        fill(T(NaN), size(grid)),
+        fill(SVector{1, T}(T(NaN)), size(grid)),
+        zeros(Int, size(grid)),
+        Ref(0),
+    )
+end
+
+function update!(surr::CubicHermiteSplineSurrogate{T}, I::CartesianIndex{1}) where {T}
+    @inbounds(surr.seen[I]) && return surr
+    u, ∇u = surr.fg(I)
+    @inbounds surr.seen[I] = true
+    @inbounds surr.u[I] = u
+    @inbounds surr.∇u[I] = ∇u
+    insertsorted!(surr.idx, I[1], surr.npts[] += 1)
+    return surr
+end
+
+function Base.empty!(surr::CubicHermiteSplineSurrogate{T}) where {T}
+    surr.npts[] = 0
+    surr.seen .= false
+    surr.u .= T(NaN)
+    surr.∇u .= (SVector{1, T}(T(NaN)),)
+    return surr
+end
+
+function suggest_point(surr::CubicHermiteSplineSurrogate{T}) where {T}
+    @assert length(surr.grid) >= 2 "Grid must have at least 2 points"
+    @assert surr.npts[] >= 1 "No points have been added to the surrogate"
+
+    plast, ulast, ∇ulast = @inbounds begin
+        I0 = surr.idx[1]
+        surr.grid[I0], surr.u[I0], surr.∇u[I0]
+    end
+
+    p, u = plast, ulast
+    @inbounds for i in 2:surr.npts[]
+        I = surr.idx[i]
+        pcurr, ucurr, ∇ucurr = surr.grid[I], surr.u[I], surr.∇u[I]
+        spl = CubicHermiteInterpolator(plast[1], pcurr[1], ulast, ucurr, ∇ulast[1], ∇ucurr[1])
+        _x, _u = minimize(spl)
+        if _u < u
+            p, u = SVector{1, T}(_x), _u
+        end
+        plast, ulast, ∇ulast = pcurr, ucurr, ∇ucurr
+    end
+
+    return p, u
+end
+
+#### NormalHermiteSplineSurrogate
+
 struct NormalHermiteSplineSurrogate{D, T, F, RK} <: AbstractSurrogate{D, T}
     fg::F
     grid::Array{SVector{D, T}, D}
+    seen::Array{Bool, D}
     ugrid::Array{T, D}
     ∇ugrid::Array{SVector{D, T}, D}
     spl::NormalHermiteSplines.ElasticNormalSpline{D, T, RK}
@@ -514,6 +580,7 @@ function NormalHermiteSplineSurrogate(fg, grid::Array{SVector{D, T}, D}, kernel 
     return NormalHermiteSplineSurrogate(
         fg,
         grid,
+        fill(false, size(grid)),
         fill(T(NaN), size(grid)),
         fill(fill(T(NaN), SVector{D, T}), size(grid)),
         NormalHermiteSplines.ElasticNormalSpline(first(grid), last(grid), maximum(size(grid)), kernel),
@@ -521,9 +588,11 @@ function NormalHermiteSplineSurrogate(fg, grid::Array{SVector{D, T}, D}, kernel 
 end
 
 function update!(surr::NormalHermiteSplineSurrogate{D, T}, I::CartesianIndex{D}) where {D, T}
+    @inbounds(surr.seen[I]) && return surr
     u, ∇u = surr.fg(I)
     @inbounds begin
         p = surr.grid[I]
+        surr.seen[I] = true
         surr.ugrid[I] = u
         surr.∇ugrid[I] = ∇u
     end
@@ -537,26 +606,27 @@ end
 
 function Base.empty!(surr::NormalHermiteSplineSurrogate{D, T}) where {D, T}
     empty!(surr.spl)
+    surr.seen .= false
     surr.ugrid .= T(NaN)
     surr.∇ugrid .= (fill(T(NaN), SVector{D, T}),)
     return surr
 end
 
-function suggest_point(surr::NormalHermiteSplineSurrogate{D, T}) where {D, T}
-    _, I = findmin(NormalHermiteSplines.evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
-    @inbounds p = surr.grid[I]
-    p, u = local_search(surr, p)
-    return p, u
-end
-
-# Specialize the 1D case to use the faster and more robust Brent-Dekker method
 function suggest_point(surr::NormalHermiteSplineSurrogate{1, T}) where {T}
+    # Special-case 1D spline
     @assert length(surr.grid) >= 2 "Grid must have at least 2 points"
+
+    # Update interpolated nodes
+    @inbounds for i in 1:length(surr.grid)
+        if !surr.seen[i]
+            surr.ugrid[i], surr.∇ugrid[i] = NormalHermiteSplines._evaluate_with_gradient(surr.spl, surr.grid[i])
+        end
+    end
+
+    # Search for minimizer node
     @inbounds p₀, u₀, ∇u₀, I = surr.grid[1], surr.ugrid[1], surr.∇ugrid[1], 1
     @inbounds for i in 2:length(surr.grid)
-        pᵢ = surr.grid[i]
-        uᵢ, ∇uᵢ = NormalHermiteSplines._evaluate_with_gradient(surr.spl, pᵢ)
-        surr.ugrid[i], surr.∇ugrid[i] = uᵢ, ∇uᵢ
+        pᵢ, uᵢ, ∇uᵢ = surr.grid[i], surr.ugrid[i], surr.∇ugrid[i]
         if uᵢ < u₀
             p₀, u₀, ∇u₀, I = pᵢ, uᵢ, ∇uᵢ, i
         end
@@ -575,19 +645,16 @@ function suggest_point(surr::NormalHermiteSplineSurrogate{1, T}) where {T}
     end
 
     # Use Brent's method to search for a minimum on the interval (p₁, p₂)
-    xᵒᵖᵗ, uᵒᵖᵗ = brents_method(p₁[1], p₂[1]; xrtol = T(1e-4), xatol = T(1e-4), maxiters = 10) do x
-        p = SA{T}[x]
-        u = NormalHermiteSplines.evaluate(surr.spl, p)
-        return u
-    end
-    pᵒᵖᵗ = SA{T}[xᵒᵖᵗ]
+    f = Base.Fix1(NormalHermiteSplines.evaluate, surr.spl)
+    x, u = brent_minimize(f, p₁[1], p₂[1]; xrtol = T(1e-4), xatol = T(1e-4), maxiters = 10)
+    p = SA{T}[x]
 
     # Brent's method doesn't evaluate the boundaries of the search interval; check manually
-    if u₀ < uᵒᵖᵗ
-        pᵒᵖᵗ, uᵒᵖᵗ = p₀, u₀
+    if u₀ < u
+        p, u = p₀, u₀
     end
 
-    return pᵒᵖᵗ, uᵒᵖᵗ
+    return p, u
 end
 
 ####
@@ -695,7 +762,7 @@ function bisection_search(
     #           IF: Box is sufficiently small or if the maximum number of evaluations has been reached:
     #               RETURN: Current optimum
     #           ELSE:
-    #               GOTO:   1.
+    #               GOTO: 1.
     x, u = suggest_point(surr)
     while true
         box = minimal_bounding_box(state, x)
@@ -786,11 +853,14 @@ is_inside(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T}
 #### Local optimization using surrogate functions
 ####
 
-function local_search(surr::NormalHermiteSplineSurrogate{D, T}, x₀::SVector{D, T}) where {D, T}
-    return error("Placeholder method --- not implemented")
+#=
+function suggest_point(surr::NormalHermiteSplineSurrogate{D, T}) where {D, T}
+    _, I = findmin(NormalHermiteSplines.evaluate!(vec(surr.ugrid), surr.spl, vec(surr.grid)))
+    @inbounds p = surr.grid[I]
+    p, u = local_search(surr, p)
+    return p, u
 end
 
-#=
 function local_search(
     surr::NormalHermiteSplineSurrogate{D, T},
     x₀::SVector{D, T},
@@ -874,6 +944,9 @@ function local_search(
 
     return x, u
 end
+
+gridwidths(surr::NormalHermiteSplineSurrogate) = Tuple(abs.(last(surr.grid) - first(surr.grid)))
+gridspacings(surr::NormalHermiteSplineSurrogate) = gridwidths(surr) ./ size(surr.grid)
 
 function nearest_gridpoint(grid::AbstractArray{SVector{D, T}, D}, x::SVector{D, T}) where {D, T}
     @inbounds xlo, xhi = first(grid), last(grid)
@@ -963,20 +1036,25 @@ function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D})
     return SVector{D, T}(∇u)
 end
 
-function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1, T}; legacy = false) where {T}
-    f = Base.Fix1(cubic_spline_surrogate_loss!, prob)
-    return CubicSplineSurrogate(f, prob.αs, SVector{1, T}[], T[], Ref(0), legacy)
-end
-cubic_spline_surrogate_loss!(prob::NNLSDiscreteSurrogateSearch{1, T}, I::CartesianIndex{1}) where {T} = loss!(prob, I)
-
-function NormalHermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D, T}) where {D, T}
-    fg = Base.Fix1(hermite_spline_surrogate_gradloss!, prob)
-    return NormalHermiteSplineSurrogate(fg, prob.αs, RK_H1(one(T)))
-end
-function hermite_spline_surrogate_gradloss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
+function loss_with_grad!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     u = loss!(prob, I)
     ∇u = ∇loss!(prob, I)
     return u, ∇u
+end
+
+function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1, T}; legacy = false) where {T}
+    f = Base.Fix1(loss!, prob)
+    return CubicSplineSurrogate(f, prob.αs; legacy)
+end
+
+function CubicHermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1, T}) where {T}
+    fg = Base.Fix1(loss_with_grad!, prob)
+    return CubicHermiteSplineSurrogate(fg, prob.αs)
+end
+
+function NormalHermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D, T}) where {D, T}
+    fg = Base.Fix1(loss_with_grad!, prob)
+    return NormalHermiteSplineSurrogate(fg, prob.αs, RK_H1(one(T)))
 end
 
 function surrogate_spline_opt(

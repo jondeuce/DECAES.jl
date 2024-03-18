@@ -299,7 +299,7 @@ end
 ####
 
 #=
-Brent-Dekker minimization method. The code for `brents_method` is modified from Optim.jl:
+Brent-Dekker minimization method. The code for `brent_minimize` is modified from Optim.jl:
     https://github.com/JuliaNLSolvers/Optim.jl/blob/1189ba0347ba567e43d1d4de94588aaf8a9e3ac0/src/univariate/solvers/brent.jl#L23
 
 See:
@@ -316,7 +316,7 @@ Optim.jl is licensed under the MIT License:
 
 #### Brent's method (minimization)
 
-function brents_method(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
+function brent_minimize(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
     @assert x₁ <= x₂ "x₁ must be less than x₂"
 
     α = 2 - T(φ) # α ≈ 0.381966
@@ -411,7 +411,7 @@ function brents_method(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = √
     return (x, y)
 end
 
-function newton_bisect_minimum(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxdepth::Int = 5, kwargs...) where {T <: AbstractFloat}
+function newton_bisect_minimize(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxdepth::Int = 5, kwargs...) where {T <: AbstractFloat}
     (x⁻, x⁺, ∂ux⁻, ∂ux⁺, ∂²ux⁻, ∂²ux⁺), succ = bracket_local_minimum(f, ∂f_∂²f, x1, x2; xrtol, xatol, maxdepth)
     if !succ
         return (T(NaN), T(NaN))

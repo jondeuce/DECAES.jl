@@ -179,7 +179,7 @@ function test_minimize_normal_hermite_interpolator()
             isbdry = ilo ∈ (1, length(xs))
 
             # Minimize via Brent's method
-            xmin, umin = DECAES.brents_method(f, dom...; xatol, xrtol)
+            xmin, umin = DECAES.brent_minimize(f, dom...; xatol, xrtol)
             ∂xmin, ∂²xmin = ∂f_and_∂²f(xmin)
             isbdry_brent = min(xmin - dom[1], dom[2] - xmin) < 1e-6
             islocal_brent = abs(∂xmin) < 1e-3 && ∂²xmin > 0
@@ -197,7 +197,7 @@ function test_minimize_normal_hermite_interpolator()
             end
 
             # Minimize via Newton-Bisect
-            xmin, umin = DECAES.newton_bisect_minimum(f, ∂f_and_∂²f, dom...; xatol, xrtol)
+            xmin, umin = DECAES.newton_bisect_minimize(f, ∂f_and_∂²f, dom...; xatol, xrtol)
             ∂xmin, ∂²xmin = ∂f_and_∂²f(xmin)
 
             if isnan(xmin)
@@ -246,9 +246,7 @@ function test_mock_surrogate_search_problem(
     end
 
     function fg_surrogate!(prob, I)
-        l  = DECAES.loss!(prob, I)
-        ∇l = DECAES.∇loss!(prob, I)
-        return l, ∇l
+        return DECAES.loss_with_grad!(prob, I)
     end
 
     prob = DECAES.mock_surrogate_search_problem(Val(2), Val(opts.nTE), opts)
