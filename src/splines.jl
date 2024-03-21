@@ -1010,14 +1010,14 @@ load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T
 function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; As, b, nnls_work) = prob
     solve!(nnls_work, uview(As, :, :, I), b)
-    ℓ = chi2(nnls_work)
+    ℓ = resnorm_sq(nnls_work)
     u = prob.legacy ? ℓ : log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
     return u
 end
 
 function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; As, ∇As, b, ∂Ax⁺, Ax⁺b, nnls_work) = prob
-    ℓ = chi2(nnls_work)
+    ℓ = resnorm_sq(nnls_work)
     ℓ <= eps(T) && return zero(SVector{D, T}) # loss capped at eps(T) from below; return zero gradient
     x = solution(nnls_work)
     @inbounds @. Ax⁺b = -b

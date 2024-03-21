@@ -269,14 +269,14 @@ function tforeach(work!, allocate, x::AbstractArray; blocksize::Int = default_bl
     if nt > 1 && len > blocksize
         @sync for p in split_indices(len, blocksize)
             Threads.@spawn allocate() do resource
-                @inbounds @simd for i in p
+                @simd for i in p
                     work!(x[i], resource)
                 end
             end
         end
     else
         allocate() do resource
-            @inbounds @simd for i in eachindex(x)
+            @simd for i in eachindex(x)
                 work!(x[i], resource)
             end
         end

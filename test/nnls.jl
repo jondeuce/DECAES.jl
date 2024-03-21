@@ -8,6 +8,12 @@ function rand_NNLS_data(m, n)
     return A, b
 end
 
+∇finitediff(f, x, h = √eps(one(x))) = (f(x .+ h) .- f(x .- h)) ./ 2h
+∇²finitediff(f, x, h = ∛eps(one(x))) = (f(x .+ h) .- 2 .* f(x) .+ f(x .- h)) ./ h^2
+
+∇logfinitediff(f, logx, h = √eps(one(logx))) = ∇finitediff(f, logx, h) ./ exp(logx)
+∇²logfinitediff(f, logx, h = ∛eps(one(logx))) = (∇²finitediff(f, logx, h) - ∇finitediff(f, logx, h)) ./ exp(2 * logx)
+
 function verify_NNLS(m, n)
     A, b = rand_NNLS_data(m, n)
     work = NNLS.NNLSWorkspace(A, b)
@@ -111,16 +117,16 @@ end
 
 function build_lcurve_corner_cached_fun(::Type{T} = Float64) where {T}
     # Mock lcurve function with (ξ(μ), η(μ)) = (μ, 1/μ)
-    f = CachedFunction(logμ -> SA[exp(logμ), exp(-logμ)], GrowableCache{T, SVector{2, T}}())
+    f = CachedFunction(_logμ -> SA[exp(_logμ), exp(-_logμ)], GrowableCache{T, SVector{2, T}}())
     f = LCurveCornerCachedFunction(f, GrowableCache{T, LCurveCornerPoint{T}}(), GrowableCache{T, LCurveCornerState{T}}())
     return f
 end
 
-function run_lcurve_corner(f)
-    return lcurve_corner(f, log(0.1), log(10.0); xtol = 1e-6, Ptol = 1e-6, Ctol = 0)
-end
+function lcurve_corner_tests()
+    function run_lcurve_corner(f)
+        return lcurve_corner(f, log(0.1), log(10.0); xtol = 1e-6, Ptol = 1e-6, Ctol = 0)
+    end
 
-@testset "lcurve_corner" begin
     # Test allocations
     f = build_lcurve_corner_cached_fun()
     empty!(f)
@@ -132,86 +138,135 @@ end
     @test run_lcurve_corner(f) ≈ 0 atol = 1e-3
 end
 
+@testset "lcurve_corner" begin
+    lcurve_corner_tests()
+end
+
+function lsqnonneg_lcurve_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.lsqnonneg_lcurve_work(A, b)
+    @test @allocated(DECAES.lsqnonneg_lcurve!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+end
+
 @testset "lsqnonneg_lcurve" begin
     for (m, n) in NNLS_SIZES
-        A, b = rand_NNLS_data(m, n)
-        work = DECAES.lsqnonneg_lcurve_work(A, b)
-        @test @allocated(DECAES.lsqnonneg_lcurve!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+        lsqnonneg_lcurve_tests(m, n)
+    end
+end
+
+function lsqnonneg_chi2_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.lsqnonneg_chi2_work(A, b)
+
+    # Test solver
+    x_unreg = DECAES.solve!(work.nnls_prob)
+    res²_min = DECAES.resnorm_sq(work.nnls_prob)
+    res²_max = sum(abs2, b) # lim_{μ -> ∞} ||A*x(μ) - b||² = ||b||², since lim_{μ -> ∞} x(μ) = 0
+    res²_target = √(res²_min * res²_max)
+    # res²_target = res²_min + (res²_max - res²_min) / 10
+    chi2_target = res²_target / res²_min #TODO: add some randomness?
+
+    for (method, atol) in [
+        :bisect => 0.01 * (chi2_target - 1),
+        :brent => 0.005 * (chi2_target - 1),
+    ]
+        (; x, mu, chi2) = DECAES.lsqnonneg_chi2!(work, chi2_target; method)
+
+        if res²_min <= 0
+            # Unregularized solution should be returned
+            @test x === x_unreg
+            @test isfinite(mu)
+            @test mu == 0
+            @test chi2 == 1
+        elseif sum(abs2, x_unreg) == 0
+            # Unreg solution is x = 0, and regularization can only reduce ||x||.
+            # Since ||x|| = 0 is already minimized, μ is undefined; we enforce that μ = 0 is returned which is consistent with chi2 = 1.
+            @test x == x_unreg
+            @test isfinite(mu)
+            @test mu == 0 # any value of μ should result in x == x_unreg and chi2 == 1
+            @test chi2 == 1
+        else
+            @test mu > 0
+            @test chi2 ≈ chi2_target atol = atol
+        end
+
+        @test @allocated(DECAES.lsqnonneg_chi2!(work, chi2_target; method)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
     end
 end
 
 @testset "lsqnonneg_chi2" begin
     for (m, n) in NNLS_SIZES
-        A, b = rand_NNLS_data(m, n)
-        work = DECAES.lsqnonneg_chi2_work(A, b)
-
-        # Test solver
-        x_unreg = DECAES.solve!(work.nnls_prob)
-        chi2_min = DECAES.chi2(work.nnls_prob)
-        chi2_max = sum(abs2, b) # lim_{μ -> ∞} ||A*x(μ) - b||² = ||b||², since lim_{μ -> ∞} x(μ) = 0
-        chi2_target = √(chi2_min * chi2_max)
-        chi2factor_target = chi2_target / chi2_min #TODO: add some randomness?
-
-        for (method, atol) in [
-            :bisect => 0.01 * (chi2factor_target - 1),
-            :brent => 0.005 * (chi2factor_target - 1),
-        ]
-            (; x, mu, chi2factor) = DECAES.lsqnonneg_chi2!(work, chi2factor_target; method)
-
-            if chi2_min <= 0
-                # Unregularized solution should be returned
-                @test x === x_unreg
-                @test isfinite(mu)
-                @test mu == 0
-                @test chi2factor == 1
-            elseif sum(abs2, x_unreg) == 0
-                # Unreg solution is x = 0, and regularization can only reduce ||x||.
-                # Since ||x|| = 0 is already minimized, μ is undefined; we enforce that μ = 0 is returned which is consistent with chi2factor = 1.
-                @test x == x_unreg
-                @test isfinite(mu)
-                @test mu == 0 # any value of μ should result in x == x_unreg and chi2factor == 1
-                @test chi2factor == 1
-            else
-                @test mu > 0
-                @test chi2factor ≈ chi2factor_target atol = atol
-            end
-
-            @test @allocated(DECAES.lsqnonneg_chi2!(work, chi2factor_target; method)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
-        end
+        lsqnonneg_chi2_tests(m, n)
     end
+end
+
+function test_lsqnonneg_gcv(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.NNLSGCVRegProblem(A, b)
+    logμ = randn()
+    μ = exp(logμ)
+
+    # Test GCV degrees of freedom
+    @test DECAES.gcv_dof(A, μ) ≈ tr(I - A * ((A'A + μ^2 * I) \ A')) # "degrees of freedom" of normal equation matrix
+    @test DECAES.∇gcv_dof(A, μ) ≈ ∇logfinitediff(_logμ -> DECAES.gcv_dof(A, exp(_logμ)), logμ, 1e-4)
+
+    # Test GCV loss function
+    gcv = DECAES.gcv!(work, logμ) # gcv! calls `DECAES.solve!` internally
+    x = DECAES.solve!(work.nnls_prob_smooth_cache, exp(logμ))
+    res² = sum(abs2, A * x - b)
+    @test gcv ≈ res² / DECAES.gcv_dof(A, μ)^2
+
+    # Test GCV gradient function
+    _gcv, ∇gcv = DECAES.gcv_and_∇gcv!(work, logμ) # gcv_and_∇gcv! calls `DECAES.solve!` internally
+    @test _gcv == gcv # primals should match exactly
+    @test ∇gcv ≈ ∇logfinitediff(_logμ -> DECAES.gcv!(work, _logμ), logμ, 1e-4) atol = 1e-3 rtol = 1e-3
+
+    # Test allocations
+    @test @allocated(DECAES.gcv!(work, logμ)) == 0
+    @test @allocated(DECAES.lsqnonneg_gcv!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
 end
 
 @testset "lsqnonneg_gcv" begin
     for (m, n) in NNLS_SIZES
-        A, b = rand_NNLS_data(m, n)
-        work = DECAES.NNLSGCVRegProblem(A, b)
-
-        # Test loss function
-        logμ = randn()
-        gcv = DECAES.gcv!(work, logμ)
-        χ² = DECAES.chi2(DECAES.get_cache(work.nnls_prob_smooth_cache))
-        @test gcv ≈ χ² / DECAES.gcv_tr(A, exp(logμ))^2
-        @test gcv ≈ χ² / DECAES.gcv_tr_brute(A, exp(logμ))^2
-        @test @allocated(DECAES.gcv!(work, logμ)) == 0
-
-        # Test solver
-        @test @allocated(DECAES.lsqnonneg_gcv!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+        test_lsqnonneg_gcv(m, n)
     end
 end
 
-function mock_nnls_data(m, n)
-    opts = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = m, nT2 = n)
-    prob = DECAES.mock_surrogate_search_problem(Val(1), Val(m), opts)
-    return (; A = prob.As[:, :, end], b = prob.b)
+function lsqnonneg_mdp_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.lsqnonneg_mdp_work(A, b)
+
+    # Test solver
+    x_unreg = DECAES.solve!(work.nnls_prob)
+    res²_min = DECAES.resnorm_sq(work.nnls_prob)
+    res²_max = sum(abs2, b) # lim_{μ -> ∞} ||A*x(μ) - b||² = ||b||², since lim_{μ -> ∞} x(μ) = 0
+    res²_target = √(res²_min * res²_max)
+    # res²_target = res²_min + (res²_max - res²_min) / 10
+
+    (; x, mu, chi2) = DECAES.lsqnonneg_mdp!(work, res²_target)
+    res² = sum(abs2, A * x - b)
+
+    if mu <= 0
+        @test mu == 0
+        @test res² ≈ res²_min atol = 1e-12
+        @test chi2 == 1
+    else
+        @test mu > 0
+        @test res² ≈ res²_target atol = res²_target / 1000
+        @test chi2 ≈ res² / res²_min rtol = res²_target / 1000 # should also hold when res²_min = 0, i.e. when chi2 = Inf
+    end
+
+    # Test allocations
+    @test @allocated(DECAES.lsqnonneg_mdp!(work, res²_target)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
 end
 
-∇finitediff(f, x, h = √eps(one(x))) = (f(x .+ h) .- f(x .- h)) ./ 2h
-∇²finitediff(f, x, h = ∛eps(one(x))) = (f(x .+ h) .- 2 .* f(x) .+ f(x .- h)) ./ h^2
+@testset "lsqnonneg_mdp" begin
+    for (m, n) in NNLS_SIZES
+        lsqnonneg_mdp_tests(m, n)
+    end
+end
 
-∇logfinitediff(f, logx, h = √eps(one(logx))) = ∇finitediff(f, logx, h) ./ exp(logx)
-∇²logfinitediff(f, logx, h = ∛eps(one(logx))) = (∇²finitediff(f, logx, h) - ∇finitediff(f, logx, h)) ./ exp(2 * logx)
-
-@testset "Least Squares Gradients" begin
+@testset "least-squares gradients" begin
     #=
     Gradient notes:
 
@@ -269,7 +324,7 @@ end
     end
 end
 
-function verify_NNLSTikhonovRegProblem(m, n)
+function NNLSTikhonovRegProblem_tests(m, n)
     T = Double64 # need higher precision for finite differences
     A, b = rand_NNLS_data(m, n)
     A, b = T.(A), T.(b)
@@ -283,46 +338,40 @@ function verify_NNLSTikhonovRegProblem(m, n)
 
         x = DECAES.solve!(work, μ)
         @test all(>=(0), x)
-        @test withsolve(DECAES.reg, μ) ≈ μ^2 * sum(abs2, x)
-        @test withsolve(DECAES.chi2, μ) ≈ sum(abs2, A * x - b)
+        @test withsolve(DECAES.regnorm, μ) ≈ μ^2 * sum(abs2, x)
         @test withsolve(DECAES.resnorm_sq, μ) ≈ sum(abs2, A * x - b)
         @test withsolve(DECAES.seminorm_sq, μ) ≈ sum(abs2, x)
 
         @test @allocated(DECAES.solve!(work, μ)) == 0
         @test @allocated(DECAES.mu(work)) == 0
 
-        ∇μ = DECAES.∇reg(work)
-        @test ∇μ ≈ ∇logfinitediff(logμ -> withsolve(DECAES.reg, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-4
-        @test @allocated(DECAES.∇reg(work)) == 0
-        @test @inferred(DECAES.∇reg(work)) isa T
-
-        ∇μ = DECAES.∇chi2(work)
-        @test ∇μ ≈ ∇logfinitediff(logμ -> withsolve(DECAES.chi2, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-4
-        @test @allocated(DECAES.∇chi2(work)) == 0
-        @test @inferred(DECAES.∇chi2(work)) isa T
+        ∇μ = DECAES.∇regnorm(work)
+        @test ∇μ ≈ ∇logfinitediff(_logμ -> withsolve(DECAES.regnorm, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-4
+        @test @allocated(DECAES.∇regnorm(work)) == 0
+        @test @inferred(DECAES.∇regnorm(work)) isa T
 
         ∇μ = DECAES.∇resnorm_sq(work)
-        @test ∇μ ≈ ∇logfinitediff(logμ -> withsolve(DECAES.resnorm_sq, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-4
+        @test ∇μ ≈ ∇logfinitediff(_logμ -> withsolve(DECAES.resnorm_sq, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-4
         @test @allocated(DECAES.∇resnorm_sq(work)) == 0
         @test @inferred(DECAES.∇resnorm_sq(work)) isa T
 
         ∇μ = DECAES.∇seminorm_sq(work)
-        @test ∇μ ≈ ∇logfinitediff(logμ -> withsolve(DECAES.seminorm_sq, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-4
+        @test ∇μ ≈ ∇logfinitediff(_logμ -> withsolve(DECAES.seminorm_sq, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-4
         @test @allocated(DECAES.∇seminorm_sq(work)) == 0
         @test @inferred(DECAES.∇seminorm_sq(work)) isa T
 
         ∇μ = DECAES.solution_gradnorm(work)
-        @test ∇μ ≈ norm(∇logfinitediff(logμ -> withsolve(copy ∘ DECAES.solution, exp(logμ)), log(μ), T(1e-6))) rtol = 1e-4
+        @test ∇μ ≈ norm(∇logfinitediff(_logμ -> withsolve(copy ∘ DECAES.solution, exp(_logμ)), log(μ), T(1e-6))) rtol = 1e-4
         @test @allocated(DECAES.solution_gradnorm(work)) == 0
         @test @inferred(DECAES.solution_gradnorm(work)) isa T
 
         ∇²μ = DECAES.∇²resnorm_sq(work)
-        @test ∇²μ ≈ ∇²logfinitediff(logμ -> withsolve(DECAES.resnorm_sq, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-3 atol = 1e-4
+        @test ∇²μ ≈ ∇²logfinitediff(_logμ -> withsolve(DECAES.resnorm_sq, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-3 atol = 1e-4
         @test @allocated(DECAES.∇²resnorm_sq(work)) == 0
         @test @inferred(DECAES.∇²resnorm_sq(work)) isa T
 
         ∇²μ = DECAES.∇²seminorm_sq(work)
-        @test ∇²μ ≈ ∇²logfinitediff(logμ -> withsolve(DECAES.seminorm_sq, exp(logμ)), log(μ), T(1e-6)) rtol = 1e-3 atol = 1e-4
+        @test ∇²μ ≈ ∇²logfinitediff(_logμ -> withsolve(DECAES.seminorm_sq, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-3 atol = 1e-4
         @test @allocated(DECAES.∇²seminorm_sq(work)) == 0
         @test @inferred(DECAES.∇²seminorm_sq(work)) isa T
 
@@ -331,9 +380,9 @@ function verify_NNLSTikhonovRegProblem(m, n)
         ξ = DECAES.resnorm_sq(work)
         η = DECAES.seminorm_sq(work)
         if η > 0
-            ξ_fun = logμ -> (DECAES.solve!(work, exp(logμ)); DECAES.resnorm_sq(work))
-            η_fun = logμ -> (DECAES.solve!(work, exp(logμ)); DECAES.seminorm_sq(work))
-            C_fun = logμ -> (DECAES.solve!(work, exp(logμ)); DECAES.curvature(identity, work))
+            ξ_fun = _logμ -> (DECAES.solve!(work, exp(_logμ)); DECAES.resnorm_sq(work))
+            η_fun = _logμ -> (DECAES.solve!(work, exp(_logμ)); DECAES.seminorm_sq(work))
+            C_fun = _logμ -> (DECAES.solve!(work, exp(_logμ)); DECAES.curvature(identity, work))
             C_menger = DECAES.menger(ξ_fun, η_fun; h = T(1e-4))
 
             ξ′ = DECAES.∇resnorm_sq(work)
@@ -345,7 +394,7 @@ function verify_NNLSTikhonovRegProblem(m, n)
             @test C_fun(log(μ)) ≈ C
             @test C_fun(log(μ)) ≈ C_menger(log(μ)) rtol = 1e-4
 
-            C̄_fun = logμ -> (DECAES.solve!(work, exp(logμ)); DECAES.curvature(log, work))
+            C̄_fun = _logμ -> (DECAES.solve!(work, exp(_logμ)); DECAES.curvature(log, work))
             C̄_menger = DECAES.menger(log ∘ ξ_fun, log ∘ η_fun; h = T(1e-4))
 
             _ξ′ = ξ′ / ξ # d/dlogμ ξ(μ) = ξ'(μ) / ξ(μ)
@@ -362,6 +411,6 @@ end
 
 @testset "NNLSTikhonovRegProblem" begin
     for (m, n) in NNLS_SIZES
-        verify_NNLSTikhonovRegProblem(m, n)
+        NNLSTikhonovRegProblem_tests(m, n)
     end
 end

@@ -63,7 +63,7 @@ function plot_bisection_search(
         A = DECAES.epg_decay_basis(θ, DECAES.logrange(opts.T2Range..., opts.nT2))
         nnls_prob = DECAES.NNLSProblem(A, prob.b)
         DECAES.solve!(nnls_prob, A, prob.b)
-        return log(DECAES.chi2(nnls_prob))
+        return DECAES.resnorm_sq(nnls_prob)
     end
 
     # solve discrete search problem

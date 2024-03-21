@@ -1,6 +1,7 @@
 try
     @eval using Pkg, Documenter, DECAES
 catch e
+    Pkg.activate(@__DIR__)
     Pkg.develop(PackageSpec(; path = joinpath(@__DIR__, "..")))
     Pkg.instantiate()
     @eval using Pkg, Documenter, DECAES

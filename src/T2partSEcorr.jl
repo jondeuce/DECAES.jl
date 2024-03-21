@@ -102,14 +102,14 @@ function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOpti
     end
 
     # Load in voxel T2 distribution
-    @inbounds @simd for j in 1:o.nT2
+    @simd for j in 1:o.nT2
         dist[j] = T2distributions[I, j]
     end
 
     # Precompute sums and dot products over small pool, medium pool, and entire ranges
     Σ_dist, Σ_dist_sp, Σ_dist_mp = zero(T), zero(T), zero(T)
     dot_sp, dot_mp = zero(T), zero(T)
-    @inbounds @simd for j in 1:length(dist)
+    @simd for j in 1:length(dist)
         Σ_dist += dist[j]
     end
     @inbounds for j in 1:length(sp_range)

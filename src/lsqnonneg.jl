@@ -25,16 +25,16 @@ solve!(work::NNLSProblem) = solve!(work, work.A, work.b)
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
-@inline residualnorm(work::NNLSProblem) = NNLS.residualnorm(work.nnls_work)
-@inline chi2(work::NNLSProblem) = residualnorm(work)^2
+@inline resnorm(work::NNLSProblem) = NNLS.residualnorm(work.nnls_work)
+@inline resnorm_sq(work::NNLSProblem) = resnorm(work)^2
 
 """
     lsqnonneg(A::AbstractMatrix, b::AbstractVector)
 
-Returns the nonnegative least-squares (NNLS) solution, X, of the problem:
+Compute the nonnegative least-squares (NNLS) solution ``X`` of the problem:
 
 ```math
-X = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2
+X = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2.
 ```
 
 # Arguments
@@ -66,10 +66,10 @@ function Base.copyto!(y::AbstractVector{T}, x::PaddedVector{T}) where {T}
     @assert size(x) == size(y)
     (; b, pad) = x
     m = length(b)
-    @inbounds @simd for i in 1:m
+    @simd for i in 1:m
         y[i] = b[i]
     end
-    @inbounds @simd for i in m+1:m+pad
+    @simd for i in m+1:m+pad
         y[i] = zero(T)
     end
     return y
@@ -128,10 +128,10 @@ end
 """
     lsqnonneg_tikh(A::AbstractMatrix, b::AbstractVector, μ::Real)
 
-Returns the Tikhonov-regularized nonnegative least-squares (NNLS) solution, `X`, of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
 
 ```math
-X = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||x||_2^2
+X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||x||_2^2.
 ```
 
 # Arguments
@@ -163,14 +163,11 @@ end
 
 loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_prob.nnls_work)^2
 
-reg(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work) # μ²||x||²
-∇reg(work::NNLSTikhonovRegProblem) = 2 * mu(work) * seminorm_sq(work) + mu(work)^2 * ∇seminorm_sq(work) # d/dμ [μ²||x||²] = 2μ||x||² + μ² d/dμ [||x||²]
-
-chi2(work::NNLSTikhonovRegProblem) = resnorm_sq(work) # ||Ax-b||²
-∇chi2(work::NNLSTikhonovRegProblem) = ∇resnorm_sq(work) # d/dμ [||Ax-b||²]
+regnorm(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work) # μ²||x||²
+∇regnorm(work::NNLSTikhonovRegProblem) = 2 * mu(work) * seminorm_sq(work) + mu(work)^2 * ∇seminorm_sq(work) # d/dμ [μ²||x||²] = 2μ||x||² + μ² d/dμ [||x||²]
 
 resnorm(work::NNLSTikhonovRegProblem) = √(resnorm_sq(work)) # ||Ax-b||
-resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - reg(work), 0) # ||Ax-b||²
+resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - regnorm(work), 0) # ||Ax-b||²
 ∇resnorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = 4 * ∇.μ^3 * ∇.xᵀB⁻¹x # d/dμ [||Ax-b||²]
 ∇²resnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 12 * ∇².μ^2 * ∇².xᵀB⁻¹x - 24 * ∇².μ^4 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [||Ax-b||²]
 
@@ -226,19 +223,19 @@ function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
     return (; μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x)
 end
 
-function chi2factor_relerr!(work::NNLSTikhonovRegProblem, χ²target, logμ, ∇logμ = nothing)
+function chi2_relerr!(work::NNLSTikhonovRegProblem, χ²target, logμ, ∇logμ = nothing)
     # NOTE: assumes `solve!(work, μ)` has been called and that the solution is ready
     μ = exp(logμ)
-    χ² = chi2(work)
-    relerr = log(χ² / χ²target) # better behaved than χ² / χ²target - 1 for large χ²?
+    res² = resnorm_sq(work)
+    relerr = log(res² / χ²target) # better behaved than res² / χ²target - 1 for large res²?
     if ∇logμ !== nothing && length(∇logμ) > 0
-        ∂χ²_∂μ = ∇chi2(work)
-        ∂relerr_∂logμ = μ * ∂χ²_∂μ / χ²
+        ∂res²_∂μ = ∇resnorm_sq(work)
+        ∂relerr_∂logμ = μ * ∂res²_∂μ / res²
         @inbounds ∇logμ[1] = ∂relerr_∂logμ
     end
     return relerr
 end
-chi2factor_relerr⁻¹(χ²target, relerr) = χ²target * exp(relerr)
+chi2_relerr⁻¹(χ²target, relerr) = χ²target * exp(relerr)
 
 # Helper struct which wraps `N` caches of `NNLSTikhonovRegProblem` workspaces.
 # Useful for optimization problems where the last function call may not be
@@ -270,7 +267,7 @@ function solve!(work::NNLSTikhonovRegProblemCache, μ::Real)
 end
 
 ####
-#### Chi2 method for choosing Tikhonov regularization parameter
+#### Chi2 method for choosing the Tikhonov regularization parameter
 ####
 
 struct NNLSChi2RegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2}
@@ -292,68 +289,64 @@ end
 @inline ncomponents(work::NNLSChi2RegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
 
 """
-    lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, Chi2Factor::Real)
+    lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real)
 
-Returns the Tikhonov-regularized nonnegative least-squares (NNLS) solution, `X`, of the problem:
-
-```math
-X = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||x||_2^2
-```
-
-where ``\\mu`` is determined by solving the nonlinear equation
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
 
 ```math
-\\frac{\\chi^2(\\mu)}{\\chi^2_{min}} = \\mathrm{Chi2Factor}
-\\quad
-\\text{where}
-\\quad
-\\chi^2_{min} = \\chi^2(\\mu = 0).
+X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||x||_2^2
 ```
 
-That is, `μ` is chosen such that the squared residual norm of the regularized problem is `Chi2Factor`
+where ``\\mu`` is determined by solving:
+
+```math
+\\chi^2(\\mu) = \\frac{||AX_{\\mu} - b||_2^2}{||AX_{0} - b||_2^2} = \\chi^2_{\\mathrm{target}}.
+```
+
+That is, ``\\mu`` is chosen such that the squared residual norm of the regularized problem is `chi2_target`
 times larger than the squared residual norm of the unregularized problem.
 
 # Arguments
 
   - `A::AbstractMatrix`: Decay basis matrix
   - `b::AbstractVector`: Decay curve data
-  - `Chi2Factor::Real`: Desired ``\\chi^2`` increase due to regularization
+  - `chi2_target::Real`: Target ``\\chi^2(\\mu)``; typically a small value, e.g. 1.02 representing a 2% increase
 
 # Outputs
 
   - `X::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\\mu``
-  - `Chi2Factor::Real`: Actual increase ``\\chi^2(\\mu)/\\chi^2_{min}``, which will be approximately equal to `Chi2Factor`
+  - `chi2::Real`: Resulting ``\\chi^2(\\mu)``, which should be approximately equal to `chi2_target`
 """
-function lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, Chi2Factor::Real, args...; kwargs...)
+function lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real, args...; kwargs...)
     work = lsqnonneg_chi2_work(A, b)
-    return lsqnonneg_chi2!(work, Chi2Factor, args...; kwargs...)
+    return lsqnonneg_chi2!(work, chi2_target, args...; kwargs...)
 end
 lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector) = NNLSChi2RegProblem(A, b)
 
-function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :bisect) where {T}
+function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :bisect) where {T}
     # Non-regularized solution
     solve!(work.nnls_prob)
     x_unreg = solution(work.nnls_prob)
-    chi2_min = chi2(work.nnls_prob)
+    res²_min = resnorm_sq(work.nnls_prob)
 
-    if chi2_min == 0 || ncomponents(work.nnls_prob) == 0
-        # 1. If non-regularized solution is exact, the only solution to chi2(μ) = Chi2Factor * chi2_min = 0 is μ = 0, since chi2(μ) > 0 for all μ > 0.
-        # 2. If non-regularized solution is zero, any value of μ > 0 also results in x(μ) = 0, and so chi2(μ) = Chi2Factor * chi2_min has either no solutions if Chi2Factor > 1, or infinitely many solutions if Chi2Factor = 1; choose μ = 0 and Chi2Factor = 1.
+    if res²_min == 0 || ncomponents(work.nnls_prob) == 0
+        # 1. If non-regularized solution is exact, the only solution to res²(μ) = chi2_target * res²_min = 0 is μ = 0, since res²(μ) > 0 for all μ > 0.
+        # 2. If non-regularized solution is zero, any value of μ > 0 also results in x(μ) = 0, and so res²(μ) = chi2_target * res²_min has either no solutions if chi2_target > 1, or infinitely many solutions if chi2_target = 1; choose μ = 0 and chi2_target = 1.
         x_final = x_unreg
-        return (; x = x_final, mu = zero(T), chi2factor = one(T))
+        return (; x = x_final, mu = zero(T), chi2 = one(T))
     end
 
     # Prepare to solve
-    chi2_target = Chi2Factor * chi2_min
+    res²_target = chi2_target * res²_min
     reset_cache!(work.nnls_prob_smooth_cache)
 
     if method === :legacy
         # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit
-        mu_final, chi2_final = chi2factor_search_from_minimum(chi2_min, Chi2Factor; legacy) do μ
-            μ == 0 && return chi2_min
+        mu_final, res²_final = chi2_search_from_minimum(res²_min, chi2_target; legacy) do μ
+            μ == 0 && return res²_min
             solve!(work.nnls_prob_smooth_cache, μ)
-            return chi2(get_cache(work.nnls_prob_smooth_cache))
+            return resnorm_sq(get_cache(work.nnls_prob_smooth_cache))
         end
         if mu_final == 0
             x_final = x_unreg
@@ -364,7 +357,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Boo
     elseif method === :bisect
         f = function (logμ)
             solve!(work.nnls_prob_smooth_cache, exp(logμ))
-            return chi2factor_relerr!(get_cache(work.nnls_prob_smooth_cache), chi2_target, logμ)
+            return chi2_relerr!(get_cache(work.nnls_prob_smooth_cache), res²_target, logμ)
         end
 
         # Find bracketing interval containing root, then perform bisection search with slightly higher tolerance to not waste f evals
@@ -372,7 +365,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Boo
 
         if fa * fb < 0
             # Bracketing interval found
-            a, fa, c, fc, b, fb = bisect_root(f, a, b, fa, fb; xatol = T(0.05), xrtol = T(0.0), ftol = (Chi2Factor - 1) / 100) # maxiters = 100
+            a, fa, c, fc, b, fb = bisect_root(f, a, b, fa, fb; xatol = T(0.05), xrtol = T(0.0), ftol = (chi2_target - 1) / 100) # maxiters = 100
 
             # Root of secant line through `(a, fa), (b, fb)` or `(c, fc), (b, fb)` to improve bisection accuracy
             tmp = fa * fc < 0 ? root_real_linear(a, c, fa, fc) : fc * fb < 0 ? root_real_linear(c, b, fc, fb) : T(NaN)
@@ -386,16 +379,16 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Boo
         end
 
         if isfinite(relerr_final)
-            mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(chi2_target, relerr_final)
+            mu_final, res²_final = exp(logmu_final), chi2_relerr⁻¹(res²_target, relerr_final)
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         else
-            x_final, mu_final, chi2_final = x_unreg, zero(T), one(T)
+            x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
         end
 
     elseif method === :brent
         f = function (logμ)
             solve!(work.nnls_prob_smooth_cache, exp(logμ))
-            return chi2factor_relerr!(get_cache(work.nnls_prob_smooth_cache), chi2_target, logμ)
+            return chi2_relerr!(get_cache(work.nnls_prob_smooth_cache), res²_target, logμ)
         end
 
         # Find bracketing interval containing root
@@ -403,70 +396,170 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, Chi2Factor::T, legacy::Boo
 
         if fa * fb < 0
             # Find root using Brent's method
-            logmu_final, relerr_final = brent_root(f, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = (Chi2Factor - 1) / 1000, maxiters = 100)
+            logmu_final, relerr_final = brent_root(f, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = (chi2_target - 1) / 1000, maxiters = 100)
         else
             # No bracketing interval found; choose point with smallest value of f (note: this branch should never be reached)
             logmu_final, relerr_final = !isfinite(fa) ? (b, fb) : !isfinite(fb) ? (a, fa) : abs(fa) < abs(fb) ? (a, fa) : (b, fb)
         end
 
         if isfinite(relerr_final)
-            mu_final, chi2_final = exp(logmu_final), chi2factor_relerr⁻¹(chi2_target, relerr_final)
+            mu_final, res²_final = exp(logmu_final), chi2_relerr⁻¹(res²_target, relerr_final)
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         else
-            x_final, mu_final, chi2_final = x_unreg, zero(T), one(T)
+            x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
         end
     else
         error("Unknown root-finding method: :$method")
     end
 
-    return (; x = x_final, mu = mu_final, chi2factor = chi2_final / chi2_min)
+    return (; x = x_final, mu = mu_final, chi2 = res²_final / res²_min)
 end
 
-function chi2factor_search_from_minimum(f, χ²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0); legacy = false) where {T}
+function chi2_search_from_minimum(f, res²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0); legacy = false) where {T}
     # Minimize energy of spectrum; loop to find largest μ that keeps chi-squared in desired range
     μ_cache = T[zero(T)]
-    χ²_cache = T[χ²min]
+    res²_cache = T[res²min]
     μnew = μmin
     while true
         # Cache function value at μ = μnew
-        χ²new = f(μnew)
+        res²new = f(μnew)
         push!(μ_cache, μnew)
-        push!(χ²_cache, χ²new)
+        push!(res²_cache, res²new)
 
         # Break when χ²fact reached, else increase regularization
-        (χ²new >= χ²fact * χ²min) && break
+        (res²new >= χ²fact * res²min) && break
         μnew *= μfact
     end
 
-    # Solve χ²(μ) = χ²fact * χ²min using a spline fitting root finding method
+    # Solve res²(μ) = χ²fact * res²min using a spline fitting root finding method
     if legacy
-        # Legacy algorithm fits spline to all (μ, χ²) values observed, including for μ=0.
+        # Legacy algorithm fits spline to all (μ, res²) values observed, including for μ=0.
         # This poses several problems:
         #   1) while unlikely, it is possible for the spline to return a negative regularization parameter
         #   2) the μ values are exponentially spaced, leading to poorly conditioned splines
-        μ = spline_root_legacy(μ_cache, χ²_cache, χ²fact * χ²min)
+        μ = spline_root_legacy(μ_cache, res²_cache, χ²fact * res²min)
     else
         if length(μ_cache) == 2
             # Solution is contained in [0,μmin]; `spline_root` with two points performs root finding via simple linear interpolation
-            μ = spline_root(μ_cache, χ²_cache, χ²fact * χ²min; deg_spline = 1)
+            μ = spline_root(μ_cache, res²_cache, χ²fact * res²min; deg_spline = 1)
             μ = isnan(μ) ? μmin : μ
         else
             # Perform spline fit on log-log scale on data with μ > 0. This solves the above problems with the legacy algorithm:
             #   1) Root is found in terms of logμ, guaranteeing μ > 0
             #   2) logμ is linearly spaced, leading to well-conditioned splines
-            logμ = spline_root(log.(μ_cache[2:end]), log.(χ²_cache[2:end]), log(χ²fact * χ²min); deg_spline = 1)
+            logμ = spline_root(log.(μ_cache[2:end]), log.(res²_cache[2:end]), log(χ²fact * res²min); deg_spline = 1)
             μ = isnan(logμ) ? μmin : exp(logμ)
         end
     end
 
     # Compute the final regularized solution
-    χ² = f(μ)
+    res² = f(μ)
 
-    return μ, χ²
+    return μ, res²
 end
 
 ####
-#### L-curve method for choosing Tikhonov regularization parameter
+#### Morozov discrepency principle (MDP) method for choosing the Tikhonov regularization parameter
+####
+
+struct NNLSMDPRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2}
+    A::TA
+    b::Tb
+    m::Int
+    n::Int
+    nnls_prob::W1
+    nnls_prob_smooth_cache::W2
+end
+function NNLSMDPRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    m, n = size(A)
+    nnls_prob = NNLSProblem(A, b)
+    nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
+    return NNLSMDPRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache)
+end
+
+@inline solution(work::NNLSMDPRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
+@inline ncomponents(work::NNLSMDPRegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
+
+"""
+    lsqnonneg_mdp(A::AbstractMatrix, b::AbstractVector, δ::Real)
+
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
+
+```math
+X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||x||_2^2
+```
+
+where ``\\mu`` is chosen using Morozov's Discrepency Principle (MDP).
+That is, ``\\mu`` is maximized subject to the constraint that the residual norm of the regularized problem is at most ``\\delta``:
+
+```math
+\\mu = \\mathrm{sup} \\{ \\nu \\ge 0 : ||AX_{\\nu} - b|| \\le \\delta \\}.
+```
+
+# Arguments
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
+  - `δ::Real`: Upper bound on regularized residual norm
+
+# Outputs
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\\mu``
+  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\\mu = 0`` solution
+"""
+function lsqnonneg_mdp(A::AbstractMatrix, b::AbstractVector, δ::Real, args...; kwargs...)
+    work = lsqnonneg_mdp_work(A, b)
+    return lsqnonneg_mdp!(work, δ, args...; kwargs...)
+end
+lsqnonneg_mdp_work(A::AbstractMatrix, b::AbstractVector) = NNLSMDPRegProblem(A, b)
+
+function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
+    # Non-regularized solution
+    solve!(work.nnls_prob)
+    x_unreg = solution(work.nnls_prob)
+    res²_min = resnorm_sq(work.nnls_prob)
+
+    #TODO: throw error if δ > ||b||, since ||A * x(μ) - b|| <= ||b|| when A, x, b are componentwise nonnegative, or return... what?
+    # if δ >= norm(work.nnls_prob.b)
+    #     error("δ = $δ is greater than the norm of the data vector ||b|| = $(norm(work.nnls_prob.b))")
+    # end
+    if δ <= res²_min
+        x_final = x_unreg
+        return (; x = x_final, mu = zero(T), chi2 = one(T))
+    end
+
+    # Prepare to solve
+    reset_cache!(work.nnls_prob_smooth_cache)
+
+    function f(logμ)
+        solve!(work.nnls_prob_smooth_cache, exp(logμ))
+        return resnorm_sq(get_cache(work.nnls_prob_smooth_cache)) - δ
+    end
+
+    # Find bracketing interval containing root
+    a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 100)
+
+    if fa * fb < 0
+        # Find root using Brent's method
+        logmu_final, err_final = brent_root(f, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = δ / 1000, maxiters = 100)
+    else
+        # No bracketing interval found; choose point with smallest value of f (note: this branch should never be reached)
+        logmu_final, err_final = !isfinite(fa) ? (b, fb) : !isfinite(fb) ? (a, fa) : abs(fa) < abs(fb) ? (a, fa) : (b, fb)
+    end
+
+    if isfinite(err_final)
+        mu_final, res²_final = exp(logmu_final), δ + err_final
+        x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
+    else
+        x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
+    end
+
+    return (; x = x_final, mu = mu_final, chi2 = res²_final / res²_min)
+end
+
+####
+#### L-curve method for choosing the Tikhonov regularization parameter
 ####
 
 struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, C1, C2}
@@ -497,15 +590,14 @@ end
 """
     lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector)
 
-Returns the Tikhonov-regularized nonnegative least-squares (NNLS) solution, `X`, of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
 
 ```math
-X = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||L x||_2^2
+X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||L x||_2^2
 ```
 
-where ``L`` is the identity matrix and ``\\mu`` is chosen by locating the corner of the "L-curve".
-
-Details of L-curve theory and the Generalized Cross-Validation (GCV) method can be found in[1].
+where ``L`` is the identity matrix and ``\\mu`` is chosen by locating the corner of the "L-curve"[1].
+Details of L-curve theory can be found in Hansen (1992)[2].
 
 # Arguments
 
@@ -516,11 +608,12 @@ Details of L-curve theory and the Generalized Cross-Validation (GCV) method can 
 
   - `X::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\\mu``
-  - `Chi2Factor::Real`: Resulting increase in ``\\chi^2`` relative to unregularized (``\\mu = 0``) solution
+  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\\mu = 0`` solution
 
 # References
 
-  - [1] Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
+ 1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
+ 2. Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
 """
 function lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector)
     work = lsqnonneg_lcurve_work(A, b)
@@ -553,9 +646,9 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T, N}) where {T, N}
     mu_final = exp(logmu_final)
     x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
     x_unreg = solve!(work.nnls_prob)
-    chi2factor_final = chi2(get_cache(work.nnls_prob_smooth_cache)) / chi2(work.nnls_prob)
+    chi2_final = resnorm_sq(get_cache(work.nnls_prob_smooth_cache)) / resnorm_sq(work.nnls_prob)
 
-    return (; x = x_final, mu = mu_final, chi2factor = chi2factor_final)
+    return (; x = x_final, mu = mu_final, chi2 = chi2_final)
 end
 
 struct LCurveCornerState{T}
@@ -586,7 +679,7 @@ Find the corner of the L-curve via curvature maximization using a modified versi
 
 # References
 
-  - [1] A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
+ 1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
 """
 function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, backtracking = true) where {T}
     # Initialize state
@@ -869,7 +962,7 @@ kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(P�
 =#
 
 ####
-#### GCV method for choosing Tikhonov regularization parameter
+#### GCV method for choosing the Tikhonov regularization parameter
 ####
 
 struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2}
@@ -877,22 +970,16 @@ struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1
     b::Tb
     m::Int
     n::Int
-    Aμ::Matrix{T}
-    A_buf::Matrix{T}
-    Aᵀ_buf::Matrix{T}
-    AᵀA_buf::Matrix{T}
+    γ::Vector{T}
     nnls_prob::W1
     nnls_prob_smooth_cache::W2
 end
 function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
-    Aμ = zeros(T, m, m)
-    A_buf = zeros(T, m, n)
-    Aᵀ_buf = zeros(T, n, m)
-    AᵀA_buf = zeros(T, n, n)
+    γ = sort!(svdvals(A)) # (generalized) singular values
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    return NNLSGCVRegProblem(A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf, nnls_prob, nnls_prob_smooth_cache)
+    return NNLSGCVRegProblem(A, b, m, n, γ, nnls_prob, nnls_prob_smooth_cache)
 end
 
 @inline solution(work::NNLSGCVRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
@@ -901,15 +988,14 @@ end
 """
     lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector)
 
-Returns the Tikhonov-regularized nonnegative least-squares (NNLS) solution, `X`, of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
 
 ```math
-X = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||L x||_2^2
+X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||L x||_2^2
 ```
 
 where ``L`` is the identity matrix and ``\\mu`` is chosen by the Generalized Cross-Validation (GCV) method.
-
-Details of the GCV method and L-curve theory can be can be found in Hansen (1992)[1]:
+Details of the GCV method can be found in Hansen (1992)[1].
 
 # Arguments
 
@@ -920,11 +1006,11 @@ Details of the GCV method and L-curve theory can be can be found in Hansen (1992
 
   - `X::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\\mu``
-  - `Chi2Factor::Real`: Resulting increase in ``\\chi^2`` relative to unregularized (``\\mu = 0``) solution
+  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\\mu = 0`` solution
 
 # References
 
-  - [1] Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
+ 1. Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
 """
 function lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector)
     work = lsqnonneg_gcv_work(A, b)
@@ -947,11 +1033,11 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T
         opt.lower_bounds  = -8.0
         opt.upper_bounds  = 2.0
         opt.xtol_rel      = 0.05
-        opt.min_objective = (logμ, ∇logμ) -> log(Float64(gcv!(work, logμ[1])))
+        opt.min_objective = (logμ, ∇logμ) -> log(max(Float64(gcv!(work, logμ[1])), eps(Float64)))
         minf, minx, ret   = NLopt.optimize(opt, [-4.0])
     elseif method === :brent
         minx, minf = brent_minimize(-8.0, 2.0; xrtol = T(0.05), xatol = T(1e-4), maxiters = 10) do logμ
-            return log(gcv!(work, logμ))
+            return log(max(gcv!(work, logμ), eps(T)))
         end
     else
         error("Unknown minimization method: $method")
@@ -961,9 +1047,9 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T
     mu_final = exp(T(minx[1]))
     x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
     x_unreg = solve!(work.nnls_prob)
-    chi2factor_final = chi2(get_cache(work.nnls_prob_smooth_cache)) / chi2(work.nnls_prob)
+    chi2_final = resnorm_sq(get_cache(work.nnls_prob_smooth_cache)) / resnorm_sq(work.nnls_prob)
 
-    return (; x = x_final, mu = mu_final, chi2factor = chi2factor_final)
+    return (; x = x_final, mu = mu_final, chi2 = chi2_final)
 end
 
 # Implements equation (32) from:
@@ -971,20 +1057,60 @@ end
 #   Analysis of Discrete Ill-Posed Problems by Means of the L-Curve
 #   Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115)
 #
-# where here A = A, b = b, λ = μ, and L = identity.
+# where here λ = μ and L = Id.
+function gcv!(work::NNLSGCVRegProblem, logμ)
+    # Unpack buffers
+    (; m, n, γ) = work
+
+    # Solve regularized NNLS problem
+    μ = exp(logμ)
+    solve!(work.nnls_prob_smooth_cache, μ)
+    cache = get_cache(work.nnls_prob_smooth_cache)
+
+    # Compute GCV
+    res² = resnorm_sq(cache) # squared residual norm ||A * x(μ) - b||^2
+    dof = gcv_dof(m, n, γ, μ) # degrees of freedom; γ are (generalized) singular values
+    gcv = res² / dof^2
+
+    return gcv
+end
+
+function gcv_and_∇gcv!(work::NNLSGCVRegProblem, logμ)
+    # Unpack buffers
+    (; m, n, γ) = work
+
+    # Solve regularized NNLS problem
+    μ = exp(logμ)
+    solve!(work.nnls_prob_smooth_cache, μ)
+    cache = get_cache(work.nnls_prob_smooth_cache)
+
+    # Compute primal
+    res² = resnorm_sq(cache) # squared residual norm ||A * x(μ) - b||^2
+    dof = gcv_dof(m, n, γ, μ) # degrees of freedom; γ are (generalized) singular values
+    gcv = res² / dof^2
+
+    # Compute derivative: ∂/∂λ [resnorm_sq(λ) / dof(λ)^2] = ∇resnorm_sq(λ) / dof(λ)^2 - 2 * resnorm_sq(λ) * ∇dof(λ) / dof(λ)^3
+    ∇res² = ∇resnorm_sq(cache)
+    ∇dof = ∇gcv_dof(m, n, γ, μ)
+    ∇gcv = (∇res² - 2 * res² * ∇dof / dof) / dof^2
+
+    return gcv, ∇gcv
+end
+
+#=
+# Equivalent direct method (less efficient)
 function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(false)) where {extract_subproblem}
     # Unpack buffers
     (; A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf) = work
 
-    # Solve regularized NNLS problem and record chi2 = ||A*x - b||^2 which is returned
+    # Solve regularized NNLS problem and record residual norm ||A * x(μ) - b||^2
     μ = exp(logμ)
     solve!(work.nnls_prob_smooth_cache, μ)
-    χ² = chi2(get_cache(work.nnls_prob_smooth_cache))
-    x = solution(get_cache(work.nnls_prob_smooth_cache))
+    res² = resnorm_sq(get_cache(work.nnls_prob_smooth_cache))
 
     if extract_subproblem
         # Extract equivalent unconstrained least squares subproblem from NNLS problem
-        # by extracting columns of A which correspond to nonzero components of x
+        # by extracting columns of A which correspond to nonzero components of x(μ)
         idx = NNLS.components(get_cache(work.nnls_prob_smooth_cache).nnls_prob.nnls_work)
         n′ = length(idx)
         A′ = reshape(uview(A_buf, 1:m*n′), m, n′)
@@ -1003,7 +1129,7 @@ function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(fa
     # where the matrices have sizes
     #   A: (m, n), Aμ: (m, m), At: (n, m), AtA: (n, n)
     mul!(AtA′, A′', A′) # A'A
-    @inbounds @simd for i in 1:n
+    @simd for i in 1:n
         AtA′[i, i] += μ^2 # A'A + μ^2*I
     end
     ldiv!(At′, cholesky!(Symmetric(AtA′)), A′') # (A'A + μ^2*I)^-1 * A'
@@ -1012,11 +1138,12 @@ function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(fa
     # Return Generalized cross-validation. See equations 27 and 32 in
     #   Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580
     #   https://doi.org/10.1137/1034115
-    trace = m - tr(Aμ) # tr(I - Aμ) = m - tr(Aμ) for m x m matrix Aμ
-    gcv = χ² / trace^2 # ||A*x - b||^2 / tr(I - Aμ)^2
+    dof = m - tr(Aμ) # tr(I - Aμ) = m - tr(Aμ) for m x m matrix Aμ; can be considered as the "degrees of freedom" (Hansen, 1992)
+    gcv = res² / dof^2 # ||A * x(μ) - b||^2 / tr(I - Aμ)^2
 
     return gcv
 end
+=#
 
 # Equation (27) from Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115),
 # specialized for L = identity:
@@ -1025,11 +1152,22 @@ end
 #
 # where γ_i are the generalized singular values, which are equivalent to ordinary
 # singular values when L = identity, and size(A) = (m, n).
-function gcv_tr!(A, λ)
-    m, n = size(A)
-    γ = svdvals!(A)
-    γ .= λ .^ 2 ./ (γ .^ 2 .+ λ .^ 2)
-    return max(m - n, 0) + sum(γ)
+# Can be considered as the "degrees of freedom".
+function gcv_dof(m::Int, n::Int, γ::AbstractVector{T}, λ::T) where {T}
+    dof = T(max(m - n, 0)) # handle underdetermined systems (m < n)
+    @simd for γᵢ in γ
+        dof += λ^2 / (γᵢ^2 + λ^2)
+    end
+    return dof
 end
-gcv_tr(A, λ) = gcv_tr!(copy(A), λ)
-gcv_tr_brute(A, λ) = tr(I - A * ((A'A + λ^2 * I) \ A'))
+gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = gcv_dof(size(A)..., svdvals(A), λ)
+
+# DOF derivative: ∂/∂λ gcv_dof(m, n, γ, λ)
+function ∇gcv_dof(m::Int, n::Int, γ::AbstractVector{T}, λ::T) where {T}
+    dof = zero(T)
+    @simd for γᵢ in γ
+        dof += 2 * λ * γᵢ^2 / (γᵢ^2 + λ^2)^2
+    end
+    return dof
+end
+∇gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = ∇gcv_dof(size(A)..., svdvals(A), λ)

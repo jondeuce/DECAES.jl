@@ -29,6 +29,7 @@ main
 ```@docs
 lsqnonneg
 lsqnonneg_tikh
+lsqnonneg_mdp
 lsqnonneg_chi2
 lsqnonneg_gcv
 lsqnonneg_lcurve

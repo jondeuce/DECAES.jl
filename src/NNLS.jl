@@ -181,7 +181,7 @@ function construct_householder!(u::AbstractVector{T}, up::T) where {T}
     end
 
     sm = zero(T)
-    @inbounds @simd for i in eachindex(u)
+    @simd for i in eachindex(u)
         ui = u[i]
         sm = sm + ui * ui
     end
@@ -220,7 +220,7 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
 
     @inbounds c1 = c[1]
     sm = c1 * up
-    @inbounds @simd for i in 2:m
+    @simd for i in 2:m
         sm = sm + c[i] * u[i]
     end
 
@@ -478,7 +478,7 @@ function nnls!(
         end
 
         if nsetp != m
-            @inbounds @simd for l in nsetp+1:m
+            @simd for l in nsetp+1:m
                 A[l, j_maxdual] = zero(T)
             end
         end
@@ -605,7 +605,7 @@ function nnls!(
 
     sm = zero(T)
     if nsetp < m
-        @inbounds @simd for ip in nsetp+1:m
+        @simd for ip in nsetp+1:m
             bi = b[ip]
             zz[ip] = bi
             sm = sm + bi * bi

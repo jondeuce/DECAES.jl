@@ -356,7 +356,7 @@ function test_mock_surrogate_search_problem(
 
     function f!(work, prob, α, β)
         DECAES.solve!(work, A(α, β), prob.b)
-        return log(max(DECAES.chi2(work), eps()))
+        return log(max(DECAES.resnorm_sq(work), eps()))
     end
 
     function fg_approx!(work, prob, α, β; h)
