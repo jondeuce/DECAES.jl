@@ -414,22 +414,23 @@ function parse_cli(args)
     opts = parse_args(args, CLI_SETTINGS; as_symbols = true)
     if opts !== nothing
         opts = handle_cli_deprecations!(opts)
+        opts = verify_cli_args!(opts)
         opts = clean_cli_args!(opts)
     end
     return opts
 end
 
 function handle_cli_deprecations!(opts)
-    handle_renamed_cli_flag!(opts, :Progress => nothing)
+    handle_renamed_cli_flag!(opts; oldflag = :Progress, newflag = nothing)
+    handle_renamed_cli_flag!(opts; oldflag = :legacy, newflag = nothing, default = false)
     return opts
 end
 
-function handle_renamed_cli_flag!(opts, oldnew::Pair)
-    oldflag, newflag = oldnew
-    if opts[oldflag] !== nothing
+function handle_renamed_cli_flag!(opts; oldflag, newflag, default = nothing)
+    if opts[oldflag] != default
         if newflag === nothing
             @warn "The flag --$oldflag is deprecated and will be removed in future releases."
-        elseif opts[newflag] !== nothing
+        elseif opts[oldflag] != default
             error("The flag --$newflag and the deprecated flag --$oldflag were both passed; use --$newflag only.")
         else
             @warn "The flag --$oldflag is deprecated and will be removed in future releases; use --$newflag instead."
@@ -438,6 +439,14 @@ function handle_renamed_cli_flag!(opts, oldnew::Pair)
             opts[newflag] = opts[oldflag]
         end
         delete!(opts, oldflag)
+    end
+    return opts
+end
+
+function verify_cli_args!(opts)
+    # Verify argument interdependencies which can't be enforced by ArgParse
+    if !(opts[:T2map] || opts[:T2part])
+        error("At least one of --T2map or --T2part must be passed")
     end
     return opts
 end

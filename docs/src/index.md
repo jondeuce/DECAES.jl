@@ -20,35 +20,34 @@ DECAES provides tools for decomposing multi-exponential signals which arise from
 The main decomposition method used is an inverse Laplace transform-based technique which involves solving the regularized nonnegative least squares (NNLS) inverse problem
 
 ```math
-X = \mathrm{argmin}_{x \ge 0} ||Ax - b||_2^2 + \mu^2 ||x||_2^2
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
 ```
 
 where $b$ is the signal magnitude data, $A$ is a matrix of exponential decay bases, and $\mu$ is a regularization parameter.
 $A$ is constructed using the extended phase graph algorithm with stimulated echo correction.
-The columns of $A$ are exponential bases with differing characteristic $T_2$ decay times $T_{2,j}$.
+The columns of $A$ are exponential bases with differing characteristic $T_2$ decay times $T_{2, j}$.
 
-The output $X$ is the spectrum of (nonnegative) exponential decay amplitudes.
-Amplitude $X_j$ of the spectrum $X$ is therefore interpreted physically as the amount of the signal $b$ which decays with time constant $T_{2,j}$.
-For this reason, the spectrum $X$ is commonly referred to as the $T_2$ *distribution*.
+The output $X_{\mu}$ is the spectrum of (nonnegative) exponential decay amplitudes.
+Amplitude $X_{\mu, j}$ of the spectrum $X_{\mu}$ is therefore interpreted physically as the amount of the signal $b$ which decays with time constant $T_{2, j}$.
+For this reason, the spectrum $X_{\mu}$ is commonly referred to as the $T_2$ *distribution*.
 DECAES provides methods for [computing $T_2$-distributions](@ref t2map).
 
 ## [Installation](@id installation)
 
-Start `julia` from the command line, type `]` to enter the package manager REPL mode (the `julia>` prompt will be replaced by a `pkg>` prompt), and enter the following command:
+Using Julia v1.9 or later you can install DECAES as follows:
 
-```julia
-pkg> add DECAES
+```bash
+$ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
 ```
 
-Once the package is finished installing, type the backspace key to exit the package manager REPL mode (the `julia>` prompt should reappear).
-Exit Julia using the keyboard shortcut `Ctrl+D`, or by typing `exit()`.
+This will add DECAES.jl to a named Julia project environment separate from your global environment, and build the `decaes` executable at `~/.julia/bin` for running DECAES from the command line.
 
 ## [Updating DECAES](@id updating)
 
-To update DECAES to the latest version, start `julia` from the command line, type `]` to enter the package manager REPL mode, and enter the following:
+DECAES can similarly be updated to the latest version as follows:
 
-```julia
-pkg> update DECAES
+```bash
+$ julia --project=@decaes -e 'import Pkg; Pkg.update("DECAES"); Pkg.build("DECAES")'
 ```
 
 ## Myelin water imaging

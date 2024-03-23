@@ -4,31 +4,32 @@ DECAES provides a command line interface (CLI) for calling the main analysis fun
 
 ## Using the CLI
 
-Assuming you have [DECAES installed](@ref installation), there are two equivalent ways to use the CLI:
+There are two equivalent ways to use the [command line interface (CLI)](https://jondeuce.github.io/DECAES.jl/dev/cli), assuming DECAES is already [installed](@ref installation):
 
-**1. Helper script:** Create a simple Julia script which calls the entrypoint function [`main`](@ref) provided by this package. For example, save the following code in a Julia script called `decaes.jl` (or, download the script located [here](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.jl)):
-
-```julia
-using DECAES # load the package
-main() # call command line interface
-```
-
-An image file `image.nii` can be passed to DECAES by running this script with `julia` from the command line:
+**1. (Recommended) `decaes` launcher:** Use the executable `~/.julia/bin/decaes` which comes with DECAES:
 
 ```bash
-$ julia decaes.jl -- image.nii <COMMAND LINE ARGS>
+$ decaes <COMMAND LINE ARGS>
 ```
 
-**2. Julia `-e` flag:** The contents of the above script can equivalently be passed directly to `julia` using the `-e` (for "evaluate") flag:
+!!! note
+    Add `~/.julia/bin` to your `PATH` to avoid writing the full path `~/.julia/bin/decaes`.
+
+**2. Julia `-e` flag:** Call the DECAES CLI from Julia directly using the `-e` (for "evaluate") flag:
 
 ```bash
-$ julia -e 'using DECAES; main()' -- image.nii <COMMAND LINE ARGS>
+$ julia --project=@decaes --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS>
 ```
+
+The `decaes` launcher is in fact just a thin wrapper script around a command like this one.
+
+!!! note
+    The flag `--threads=auto` enables parallel processing, which is critical for maximizing DECAES performance.
 
 Either way of calling the CLI forwards the arguments `<COMMAND LINE ARGS>` to the entrypoint function [`main`](@ref).
 Available command line arguments are detailed in the [Arguments](@ref) section.
 
-For the remainder of this section, we will make use of the `decaes.jl` script from option 1.
+For the remainder of this section, we will make use of the `decaes` launcher.
 
 ## File types
 
@@ -83,16 +84,6 @@ For example, if the input file is called `image.nii`, the possible output files 
 
 If the `--dry` flag is passed, none of the above files will be produced.
 
-## Multithreading
-
-Multithreaded parallel processing can be enabled by passing the `julia` command line flag `--threads=auto`:
-
-```@example
-println("\$ julia --threads=auto decaes.jl -- image.nii <COMMAND LINE ARGS>") # hide
-```
-
-This is highly recommended to speed up computation time, but is not strictly required.
-
 ## Examples
 
 ### [Default options](@id defaultoptions)
@@ -116,11 +107,11 @@ callmain(imfile, "--T2map", "--T2part", "--dry", "--quiet", "--TE", "10e-3", "--
 ```
 
 Suppose you have a multi spin-echo image file `image.nii` which you would like to perform $T_2$ analysis on.
-We can call [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) on the file `image.nii` using `decaes.jl`.
+We can call [`T2mapSEcorr`](@ref) and [`T2partSEcorr`](@ref) on the file `image.nii` using the `decaes` launcher.
 We pass the required arguments with the appropriate flags and leave the remaining parameters at default values:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- image.nii --T2map --T2part --TE 10e-3 --nT2 40 --T2Range 10e-3 2.0 --SPWin 10e-3 40e-3 --MPWin 40e-3 200.0e-3 --Reg lcurve") # hide
+println("\$ decaes image.nii --T2map --T2part --TE 10e-3 --nT2 40 --T2Range 10e-3 2.0 --SPWin 10e-3 40e-3 --MPWin 40e-3 200.0e-3 --Reg lcurve") # hide
 ```
 
 After a few seconds, the script should begin running with the following messages appearing as the script progresses (note that real images will take longer to process than this toy example):
@@ -158,14 +149,14 @@ lcurve
 If this file is located at `/path/to/settings.txt`, simply prefix the filepath with the `@` character to have the file contents read into the [`main`](@ref) function:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- @/path/to/settings.txt") # hide
+println("\$ decaes @/path/to/settings.txt") # hide
 ```
 
 !!! note
     * The use of settings files is highly recommended for both reproducibility and for self-documentation. The input settings file will be automatically copied into the output folder for each processed image, with the image filename prepended. In this case, for example, the copied settings file would be called `image.settings.txt`
     * Only one flag or value is allowed per line within a settings file. Flags which require multiple inputs (e.g. `--T2Range` above) must use one line for each input
     * The extension of the settings file is ignored; `.txt` is arbitrary in this example
-    * Though not strictly necessary, using full input- and output paths is recommended. This way, one doesn't rely on relative paths and can e.g. call `julia /path/to/decaes.jl @/path/to/settings.txt` from any directory
+    * Though not strictly necessary, using full input- and output paths in the settings file is convenient. This way, one doesn't rely on relative paths and can call e.g. `decaes @/path/to/settings.txt` from any directory
 
 ### [Default settings files](@id nondefault)
 
@@ -174,7 +165,7 @@ Settings in `default.txt` can be individually overridden.
 For example, if we are interested in changing the number of $T_2$ bins `nT2` to 60, but leaving all other parameters the same, run the following:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- @/path/to/default.txt --nT2 60") # hide
+println("\$ decaes @/path/to/default.txt --nT2 60") # hide
 ```
 
 ### [Multiple input files](@id multiinput)
@@ -182,7 +173,7 @@ println("\$ julia --threads=auto decaes.jl -- @/path/to/default.txt --nT2 60") #
 Multiple input files (possibly of different file types) can be passed in the obvious way:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- image1.nii image2.mat image3.nii.gz image4.par <COMMAND LINE ARGS>") # hide
+println("\$ decaes image1.nii image2.mat image3.nii.gz image4.par <COMMAND LINE ARGS>") # hide
 ```
 
 Equivalently, place multiple image paths at the top of your settings file, with each path on a new line.
@@ -193,7 +184,7 @@ By default, output files are saved in the same location as the corresponding inp
 If you'd like to save them in a different folder, you can use the `-o` or `--output` flag:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- image.nii --output /path/to/output/folder/ <COMMAND LINE ARGS>") # hide
+println("\$ decaes image.nii --output /path/to/output/folder/ <COMMAND LINE ARGS>") # hide
 ```
 
 The requested output folder will be created if it does not already exist.
@@ -205,7 +196,7 @@ Equivalently, add `--output` and `/path/to/output/folder/` as consecutive lines 
 Image masks can be passed into DECAES using the `-m` or `--mask` flag:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- image.nii --mask /path/to/mask.nii <COMMAND LINE ARGS>") # hide
+println("\$ decaes image.nii --mask /path/to/mask.nii <COMMAND LINE ARGS>") # hide
 ```
 
 The mask file is loaded and applied to the input image via elementwise multiplication over the spatial dimensions, e.g. the mask is applied to each echo of a 4D multi-echo input image.
@@ -213,7 +204,7 @@ The mask file is loaded and applied to the input image via elementwise multiplic
 If multiple image files are passed, multiple corresponding mask files can be passed, too:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- image1.nii image2.mat --mask /path/to/mask1.mat /path/to/mask2.nii.gz <COMMAND LINE ARGS>") # hide
+println("\$ decaes image1.nii image2.mat --mask /path/to/mask1.mat /path/to/mask2.nii.gz <COMMAND LINE ARGS>") # hide
 ```
 
 Equivalently, add `--mask`, `/path/to/mask1.mat`, `/path/to/mask2.mat`, ...  as consecutive lines in your settings file.
@@ -229,14 +220,14 @@ Only voxels within the generated brain mask will be processed, greatly reducing 
 To use BET, pass the `--bet` flag:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- image.nii --bet <COMMAND LINE ARGS>") # hide
+println("\$ decaes image.nii --bet <COMMAND LINE ARGS>") # hide
 ```
 
 If `bet` is not on your system path, you can pass the path to the `bet` binary with the `--betpath` flag.
 Additionally, you can pass arguments to `bet` with the `--betargs` flag:
 
 ```@example
-println("\$ julia --threads=auto decaes.jl -- image.nii --bet --betpath /path/to/bet --betargs -m,-n <COMMAND LINE ARGS>") # hide
+println("\$ decaes image.nii --bet --betpath /path/to/bet --betargs -m,-n <COMMAND LINE ARGS>") # hide
 ```
 
 Note that `bet` arguments must be passed as a single string to `--betargs`, separated by commas or spaces, as shown above.
@@ -245,21 +236,3 @@ Equivalently, add `--bet`, `--betpath`, `/path/to/bet`, `--betargs`, `-m,-n` as 
 
 !!! note
     If a mask file is passed using the `--mask` flag, the `--bet` flag will be ignored and the mask file will be used
-
-## Legacy options
-
-During the port from MATLAB to Julia, some algorithms were improved using computationally more efficient algorithms, and some default parameters were modified or removed as well.
-This may cause small differences in output parameter maps.
-As an example, the flip angle optimization procedure requires finding the root of a cubic spline.
-In MATLAB this was performed by evaluating the spline on a very fine mesh and choosing the value nearest zero.
-During profiling it was found that this was a time consuming operation, and therefore in Julia this was replaced by an efficient rootfinding method tailored for cubic splines.
-
-The differences due to algorithmic changes like the one above are quite small.
-For example, most tests in the DECAES test suite will pass when using a relative tolerance of ``10^{-3}``, and almost all tests pass with a relative tolerance of ``10^{-2}``.
-That is to say that nearly all outputs are identical to 3 or more significant digits, which includes $T_2$-distributions, MWF maps, etc.
-It should be emphasized, though, that as these differences arise from improved algorithms, any discrepencies are merely small improvements.
-
-The `--legacy` flag is available if *exact* reproducibility is required compared to the MATLAB version.
-This will ensure that all outputs match to nearly machine precision (a relative tolerance of ``10^{-10}`` is used during testing).
-Note however that the `--legacy` flag may cause a significant slowdown in processing time due to less efficient algorithms being used internally, and is therefore not recommended unless absolutely necessary.
-Differences due to changes in default parameters can always be overridden by passing in the desired value explicitly without the need for the `--legacy` flag.

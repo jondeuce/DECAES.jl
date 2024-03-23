@@ -19,10 +19,26 @@ If you use DECAES in your research, please [cite](CITATION.bib) our work.
 
 ## Installation
 
-In Julia v1.9 or later you can install DECAES from the Pkg REPL:
+Using Julia v1.9 or later you can install DECAES as follows:
+
+```bash
+$ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
 ```
-pkg> add DECAES
-```
+
+This will do two things:
+1. Add DECAES.jl to a named Julia project environment separate from your global environment
+2. Build the `decaes` executable at `~/.julia/bin` for running DECAES from the command line
+
+DECAES can then be run from the command line via `decaes <COMMAND LINE ARGS>`, provided `~/.julia/bin` is added to your `PATH`.
+Run `decaes --help` for available arguments.
+
+## Quickstart
+
+If you are new to DECAES, the best place to start is the [examples repository](https://github.com/jondeuce/mwiexamples).
+There, we provide:
+
+* A walk-through tutorial for using the MATLAB, Python, and command-line DECAES interfaces
+* Example multi spin-echo (MSE) data for demonstrating MWI processing
 
 ## Documentation
 
@@ -33,50 +49,10 @@ Find package documentation at the above link, which includes:
 * API reference detailing how to use DECAES.jl from within Julia
 * Other internals and algorithmic details
 
-## DECAES tutorial
-
-If you are new to DECAES, the best place to start is the [examples repository](https://github.com/jondeuce/mwiexamples).
-There, we provide a walk-through tutorial for using the MATLAB and command-line interfaces for DECAES, including example multi spin-echo (MSE) data for performing MWI.
-
-## Command Line Interface
-
-This toolbox provides a command line interface (CLI) for processing from the terminal.
-The CLI takes image files as inputs and performs one or both of T2-distribution computation and T2-parts analysis, the latter of which performs post-processing of the T2-distribution to calculate parameters such as the MWF or LWF.
-The input image must be one of the following file types:
-
-1. [NIfTI file](https://nifti.nimh.nih.gov/) with extension `.nii`, or [gzip](https://www.gzip.org/) compressed NIfTI file with extension `.nii.gz`
-2. [MATLAB file](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) with extension `.mat`
-3. Philips [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images) file pair with extensions `.par` and `.rec` (or `.PAR` and `.REC`)
-4. Philips XML/REC file pair with extensions `.xml` and `.rec` (or `.XML` and `.REC`)
-
-All output files are saved as `.mat` files in format `v7.3`.
-
-* **Note:** if your data is in DICOM format, the [freely available `dcm2niix` tool](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage) is able to convert [DICOM](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#General_Usage) files into NIfTI format.
-
-### Basic usage
-
-There are two equivalent ways to use the CLI, assuming DECAES is already installed:
-
-**1. Helper script:** Create a script called e.g. `decaes.jl` with the following contents (or, download the script located [here](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.jl)):
-
-```julia
-using DECAES # load the package
-main() # call CLI entrypoint function
-```
-
-This script can then be invoked from the command line as follows:
-
-```bash
-$ julia --threads=auto decaes.jl -- <COMMAND LINE ARGS> # --threads=auto enables parallel processing
-```
-
-**2. Julia `-e` flag:** The contents of the above script can be written directly at the command line using the `-e` (for "evaluate") flag:
-
-```bash
-$ julia --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS> # --threads=auto enables parallel processing
-```
-
 ## Benchmarks
+
+Due to performance optimizations enabled by Julia, DECAES is *fast*.
+As an illustration, here is a comparison between DECAES and [UBC MWF MATLAB toolbox](https://github.com/ubcmri/ubcmwf) T2-distribution computation times for two multi spin-echo (MSE) datasets:
 
 <center>
 
@@ -92,12 +68,6 @@ $ julia --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS> # --thre
 
 </center>
 
-Benchmarking notes:
-
-* MATLAB scripts used were from the `MWI_NNLS_toolbox_0319` subfolder of the [ubcmwf github repository](https://github.com/ubcmri/ubcmwf)
-* Both MATLAB and DECAES made use of precomputed brain masks to skip voxels outside of the brain
-* Image loading time and MATLAB/Julia startup time are not included
-
 ## DECAES Tutorial 2022
 
 [![DECAES.jl Software Tutorial: Myelin and Luminal Water Imaging in under 1 Minute](https://imgur.com/Ulh6jA0.png)](https://www.youtube.com/watch?v=xCKWWNywOTw)
@@ -106,7 +76,7 @@ Benchmarking notes:
 
 [![JuliaCon 2021 - Matlab to Julia: Hours to Minutes for MRI Image Analysis](https://imgur.com/zJpRdtx.png)](https://www.youtube.com/watch?v=6OxsK2R5VkA)
 
-## Citing this work
+# Citing this work
 
 [![Z Med Phys](https://cdn.ncbi.nlm.nih.gov/corehtml/query/egifs/https:--linkinghub.elsevier.com-ihub-images-PubMedLink.gif)](https://doi.org/10.1016/j.zemedi.2020.04.001)
 
