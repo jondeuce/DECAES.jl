@@ -317,7 +317,7 @@ Optim.jl is licensed under the MIT License:
 #### Brent's method (minimization)
 
 function brent_minimize(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
-    @assert x₁ <= x₂ "x₁ must be less than x₂"
+    @assert x₁ < x₂ "x₁ must be less than x₂"
 
     α = 2 - T(φ) # α ≈ 0.381966
     x = x₁ + α * (x₂ - x₁)
@@ -409,6 +409,107 @@ function brent_minimize(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = �
     end
 
     return (x, y)
+end
+
+# Given a function `f_∂f` which returns both the function value and its derivative at a given point,
+# isolate the minimum of the function using a hybrid Brent-Newton method that incorporates derivatives.
+# The input points `a`, `b`, and `x0` must be a bracketing triplet of abscissas, i.e. `x0` must lie
+# between `a` and `b` and the function value at `x0` must be less than the value at both `a` and `b`.
+# The abscissa of the minimum and the minimum function value are returned.
+function brent_newton_minimize(f_∂f, a::T, b::T, x0::T, f0::T = f_∂f(x0)[1], df0::T = f_∂f(x0)[2]; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
+    @assert a < x0 < b "x0 must lie between a and b"
+    tol = xatol + xrtol * max(abs(a), abs(b))
+
+    x_older = x_old = x_new = x0
+    f_older = f_old = f_new = f0
+    df_older = df_old = df_new = df0
+    delta = delta_old = zero(T)
+
+    for iter in 1:maxiters
+        x_mid = (a + b) / 2
+        tol = xatol + xrtol * abs(x_new)
+
+        if abs(x_new - x_mid) <= (2 * tol - (b - a) / 2)
+            break
+        end
+
+        if abs(delta_old) > tol
+            delta1 = delta2 = 2 * (b - a)
+            if df_old != df_new
+                delta1 = (x_old - x_new) * df_new / (df_new - df_old)
+            end
+            if df_older != df_new
+                delta2 = (x_older - x_new) * df_new / (df_new - df_older)
+            end
+
+            u1 = x_new + delta1
+            u2 = x_new + delta2
+            accept_delta1 = (a - u1) * (u1 - b) > 0 && df_new * delta1 <= 0
+            accept_delta2 = (a - u2) * (u2 - b) > 0 && df_new * delta2 <= 0
+            delta_older, delta_old = delta_old, delta
+
+            if accept_delta1 || accept_delta2
+                if accept_delta1 && accept_delta2
+                    delta = abs(delta1) < abs(delta2) ? delta1 : delta2
+                else
+                    delta = accept_delta1 ? delta1 : delta2
+                end
+
+                if abs(delta) <= abs(delta_older / 2)
+                    u = x_new + delta
+                    if u - a < 2 * tol || b - u < 2 * tol
+                        delta = copysign(tol, x_mid - x_new)
+                    end
+                else
+                    delta_old = df_new >= 0 ? a - x_new : b - x_new
+                    delta = delta_old / 2
+                end
+            else
+                delta_old = df_new >= 0 ? a - x_new : b - x_new
+                delta = delta_old / 2
+            end
+        else
+            delta_old = df_new >= 0 ? a - x_new : b - x_new
+            delta = delta_old / 2
+        end
+
+        if abs(delta) >= tol
+            u = x_new + delta
+            f_u, df_u = f_∂f(u)
+        else
+            u = x_new + copysign(tol, delta)
+            f_u, df_u = f_∂f(u)
+            if f_u > f_new
+                break
+            end
+        end
+
+        if f_u <= f_new
+            if u >= x_new
+                a = x_new
+            else
+                b = x_new
+            end
+            x_older, f_older, df_older = x_old, f_old, df_old
+            x_old, f_old, df_old = x_new, f_new, df_new
+            x_new, f_new, df_new = u, f_u, df_u
+        else
+            if u < x_new
+                a = u
+            else
+                b = u
+            end
+
+            if f_u <= f_old || x_old == x_new
+                x_older, f_older, df_older = x_old, f_old, df_old
+                x_old, f_old, df_old = u, f_u, df_u
+            elseif f_u < f_older || x_older == x_new || x_older == x_old
+                x_older, f_older, df_older = u, f_u, df_u
+            end
+        end
+    end
+
+    return (x_new, f_new)
 end
 
 function newton_bisect_minimize(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxdepth::Int = 5, kwargs...) where {T <: AbstractFloat}

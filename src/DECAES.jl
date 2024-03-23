@@ -9,7 +9,7 @@ using Base.MathConstants: φ
 # External libraries
 using ArgParse: ArgParse, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
 using Dierckx: Dierckx
-using DocStringExtensions: DocStringExtensions, FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
+using DocStringExtensions: DocStringExtensions, @doc, FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using ForwardDiff: ForwardDiff, DiffResults
 using Logging: Logging, ConsoleLogger, with_logger
 using LoggingExtras: LoggingExtras, FileLogger, LevelOverrideLogger, TeeLogger, TransformerLogger

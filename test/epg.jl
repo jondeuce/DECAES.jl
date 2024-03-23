@@ -16,7 +16,7 @@ function compare_epg(
     @test isapprox(dc₁, dc₂; rtol = √eps(T), atol = 10 * eps(T))
 end
 
-@testset "EPG algorithms" begin
+function test_EPG_algorithms()
     # In principle ETL testing range need not be too large (only need to test four ETL values >=4 which are unique mod 4),
     # but since this file is also used for app precompilation, we should sweep over ETL values we expect to see in practice
     # for the default algorithm.
@@ -35,7 +35,7 @@ end
     end
 end
 
-@testset "EPGOptions" begin
+function test_EPGOptions()
     θ = DECAES.EPGOptions((; ETL = 10, α = 169.0, TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = 176.0))
 
     @testset "basics" begin
@@ -55,7 +55,7 @@ end
     end
 end
 
-@testset "EPGFunctor" begin
+function test_EPGFunctor()
     T = Float64
     ETL = 8
     θ = DECAES.EPGOptions((; ETL, α = 169.0, TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = 176.0))
@@ -90,5 +90,9 @@ end
     θ′ = DECAES.restructure(θ, x .+ δx, Val((:α, :T2)))
     @test J * δx ≈ DECAES.EPGdecaycurve(θ′) - y atol = 5e-12
 end
+
+@testset "EPG algorithms" test_EPG_algorithms()
+@testset "EPGOptions" test_EPGOptions()
+@testset "EPGFunctor" test_EPGFunctor()
 
 nothing

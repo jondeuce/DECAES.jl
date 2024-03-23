@@ -28,13 +28,13 @@ solve!(work::NNLSProblem) = solve!(work, work.A, work.b)
 @inline resnorm(work::NNLSProblem) = NNLS.residualnorm(work.nnls_work)
 @inline resnorm_sq(work::NNLSProblem) = resnorm(work)^2
 
-"""
+@doc raw"""
     lsqnonneg(A::AbstractMatrix, b::AbstractVector)
 
 Compute the nonnegative least-squares (NNLS) solution ``X`` of the problem:
 
 ```math
-X = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2.
+X = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2.
 ```
 
 # Arguments
@@ -125,13 +125,13 @@ function NNLSTikhonovRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, μ::
     return NNLSTikhonovRegProblem(A, b, m, n, nnls_prob, buffers)
 end
 
-"""
+@doc raw"""
     lsqnonneg_tikh(A::AbstractMatrix, b::AbstractVector, μ::Real)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
 
 ```math
-X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||x||_2^2.
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2.
 ```
 
 # Arguments
@@ -288,35 +288,35 @@ end
 @inline solution(work::NNLSChi2RegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
 @inline ncomponents(work::NNLSChi2RegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
 
-"""
+@doc raw"""
     lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
 
 ```math
-X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||x||_2^2
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
 ```
 
-where ``\\mu`` is determined by solving:
+where ``\mu`` is determined by solving:
 
 ```math
-\\chi^2(\\mu) = \\frac{||AX_{\\mu} - b||_2^2}{||AX_{0} - b||_2^2} = \\chi^2_{\\mathrm{target}}.
+\chi^2(\mu) = \frac{||AX_{\mu} - b||_2^2}{||AX_{0} - b||_2^2} = \chi^2_{\mathrm{target}}.
 ```
 
-That is, ``\\mu`` is chosen such that the squared residual norm of the regularized problem is `chi2_target`
+That is, ``\mu`` is chosen such that the squared residual norm of the regularized problem is `chi2_target`
 times larger than the squared residual norm of the unregularized problem.
 
 # Arguments
 
   - `A::AbstractMatrix`: Decay basis matrix
   - `b::AbstractVector`: Decay curve data
-  - `chi2_target::Real`: Target ``\\chi^2(\\mu)``; typically a small value, e.g. 1.02 representing a 2% increase
+  - `chi2_target::Real`: Target ``\chi^2(\mu)``; typically a small value, e.g. 1.02 representing a 2% increase
 
 # Outputs
 
   - `X::AbstractVector`: Regularized NNLS solution
-  - `mu::Real`: Resulting regularization parameter ``\\mu``
-  - `chi2::Real`: Resulting ``\\chi^2(\\mu)``, which should be approximately equal to `chi2_target`
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting ``\chi^2(\mu)``, which should be approximately equal to `chi2_target`
 """
 function lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real, args...; kwargs...)
     work = lsqnonneg_chi2_work(A, b)
@@ -480,21 +480,22 @@ end
 @inline solution(work::NNLSMDPRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
 @inline ncomponents(work::NNLSMDPRegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
 
-"""
+@doc raw"""
     lsqnonneg_mdp(A::AbstractMatrix, b::AbstractVector, δ::Real)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
 
 ```math
-X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||x||_2^2
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
 ```
 
-where ``\\mu`` is chosen using Morozov's Discrepency Principle (MDP).
-That is, ``\\mu`` is maximized subject to the constraint that the residual norm of the regularized problem is at most ``\\delta``:
+where ``\mu`` is chosen using Morozov's Discrepency Principle (MDP)[1,2]:
 
 ```math
-\\mu = \\mathrm{sup} \\{ \\nu \\ge 0 : ||AX_{\\nu} - b|| \\le \\delta \\}.
+\mu = \operatorname{sup}\; \left\{ \nu \ge 0 : ||AX_{\nu} - b|| \le \delta \right\}.
 ```
+
+That is, ``\mu`` is maximized subject to the constraint that the residual norm of the regularized problem is at most ``\delta``[1].
 
 # Arguments
 
@@ -505,8 +506,13 @@ That is, ``\\mu`` is maximized subject to the constraint that the residual norm 
 # Outputs
 
   - `X::AbstractVector`: Regularized NNLS solution
-  - `mu::Real`: Resulting regularization parameter ``\\mu``
-  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\\mu = 0`` solution
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\mu = 0`` solution
+
+# References
+
+  1. Morozov VA. Methods for Solving Incorrectly Posed Problems. Springer Science & Business Media, 2012.
+  2. Clason C, Kaltenbacher B, Resmerita E. Regularization of Ill-Posed Problems with Non-negative Solutions. In: Bauschke HH, Burachik RS, Luke DR (eds) Splitting Algorithms, Modern Operator Theory, and Applications. Cham: Springer International Publishing, pp. 113–135.
 """
 function lsqnonneg_mdp(A::AbstractMatrix, b::AbstractVector, δ::Real, args...; kwargs...)
     work = lsqnonneg_mdp_work(A, b)
@@ -587,16 +593,16 @@ end
 @inline solution(work::NNLSLCurveRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
 @inline ncomponents(work::NNLSLCurveRegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
 
-"""
+@doc raw"""
     lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
 
 ```math
-X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||L x||_2^2
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||L x||_2^2
 ```
 
-where ``L`` is the identity matrix and ``\\mu`` is chosen by locating the corner of the "L-curve"[1].
+where ``L`` is the identity matrix, and ``\mu`` is chosen by locating the corner of the "L-curve"[1].
 Details of L-curve theory can be found in Hansen (1992)[2].
 
 # Arguments
@@ -607,13 +613,13 @@ Details of L-curve theory can be found in Hansen (1992)[2].
 # Outputs
 
   - `X::AbstractVector`: Regularized NNLS solution
-  - `mu::Real`: Resulting regularization parameter ``\\mu``
-  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\\mu = 0`` solution
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\mu = 0`` solution
 
 # References
 
- 1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
- 2. Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
+  1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
+  2. Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
 """
 function lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector)
     work = lsqnonneg_lcurve_work(A, b)
@@ -672,14 +678,14 @@ end
 @inline Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.point_cache); empty!(f.state_cache); f)
 @inline (f::LCurveCornerCachedFunction{T})(x::T) where {T} = f.f(x)
 
-"""
+@doc raw"""
     lcurve_corner(f, xlow, xhigh)
 
 Find the corner of the L-curve via curvature maximization using a modified version of Algorithm 1 from Cultrera and Callegaro (2020)[1].
 
 # References
 
- 1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
+  1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
 """
 function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, backtracking = true) where {T}
     # Initialize state
@@ -985,16 +991,27 @@ end
 @inline solution(work::NNLSGCVRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
 @inline ncomponents(work::NNLSGCVRegProblem) = ncomponents(get_cache(work.nnls_prob_smooth_cache))
 
-"""
+@doc raw"""
     lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
 
 ```math
-X_{\\mu} = \\mathrm{argmin}_{x \\ge 0} ||Ax - b||_2^2 + \\mu^2 ||L x||_2^2
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||L x||_2^2
 ```
 
-where ``L`` is the identity matrix and ``\\mu`` is chosen by the Generalized Cross-Validation (GCV) method.
+where ``L`` is the identity matrix, and ``\mu`` is chosen via the Generalized Cross-Validation (GCV) method:
+
+```math
+\mu = \underset{\nu \ge 0}{\operatorname{argmin}}\; \frac{||AX_{\nu} - b||_2^2}{\mathcal{T}(\nu)^2}
+```
+
+where ``\mathcal{T}(\mu)`` is the "degrees of freedom" of the regularized system
+
+```math
+\mathcal{T}(\mu) = \operatorname{tr}(I - A (A^T A + \mu^2 L^T L) A^T).
+```
+
 Details of the GCV method can be found in Hansen (1992)[1].
 
 # Arguments
@@ -1005,12 +1022,12 @@ Details of the GCV method can be found in Hansen (1992)[1].
 # Outputs
 
   - `X::AbstractVector`: Regularized NNLS solution
-  - `mu::Real`: Resulting regularization parameter ``\\mu``
-  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\\mu = 0`` solution
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\mu = 0`` solution
 
 # References
 
- 1. Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
+  1. Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
 """
 function lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector)
     work = lsqnonneg_gcv_work(A, b)
@@ -1057,7 +1074,7 @@ end
 #   Analysis of Discrete Ill-Posed Problems by Means of the L-Curve
 #   Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115)
 #
-# where here λ = μ and L = Id.
+# where here L = Id and λ = μ.
 function gcv!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
     (; m, n, γ) = work
