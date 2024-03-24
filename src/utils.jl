@@ -221,9 +221,8 @@ ProgressMeter.finish!(p::DECAESProgress) = (ProgressMeter.finish!(p.progress_met
 ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.progress_meter, counter); maybe_print!(p))
 
 function maybe_print!(p::DECAESProgress)
-    # Internal `progress_meter` prints to the IOBuffer `p.io_buffer`; check this buffer for new messages.
-    # Note: take!(::IOBuffer) is threadsafe.
-    msg = String(take!(p.io_buffer))
+    # Internal `progress_meter` prints to the IOBuffer `p.io_buffer`; check this buffer for new messages
+    msg = String(take!(p.io_buffer)) # note: take!(::IOBuffer) is threadsafe
     if !isempty(msg)
         # Format message
         msg = replace(msg, "\r" => "", "\u1b[K" => "", "\u1b[A" => "")
@@ -238,6 +237,7 @@ function maybe_print!(p::DECAESProgress)
         @info msg
         flush(stderr)
     end
+    return nothing
 end
 
 # Macro for timing arbitrary code snippet and printing time

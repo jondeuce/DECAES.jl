@@ -56,8 +56,10 @@ add_arg_table!(CLI_SETTINGS,
     ),
     "--legacy",
     Dict(
-        :action => :store_true,
-        :help => "use legacy settings and algorithms from the original MATLAB pipeline. This ensures that the same T2-distributions and T2-parts will be produced as those from MATLAB. Note that execution time will be much slower, and less robust algorithms will be used",
+        :action => :store_const, # deprecated flags use :store_const with default value nothing (instead of :store_true with default value false)
+        :constant => true,
+        :default => nothing,
+        :help => "use legacy settings and algorithms from the original MATLAB pipeline. Note: this flag is now deprecated and will be removed in future releases",
     ),
 )
 
@@ -151,14 +153,14 @@ add_arg_table!(CLI_SETTINGS,
         :help => "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold. (default: 0.0) (units: signal magnitude)",
         :group => :t2_map_part_optional,
     ),
-    "--Progress",
-    Dict(
-        :action => :store_const, # deprecated flags use :store_const with default value nothing (instead of :store_true with default value false)
-        :constant => true,
-        :default => nothing,
-        :help => "Print progress updates during T2 distribution computation. Note: this flag is now deprecated; progress updates are always printed unless the --quiet flag is passed",
-        :group => :t2_map_part_optional,
-    ),
+    # "--Progress",
+    # Dict(
+    #     :action => :store_const, # deprecated flags use :store_const with default value nothing (instead of :store_true with default value false)
+    #     :constant => true,
+    #     :default => nothing,
+    #     :help => "Print progress updates during T2 distribution computation. Note: this flag is now deprecated; progress updates are always printed unless the --quiet flag is passed",
+    #     :group => :t2_map_part_optional,
+    # ),
 )
 
 add_arg_group!(CLI_SETTINGS,
@@ -421,16 +423,16 @@ function parse_cli(args)
 end
 
 function handle_cli_deprecations!(opts)
-    handle_renamed_cli_flag!(opts; oldflag = :Progress, newflag = nothing)
-    handle_renamed_cli_flag!(opts; oldflag = :legacy, newflag = nothing, default = false)
+    # handle_renamed_cli_flag!(opts; oldflag = :Progress, newflag = nothing, deleteflag = true)
+    handle_renamed_cli_flag!(opts; oldflag = :legacy, newflag = nothing, deleteflag = false)
     return opts
 end
 
-function handle_renamed_cli_flag!(opts; oldflag, newflag, default = nothing)
-    if opts[oldflag] != default
+function handle_renamed_cli_flag!(opts; oldflag, newflag, defaultvalue = nothing, deleteflag = true)
+    if get(opts, oldflag, defaultvalue) != defaultvalue
         if newflag === nothing
             @warn "The flag --$oldflag is deprecated and will be removed in future releases."
-        elseif opts[oldflag] != default
+        elseif opts[oldflag] != defaultvalue
             error("The flag --$newflag and the deprecated flag --$oldflag were both passed; use --$newflag only.")
         else
             @warn "The flag --$oldflag is deprecated and will be removed in future releases; use --$newflag instead."
@@ -438,7 +440,9 @@ function handle_renamed_cli_flag!(opts; oldflag, newflag, default = nothing)
         if newflag !== nothing
             opts[newflag] = opts[oldflag]
         end
-        delete!(opts, oldflag)
+        if deleteflag
+            delete!(opts, oldflag)
+        end
     end
     return opts
 end
