@@ -8,7 +8,7 @@ mkdir -p $output_dir
 benchpkg DECAES \
     --rev=$revisions \
     --script=$script \
-    --exeflags="--threads=auto -O3" \
+    --exeflags="--threads=auto" \
     --output-dir=$output_dir
 
 benchpkgplot DECAES \

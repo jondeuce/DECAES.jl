@@ -1,7 +1,7 @@
 # DEcomposition and Component Analysis of Exponential Signals (DECAES)
 
 <p align="left">
-<img width="500px" src="https://github.com/jondeuce/DECAES.jl/blob/c2956262063841c8c2dc27f4e0ee20593ef32697/docs/src/assets/logo.gif">
+<img width="500px" src="./docs/src/assets/logo.gif">
 </p>
 
 <!-- [![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://jondeuce.github.io/DECAES.jl/stable) -->
@@ -14,7 +14,7 @@ Post-processing of these T2-distributions allows for the computation of measures
 
 DECAES is written in the open-source [Julia programming language](https://julialang.org/).
 Julia and command line interfaces are available through this package.
-The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the MATLAB function [`decaes.m`](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.m), as well as a Python interface via the [`decaes.py`](https://github.com/jondeuce/DECAES.jl/blob/master/api/decaes.py) module.
+The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the MATLAB function [`decaes.m`](./api/decaes.m).
 If you use DECAES in your research, please [cite](CITATION.bib) our work.
 
 ## Installation
@@ -37,7 +37,7 @@ Run `decaes --help` for available arguments.
 If you are new to DECAES, the best place to start is the [examples repository](https://github.com/jondeuce/mwiexamples).
 There, we provide:
 
-* A walk-through tutorial for using the MATLAB, Python, and command-line DECAES interfaces
+* A walk-through tutorial for using the MATLAB and command-line DECAES interfaces
 * Example multi spin-echo (MSE) data for demonstrating MWI processing
 
 ## Documentation

@@ -19,30 +19,27 @@ parser = argparse.ArgumentParser(
         Start Julia with multiple threads and run DECAES using parameters specified by the
         settings file 'decaes_settings_file.txt':
 
-            python decaes.py @/path/to/decaes_settings_file.txt
+            ./decaes.sh @/path/to/decaes_settings_file.txt
 
     This version of decaes.sh was written for DECAES v0.5.2-DEV.
     """,
     formatter_class = argparse.RawDescriptionHelpFormatter,
 )
 parser.add_argument("--runtime", default = "julia", type = str, help = "path to julia runtime binary; defaults to 'julia'")
-parser.add_argument("--threads", default = os.cpu_count(), type = int, help = "number of threads to start julia with; defaults to os.cpu_count()")
-parser.add_argument("--project", type = str, help = "julia project environment; if unspecified, the default global environment is used")
+parser.add_argument("--threads", default = "auto", type = lambda nt: nt if nt == "auto" else int(nt), help = "number of threads to start julia with; defaults to 'auto'")
+parser.add_argument("--project", default = "@decaes", type = str, help = "julia project environment; if unspecified, the shared named environment '@decaes' is used")
 parser.add_argument("--quiet", action = "store_true", help = "suppress terminal output")
 
 args, decaes_args = parser.parse_known_args()
 
 # Configure Julia environment variables
 os.environ["JULIA_NUM_THREADS"] = str(args.threads)
-
-if args.project is not None:
-    os.environ["JULIA_PROJECT"] = args.project
+os.environ["JULIA_PROJECT"] = args.project
 
 def jlcall(jlargs):
     cmd = [
         args.runtime,
         "--startup-file=no",
-        "--optimize=3",
     ]
 
     if args.quiet:

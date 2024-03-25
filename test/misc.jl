@@ -17,7 +17,7 @@
         @test decaes_cli_proj["compat"]["DECAES"] == "=$(major).$(minor).$(patch)"
     end
 
-    for file in ["decaes.m", "decaes.py", "decaes.sh"]
+    for file in ["decaes.m", "decaes_pyjulia.py", "decaes_pyjuliacall.py", "decaes.sh"]
         contents = readchomp(joinpath(DECAES_PATH, "api", file))
         @test contains(contents, "was written for DECAES v$(DECAES.VERSION)")
     end

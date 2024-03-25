@@ -14,7 +14,7 @@ Quick usage:
     from decaes import DECAES
 
     # Call methods from the DECAES module as usual, e.g.
-    DECAES.T2mapSEcorr(image; kwargs...)
+    DECAES.T2mapSEcorr(image, kwargs...)
 
 This version of decaes.py was written for DECAES v0.5.2-DEV.
 """
@@ -33,8 +33,8 @@ global julia_runtime
 
 # Various default settings
 default_runtime = "julia"
-default_num_threads = os.cpu_count()
-default_project = ""
+default_num_threads = "auto"
+default_project = "@decaes"
 default_compiled_modules = True
 
 # Set environment variable defaults
