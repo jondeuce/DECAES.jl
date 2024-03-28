@@ -39,6 +39,19 @@ end
 @inline floattype(xs::Tuple) = float(promote_type(map(typeof, xs)...))
 @inline floattype(xs::NamedTuple) = floattype(Tuple(xs))
 
+function insertsorted!(x, val, len = length(x))
+    len = min(len, length(x))
+    @inbounds for i in 1:len-1
+        x[i], val = minmax(x[i], val)
+    end
+    @inbounds x[len] = val
+    return x
+end
+
+####
+#### Linear algebra utils
+####
+
 function with_singlethreaded_blas(f)
     nblasthreads = LinearAlgebra.BLAS.get_num_threads()
     try
@@ -49,13 +62,75 @@ function with_singlethreaded_blas(f)
     end
 end
 
-function insertsorted!(x, val, len = length(x))
-    len = min(len, length(x))
-    @inbounds for i in 1:len-1
-        x[i], val = minmax(x[i], val)
+#### Fast SVD values by preallocating workspace and calling LAPACK directly
+
+const BlasRealFloat = Union{Float32, Float64}
+
+struct SVDValsWorkspace{elty <: BlasRealFloat}
+    job::Char
+    m::Int
+    n::Int
+    A::Matrix{elty}
+    S::Vector{elty}
+    U::Matrix{elty}
+    VT::Matrix{elty}
+    work::Vector{elty}
+    lwork::Base.RefValue{BlasInt}
+    iwork::Vector{BlasInt}
+    info::Base.RefValue{BlasInt}
+end
+function SVDValsWorkspace(A::AbstractMatrix{elty}) where {elty <: BlasRealFloat}
+    job   = 'N'
+    m, n  = size(A)
+    minmn = min(m, n)
+    S     = similar(A, elty, minmn)
+    U     = similar(A, elty, (m, 0))
+    VT    = similar(A, elty, (n, 0))
+    work  = Vector{elty}(undef, 1)
+    lwork = Ref{BlasInt}(-1)
+    iwork = Vector{BlasInt}(undef, 8 * minmn)
+    info  = Ref{BlasInt}()
+    return SVDValsWorkspace(job, m, n, copy(A), S, U, VT, work, lwork, iwork, info)
+end
+
+function LinearAlgebra.svdvals!(work::SVDValsWorkspace, A::AbstractMatrix)
+    copyto!(work.A, A)
+    return LinearAlgebra.svdvals!(work)
+end
+
+# See: https://github.com/JuliaLang/julia/blob/64de065a183ac70bb049f7f9e30d790f8845dd2b/stdlib/LinearAlgebra/src/lapack.jl#L1590
+# (GE) general matrices eigenvalue-eigenvector and singular value decompositions
+for (gesdd, elty) in ((:dgesdd_, :Float64), (:sgesdd_, :Float32))
+    #    SUBROUTINE DGESDD( JOBZ, M, N, A, LDA, S, U, LDU, VT, LDVT, WORK, LWORK, IWORK, INFO )
+    #*     .. Scalar Arguments ..
+    #      CHARACTER          JOBZ
+    #      INTEGER            INFO, LDA, LDU, LDVT, LWORK, M, N
+    #*     .. Array Arguments ..
+    #      INTEGER            IWORK( * )
+    #      DOUBLE PRECISION   A( LDA, * ), S( * ), U( LDU, * ), VT( LDVT, * ), WORK( * )
+    @eval function LinearAlgebra.svdvals!(work::SVDValsWorkspace{$elty})
+        (; job, m, n, A, S, U, VT, work, lwork, iwork, info) = work
+        Base.require_one_based_indexing(A)
+        # lwork[] = BlasInt(-1) # uncomment this line to query lwork every call
+        for i in 1:2
+            i == 1 && lwork[] != BlasInt(-1) && continue # uncomment this line to skip lwork query after first call
+            ccall((@blasfunc($gesdd), libblastrampoline), Cvoid,
+                (Ref{UInt8}, Ref{BlasInt}, Ref{BlasInt}, Ptr{$elty},
+                    Ref{BlasInt}, Ptr{$elty}, Ptr{$elty}, Ref{BlasInt},
+                    Ptr{$elty}, Ref{BlasInt}, Ptr{$elty}, Ref{BlasInt},
+                    Ptr{BlasInt}, Ptr{BlasInt}, Clong),
+                job, m, n, A, max(1, stride(A, 2)), S, U, max(1, stride(U, 2)), VT, max(1, stride(VT, 2)),
+                work, lwork[], iwork, info, 1)
+            chklapackerror(info[])
+            if i == 1
+                # Work around issue with truncated Float32 representation of lwork in `sgesdd` by using `nextfloat`.
+                # See: https://github.com/scipy/scipy/issues/5401
+                lwork[] = round(BlasInt, nextfloat(work[1])) # lwork returned in work[1]
+                resize!(work, lwork[])
+            end
+        end
+        return S
     end
-    @inbounds x[len] = val
-    return x
 end
 
 ####
@@ -179,7 +254,7 @@ end
 @inline mapfindmin(::Type{V}, f, xs::AbstractArray) where {V} = mapfindmin(MappedArray{V}(f, xs))
 
 ####
-#### Timing utilities
+#### Timing utils
 ####
 
 tic() = time()
@@ -418,12 +493,12 @@ end
 function update(∇::SVector{N, T}, o::ADAM{N, T}) where {N, T}
     (; η, β, mt, vt, βp) = o
 
-    ϵ  = T(1e-8)
+    ε  = T(1e-8)
     βp = @. βp * β
     ηt = η * √(1 - βp[2]) / (1 - βp[1])
     mt = @. β[1] * mt + (1 - β[1]) * ∇
     vt = @. β[2] * vt + (1 - β[2]) * ∇^2
-    Δ  = @. ηt * mt / (√vt + ϵ)
+    Δ  = @. ηt * mt / (√vt + ε)
 
     return Δ, ADAM{N, T}(η, β, mt, vt, βp)
 end

@@ -9,13 +9,18 @@
 [![Build Status](https://github.com/jondeuce/DECAES.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/jondeuce/DECAES.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 [![codecov.io](https://codecov.io/github/jondeuce/DECAES.jl/branch/master/graph/badge.svg)](https://codecov.io/github/jondeuce/DECAES.jl/branch/master)
 
+[![Z Med Phys](https://cdn.ncbi.nlm.nih.gov/corehtml/query/egifs/https:--linkinghub.elsevier.com-ihub-images-PubMedLink.gif)](https://doi.org/10.1016/j.zemedi.2020.04.001)
+
 DECAES is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) from multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
 Post-processing of these T2-distributions allows for the computation of measures such as the [myelin water fraction (MWF)](https://doi.org/10.1002/mrm.1910310614) or the [luminal water fraction (LWF)](https://doi.org/10.1148/radiol.2017161687).
 
 DECAES is written in the open-source [Julia programming language](https://julialang.org/).
 Julia and command line interfaces are available through this package.
 The [examples repository](https://github.com/jondeuce/mwiexamples) additionally provides a MATLAB interface via the MATLAB function [`decaes.m`](./api/decaes.m).
-If you use DECAES in your research, please [cite](CITATION.bib) our work.
+
+If you use DECAES in your research, please [cite our work](./CITATION.bib):
+
+* Doucette J, Kames C, Rauscher A. DECAES - DEcomposition and Component Analysis of Exponential Signals. Zeitschrift für Medizinische Physik 2020; 30: 271–278.
 
 ## Installation
 
@@ -26,6 +31,7 @@ $ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")
 ```
 
 This will do two things:
+
 1. Add DECAES.jl to a named Julia project environment separate from your global environment
 2. Build the `decaes` executable at `~/.julia/bin` for running DECAES from the command line
 
@@ -45,6 +51,7 @@ There, we provide:
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jondeuce.github.io/DECAES.jl/dev)
 
 Find package documentation at the above link, which includes:
+
 * The command line interface [API](https://jondeuce.github.io/DECAES.jl/dev/cli), available [command line arguments](https://jondeuce.github.io/DECAES.jl/dev/cli/#Arguments-1), and [examples](https://jondeuce.github.io/DECAES.jl/dev/cli/#Examples-1)
 * API reference detailing how to use DECAES.jl from within Julia
 * Other internals and algorithmic details

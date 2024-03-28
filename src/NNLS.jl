@@ -144,24 +144,21 @@ References:
     - Lawson, C.L. and R.J. Hanson, Solving Least-Squares Problems
     - Prentice-Hall, Chapter 23, p. 161, 1974
 """
-function nnls(
-    A,
-    b::AbstractVector{T};
-    max_iter::Int = 3 * size(A, 2),
-) where {T}
+function nnls(A::AbstractMatrix{T}, b::AbstractVector{T}; kwargs...) where {T}
     work = NNLSWorkspace(A, b)
-    nnls!(work, max_iter)
-    return solution(work)
+    return nnls!(work; kwargs...)
 end
 
 function nnls!(
     work::NNLSWorkspace{T},
     A::AbstractMatrix{T},
-    b::AbstractVector{T},
+    b::AbstractVector{T};
     max_iter::Int = 3 * size(A, 2),
 ) where {T}
-    load!(work, A, b)
-    nnls!(work, max_iter)
+    GC.@preserve work begin
+        load!(work, A, b)
+        nnls!(work, max_iter)
+    end
     return solution(work)
 end
 

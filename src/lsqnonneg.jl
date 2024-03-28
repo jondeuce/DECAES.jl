@@ -15,13 +15,8 @@ function NNLSProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     return NNLSProblem(A, b, m, n, nnls_work)
 end
 
-function solve!(work::NNLSProblem, A, b)
-    # Solve NNLS problem
-    NNLS.load!(work.nnls_work, A, b)
-    NNLS.nnls!(work.nnls_work)
-    return solution(work)
-end
-solve!(work::NNLSProblem) = solve!(work, work.A, work.b)
+# Solve NNLS problem
+solve!(work::NNLSProblem, A = work.A, b = work.b) = NNLS.nnls!(work.nnls_work, A, b)
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
@@ -161,7 +156,7 @@ end
 @inline solution(work::NNLSTikhonovRegProblem) = NNLS.solution(work.nnls_prob.nnls_work)
 @inline ncomponents(work::NNLSTikhonovRegProblem) = NNLS.ncomponents(work.nnls_prob.nnls_work)
 
-loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_prob.nnls_work)^2
+@inline loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_prob.nnls_work)^2
 
 regnorm(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work) # μ²||x||²
 ∇regnorm(work::NNLSTikhonovRegProblem) = 2 * mu(work) * seminorm_sq(work) + mu(work)^2 * ∇seminorm_sq(work) # d/dμ [μ²||x||²] = 2μ||x||² + μ² d/dμ [||x||²]
@@ -172,7 +167,7 @@ resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - regnorm(work), 0) # 
 ∇²resnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 12 * ∇².μ^2 * ∇².xᵀB⁻¹x - 24 * ∇².μ^4 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [||Ax-b||²]
 
 seminorm(work::NNLSTikhonovRegProblem) = √(seminorm_sq(work)) # ||x||
-seminorm_sq(work::NNLSTikhonovRegProblem) = sum(abs2, NNLS.positive_solution(work.nnls_prob.nnls_work)) # ||x||²
+seminorm_sq(work::NNLSTikhonovRegProblem) = GC.@preserve work sum(abs2, NNLS.positive_solution(work.nnls_prob.nnls_work)) # ||x||²
 ∇seminorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = -4 * ∇.μ * ∇.xᵀB⁻¹x # d/dμ [||x||²]
 ∇²seminorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = -4 * ∇².xᵀB⁻¹x + 24 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [||x||²]
 
@@ -193,34 +188,38 @@ function curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_t
 end
 
 function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
-    (; nnls_work) = work.nnls_prob
-    B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
-    x₊ = NNLS.positive_solution(nnls_work)
-    tmp = uview(work.buffers.y, 1:length(x₊))
+    GC.@preserve work begin
+        (; nnls_work) = work.nnls_prob
+        B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
+        x₊ = NNLS.positive_solution(nnls_work)
+        tmp = uview(work.buffers.y, 1:length(x₊))
 
-    μ = mu(work)
-    copyto!(tmp, x₊)
-    NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
-    xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
+        μ = mu(work)
+        copyto!(tmp, x₊)
+        NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
+        xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
 
-    return (; μ, xᵀB⁻¹x)
+        return (; μ, xᵀB⁻¹x)
+    end
 end
 
 function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
-    (; nnls_work) = work.nnls_prob
-    B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
-    x₊ = NNLS.positive_solution(nnls_work)
-    tmp = uview(work.buffers.y, 1:length(x₊))
+    GC.@preserve work begin
+        (; nnls_work) = work.nnls_prob
+        B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
+        x₊ = NNLS.positive_solution(nnls_work)
+        tmp = uview(work.buffers.y, 1:length(x₊))
 
-    μ = mu(work)
-    copyto!(tmp, x₊)
-    NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
-    xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
+        μ = mu(work)
+        copyto!(tmp, x₊)
+        NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
+        xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
 
-    NNLS.solve_triangular_system!(tmp, B, Val(false)) # tmp = U\(U'\x) = (U'U)\x
-    xᵀB⁻ᵀB⁻¹x = sum(abs2, tmp) # x'B'\B\x = ||B\x||^2 = ||(U'U)\x||^2
+        NNLS.solve_triangular_system!(tmp, B, Val(false)) # tmp = U\(U'\x) = (U'U)\x
+        xᵀB⁻ᵀB⁻¹x = sum(abs2, tmp) # x'B'\B\x = ||B\x||^2 = ||(U'U)\x||^2
 
-    return (; μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x)
+        return (; μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x)
+    end
 end
 
 function chi2_relerr!(work::NNLSTikhonovRegProblem, χ²target, logμ, ∇logμ = nothing)
@@ -540,7 +539,7 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
 
     function f(logμ)
         solve!(work.nnls_prob_smooth_cache, exp(logμ))
-        return resnorm_sq(get_cache(work.nnls_prob_smooth_cache)) - δ
+        return resnorm_sq(get_cache(work.nnls_prob_smooth_cache)) - δ^2
     end
 
     # Find bracketing interval containing root
@@ -555,7 +554,7 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
     end
 
     if isfinite(err_final)
-        mu_final, res²_final = exp(logmu_final), δ + err_final
+        mu_final, res²_final = exp(logmu_final), δ^2 + err_final
         x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
     else
         x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
@@ -971,21 +970,23 @@ kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(P�
 #### GCV method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2}
+struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2}
     A::TA
     b::Tb
     m::Int
     n::Int
     γ::Vector{T}
+    svd_work::W0
     nnls_prob::W1
     nnls_prob_smooth_cache::W2
 end
 function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
-    γ = sort!(svdvals(A)) # (generalized) singular values
+    svd_work = SVDValsWorkspace(A) # workspace for computing singular values
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    return NNLSGCVRegProblem(A, b, m, n, γ, nnls_prob, nnls_prob_smooth_cache)
+    γ = svd_work.S # store reference to (generalized) singular values for convenience
+    return NNLSGCVRegProblem(A, b, m, n, γ, svd_work, nnls_prob, nnls_prob_smooth_cache)
 end
 
 @inline solution(work::NNLSGCVRegProblem) = solution(get_cache(work.nnls_prob_smooth_cache))
@@ -1039,6 +1040,12 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T
     # Find μ by minimizing the function G(μ) (GCV method)
     reset_cache!(work.nnls_prob_smooth_cache)
 
+    # Precompute singular values for GCV computation
+    svdvals!(work.svd_work, work.A)
+
+    # Non-zero lower bound for GCV to avoid log(0) in the objective function
+    gcv_low = gcv_lower_bound(work)
+
     if method === :nlopt
         # alg = :LN_COBYLA # local, gradient-free, linear approximation of objective
         alg = :LN_BOBYQA # local, gradient-free, quadratic approximation of objective
@@ -1049,19 +1056,23 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T, N}; method = :brent) where {T
         opt               = NLopt.Opt(alg, 1)
         opt.lower_bounds  = -8.0
         opt.upper_bounds  = 2.0
-        opt.xtol_rel      = 0.05
-        opt.min_objective = (logμ, ∇logμ) -> log(max(Float64(gcv!(work, logμ[1])), eps(Float64)))
+        opt.xtol_abs      = 1e-4
+        opt.xtol_rel      = 1e-4
+        opt.ftol_abs      = 0.0
+        opt.ftol_rel      = 0.0
+        opt.min_objective = (logμ, ∇logμ) -> @inbounds Float64(log(max(gcv!(work, logμ[1]), gcv_low)))
         minf, minx, ret   = NLopt.optimize(opt, [-4.0])
+        logmu_final       = @inbounds T(minx[1])
     elseif method === :brent
-        minx, minf = brent_minimize(-8.0, 2.0; xrtol = T(0.05), xatol = T(1e-4), maxiters = 10) do logμ
-            return log(max(gcv!(work, logμ), eps(T)))
+        logmu_final, _ = brent_minimize(-8.0, 2.0; xrtol = T(0.05), xatol = T(1e-4), maxiters = 10) do logμ
+            return log(max(gcv!(work, logμ), gcv_low))
         end
     else
         error("Unknown minimization method: $method")
     end
 
     # Return the final regularized solution
-    mu_final = exp(T(minx[1]))
+    mu_final = exp(logmu_final)
     x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
     x_unreg = solve!(work.nnls_prob)
     chi2_final = resnorm_sq(get_cache(work.nnls_prob_smooth_cache)) / resnorm_sq(work.nnls_prob)
@@ -1114,6 +1125,17 @@ function gcv_and_∇gcv!(work::NNLSGCVRegProblem, logμ)
     return gcv, ∇gcv
 end
 
+# Non-trivial lower bound of the GCV function
+#   GCV(μ) = ||A * x(μ) - b||^2 / 𝒯(μ)^2
+# where 𝒯(μ) is the "degrees of freedom" of the regularized system
+#   𝒯(μ) = tr(I - A * (A'A + μ²I)⁻¹ * A')
+#        ∈ [max(m - n, 0), m)
+# The trivial lower bound GCV(μ) = 0 can (sometimes) be achieved when μ = 0 if ||A * x(μ = 0) - b|| = 0.
+# Let ε > 0 be the RMSE threshold below which we consider the solution exact, i.e. bound ||A * x(μ) - b|| / √m >= ε.
+# Then, GCV(μ) = ||A * x(μ) - b||^2 / 𝒯(μ)^2 >= (√m * ε)^2 / m^2 = ε^2 / m
+gcv_lower_bound(m::Int, n::Int, ε::Real) = ε^2 / m
+gcv_lower_bound(work::NNLSGCVRegProblem{T}, ε::T = eps(T)) where {T} = gcv_lower_bound(work.m, work.n, ε)
+
 #=
 # Equivalent direct method (less efficient)
 function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(false)) where {extract_subproblem}
@@ -1130,10 +1152,10 @@ function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(fa
         # by extracting columns of A which correspond to nonzero components of x(μ)
         idx = NNLS.components(get_cache(work.nnls_prob_smooth_cache).nnls_prob.nnls_work)
         n′ = length(idx)
-        A′ = reshape(uview(A_buf, 1:m*n′), m, n′)
-        At′ = reshape(uview(Aᵀ_buf, 1:n′*m), n′, m)
-        AtA′ = reshape(uview(AᵀA_buf, 1:n′*n′), n′, n′)
-        copyto!(A′, uview(A, :, idx))
+        A′ = reshape(view(A_buf, 1:m*n′), m, n′)
+        At′ = reshape(view(Aᵀ_buf, 1:n′*m), n′, m)
+        AtA′ = reshape(view(AᵀA_buf, 1:n′*n′), n′, n′)
+        copyto!(A′, view(A, :, idx))
     else
         # Use full matrix
         A′ = A
@@ -1142,15 +1164,15 @@ function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(fa
     end
 
     # Efficient compution of
-    #   Aμ = A * (A'A + μ^2*I)^-1 * A'
+    #   Aμ = A * (A'A + μ²I)⁻¹ * A'
     # where the matrices have sizes
     #   A: (m, n), Aμ: (m, m), At: (n, m), AtA: (n, n)
     mul!(AtA′, A′', A′) # A'A
     @simd for i in 1:n
-        AtA′[i, i] += μ^2 # A'A + μ^2*I
+        AtA′[i, i] += μ^2 # A'A + μ²I
     end
-    ldiv!(At′, cholesky!(Symmetric(AtA′)), A′') # (A'A + μ^2*I)^-1 * A'
-    mul!(Aμ, A′, At′) # A * (A'A + μ^2*I)^-1 * A'
+    ldiv!(At′, cholesky!(Symmetric(AtA′)), A′') # (A'A + μ²I)⁻¹ * A'
+    mul!(Aμ, A′, At′) # A * (A'A + μ²I)⁻¹ * A'
 
     # Return Generalized cross-validation. See equations 27 and 32 in
     #   Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580
@@ -1165,15 +1187,17 @@ end
 # Equation (27) from Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115),
 # specialized for L = identity:
 #
-#   tr(I_m - A * (A'A + λ^2 * L'L)^-1 * A') = m - n + sum_i λ^2 / (γ_i^2 + λ^2)
+#   tr(I_m - A * (A'A + λ^2 * L'L)⁻¹ * A') = m - n + sum_i λ^2 / (γ_i^2 + λ^2)
 #
 # where γ_i are the generalized singular values, which are equivalent to ordinary
 # singular values when L = identity, and size(A) = (m, n).
 # Can be considered as the "degrees of freedom".
 function gcv_dof(m::Int, n::Int, γ::AbstractVector{T}, λ::T) where {T}
     dof = T(max(m - n, 0)) # handle underdetermined systems (m < n)
+    λ² = abs2(λ)
     @simd for γᵢ in γ
-        dof += λ^2 / (γᵢ^2 + λ^2)
+        γᵢ² = abs2(γᵢ)
+        dof += λ² / (γᵢ² + λ²)
     end
     return dof
 end
@@ -1181,10 +1205,12 @@ gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = gcv_dof(size(A)..., svdvals(A),
 
 # DOF derivative: ∂/∂λ gcv_dof(m, n, γ, λ)
 function ∇gcv_dof(m::Int, n::Int, γ::AbstractVector{T}, λ::T) where {T}
-    dof = zero(T)
+    ∇dof = zero(T)
+    λ² = abs2(λ)
     @simd for γᵢ in γ
-        dof += 2 * λ * γᵢ^2 / (γᵢ^2 + λ^2)^2
+        γᵢ² = abs2(γᵢ)
+        ∇dof += 2 * λ * γᵢ² / (γᵢ² + λ²)^2
     end
-    return dof
+    return ∇dof
 end
 ∇gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = ∇gcv_dof(size(A)..., svdvals(A), λ)

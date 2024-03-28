@@ -185,7 +185,7 @@ function T2mapSEcorr!(
 
     with_singlethreaded_blas() do
         workerpool(with_thread_buffer, indices_blocks; ntasks, verbose = !opts.Silent) do inds, thread_buffer
-            @inbounds for j in inds
+            GC.@preserve thread_buffer maps dist signals @inbounds for j in inds
                 voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(signals, :, j), opts, indices[j])
             end
         end
@@ -273,7 +273,7 @@ epg_decay_basis!(f::EPGBasisSetFunctor{T}, decay_basis::AbstractMatrix{T}, x::SV
 function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}, T2_times::AbstractVector) where {T}
     # Compute the NNLS basis over T2 space
     @inbounds for j in 1:length(T2_times)
-        decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is a bit faster than `Base.view`
+        decay_curve = uview(decay_basis, :, j)
         θj = restructure(θ, (; T2 = T2_times[j])) # remake options with T2 of basis `j`
         EPGdecaycurve!(decay_curve, decay_curve_work, θj)
     end
@@ -297,7 +297,7 @@ end
 function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T}, θ::EPGParameterization{T}, T2_times::AbstractVector) where {T}
     # Compute the NNLS basis over T2 space
     @inbounds for j in 1:length(T2_times)
-        decay_curve = uview(decay_basis, :, j) # `UnsafeArrays.uview` is a bit faster than `Base.view`
+        decay_curve = uview(decay_basis, :, j)
         ∇decay_curve = uview(∇decay_basis, :, j, :)
         θj = restructure(θ, (; T2 = T2_times[j])) # remake options with T2 of basis `j`
         decay_curve_jac!(∇decay_curve, decay_curve, θj)
@@ -453,6 +453,8 @@ struct T2DistWorkspace{Reg, T, W}
 end
 
 function T2DistWorkspace(reg::RegularizationMethod, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T}
+    # Note: `t2_distribution!(::T2DistWorkspace)` methods defined below assume that references to the EPG decay bases `A::AbstractMatrix` and the MSE signal `b::AbstractVector`
+    # are stored in the `nnls_work` workspace field and that `A` and `b` have been populated with the appropriate data.
     μ, χ²fact = Ref(T(NaN)), Ref(T(NaN))
     return T2DistWorkspace(reg, nnls_workspace(reg, decay_basis, decay_data), μ, χ²fact)
 end

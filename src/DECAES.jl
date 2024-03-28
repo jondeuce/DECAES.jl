@@ -5,6 +5,8 @@ const VERSION = v"0.5.2-DEV"
 # Standard libraries
 using Dates, LinearAlgebra, SpecialFunctions, Statistics, Random
 using Base.MathConstants: φ
+using LinearAlgebra.BLAS: @blasfunc, BlasInt, libblastrampoline
+using LinearAlgebra.LAPACK: chklapackerror
 
 # External libraries
 using ArgParse: ArgParse, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args

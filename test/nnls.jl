@@ -206,6 +206,10 @@ function test_lsqnonneg_gcv(m, n)
     logμ = randn()
     μ = exp(logμ)
 
+    # Precompute singular values for GCV (also resizes an internal buffer)
+    svdvals!(work.svd_work, A)
+    @test work.γ == svdvals(A) # should match exactly (same underlying LAPACK call)
+
     # Test GCV degrees of freedom
     @test DECAES.gcv_dof(A, μ) ≈ tr(I - A * ((A'A + μ^2 * I) \ A')) # "degrees of freedom" of normal equation matrix
     @test DECAES.∇gcv_dof(A, μ) ≈ ∇logfinitediff(_logμ -> DECAES.gcv_dof(A, exp(_logμ)), logμ, 1e-4)
@@ -220,6 +224,10 @@ function test_lsqnonneg_gcv(m, n)
     _gcv, ∇gcv = DECAES.gcv_and_∇gcv!(work, logμ) # gcv_and_∇gcv! calls `DECAES.solve!` internally
     @test _gcv == gcv # primals should match exactly
     @test ∇gcv ≈ ∇logfinitediff(_logμ -> DECAES.gcv!(work, _logμ), logμ, 1e-4) atol = 1e-3 rtol = 1e-3
+
+    # Test GCV minimization methods (TODO: real comparison tests)
+    @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :brent).mu)
+    @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :nlopt).mu)
 
     # Test allocations
     @test @allocated(DECAES.gcv!(work, logμ)) == 0
@@ -242,8 +250,9 @@ function lsqnonneg_mdp_tests(m, n)
     res²_max = sum(abs2, b) # lim_{μ -> ∞} ||A*x(μ) - b||² = ||b||², since lim_{μ -> ∞} x(μ) = 0
     res²_target = √(res²_min * res²_max)
     # res²_target = res²_min + (res²_max - res²_min) / 10
+    res_target = √res²_target
 
-    (; x, mu, chi2) = DECAES.lsqnonneg_mdp!(work, res²_target)
+    (; x, mu, chi2) = DECAES.lsqnonneg_mdp!(work, res_target)
     res² = sum(abs2, A * x - b)
 
     if mu <= 0
@@ -252,12 +261,12 @@ function lsqnonneg_mdp_tests(m, n)
         @test chi2 == 1
     else
         @test mu > 0
-        @test res² ≈ res²_target atol = res²_target / 1000
-        @test chi2 ≈ res² / res²_min rtol = res²_target / 1000 # should also hold when res²_min = 0, i.e. when chi2 = Inf
+        @test res² ≈ res²_target atol = 1e-3 * res²_target
+        @test chi2 ≈ res² / res²_min rtol = 1e-3 # should also hold when res²_min = 0, i.e. when chi2 = Inf
     end
 
     # Test allocations
-    @test @allocated(DECAES.lsqnonneg_mdp!(work, res²_target)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+    @test @allocated(DECAES.lsqnonneg_mdp!(work, res_target)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
 end
 
 @testset "lsqnonneg_mdp" begin

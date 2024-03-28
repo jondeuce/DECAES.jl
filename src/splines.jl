@@ -1009,7 +1009,7 @@ load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T
 
 function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; As, b, nnls_work) = prob
-    solve!(nnls_work, uview(As, :, :, I), b)
+    @views solve!(nnls_work, As[:, :, I], b)
     ℓ = resnorm_sq(nnls_work)
     u = prob.legacy ? ℓ : log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
     return u
@@ -1020,14 +1020,15 @@ function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D})
     ℓ = resnorm_sq(nnls_work)
     ℓ <= eps(T) && return zero(SVector{D, T}) # loss capped at eps(T) from below; return zero gradient
     x = solution(nnls_work)
-    @inbounds @. Ax⁺b = -b
+    @inbounds Ax⁺b .= zero(T)
     @inbounds for j in 1:size(As, 2)
-        (x[j] > 0) && axpy!(x[j], uview(As, :, j, I), Ax⁺b)
+        (x[j] > 0) && @views(axpy!(x[j], As[:, j, I], Ax⁺b))
     end
+    @inbounds Ax⁺b .-= b
     ∇u = ntuple(D) do d
         @inbounds ∂Ax⁺ .= zero(T)
         @inbounds for j in 1:size(∇As, 2)
-            (x[j] > 0) && axpy!(x[j], uview(∇As, :, j, d, I), ∂Ax⁺)
+            (x[j] > 0) && @views(axpy!(x[j], ∇As[:, j, d, I], ∂Ax⁺))
         end
         ∂ℓ = 2 * dot(∂Ax⁺, Ax⁺b)
         ∂u = prob.legacy ? ∂ℓ : ∂ℓ / ℓ
@@ -1125,7 +1126,7 @@ function mock_surrogate_search_problem(
             θαs = D == 1 ?
                   restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]])) :
                   restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]], β = alphas[Iαs[2]]))
-            j!(uview(∇As, :, j, :, Iαs), uview(As, :, j, Iαs), θαs)
+            @views j!(∇As[:, j, :, Iαs], As[:, j, Iαs], θαs)
         end
     end
 
