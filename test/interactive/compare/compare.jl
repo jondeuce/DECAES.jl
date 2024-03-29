@@ -44,13 +44,13 @@ for settings in settings_files
         histogram(
             log10.(resnorm);
             xlabel = "log10(resnorm)", ylabel = "count",
-            title = "resnorm = $(median(resnorm)) ± $(iqr(resnorm)), log10(resnorm) = $(median(log10.(resnorm))) ± $(iqr(log10.(resnorm)))",
+            title = "resnorm = $(median(resnorm)) ± $(iqr(resnorm) / 2), log10(resnorm) = $(median(log10.(resnorm))) ± $(iqr(log10.(resnorm)) / 2)",
             nbins = 64, vertical = true, height = 10, width = 80,
         ) |> display
         histogram(
             cosd.(alpha);
             xlabel = "cosd(alpha)", ylabel = "count",
-            title = "alpha = $(median(alpha)) ± $(iqr(alpha)), cosd(alpha) = $(median(cosd.(alpha))) ± $(iqr(cosd.(alpha)))",
+            title = "alpha = $(median(alpha)) ± $(iqr(alpha) / 2), cosd(alpha) = $(median(cosd.(alpha))) ± $(iqr(cosd.(alpha)) / 2)",
             nbins = 64, vertical = true, height = 10, width = 80,
         ) |> display
     end
@@ -69,8 +69,8 @@ for settings in settings_files
         for file in readdir(outputs[i]; join = false, sort = true)
             endswith(file, ".mat") || continue
             @assert isfile(joinpath(outputs[i+1], file)) "File $(file) not found in $(outputs[i+1])"
-            file1 = joinpath(outputs[i], file)
-            file2 = joinpath(outputs[i+1], file)
+            global file1 = joinpath(outputs[i], file)
+            global file2 = joinpath(outputs[i+1], file)
 
             @info "Comparing file: $(file)"
             global data1 = matread(file1)
@@ -86,7 +86,8 @@ for settings in settings_files
                     I = intersect(I, I2)
                 end
 
-                global x1, x2 = data1[key][I], data2[key][I]
+                global x1 = data1[key][I]
+                global x2 = data2[key][I]
                 if key == "mu"
                     x1 .= log.(x1)
                     x2 .= log.(x2)
@@ -105,16 +106,13 @@ for settings in settings_files
                 else
                     @error "$(key => err): relative error is large"
                     global dx = abs.(x1 .- x2) ./ mean(abs, x1 .- mean(x1))
-                    dx_q99 = quantile(dx, 0.99)
+                    dx_low = 0.0
+                    dx_high = quantile(dx, 0.99)
                     nz = count(iszero, dx)
-                    n99 = count(>(dx_q99), dx)
-                    dxhist = filter(x -> 0 < x <= dx_q99, dx)
-                    title = "$key: nz = $nz, n99 = $n99, dx_q99 = $dx_q99"
-                    if isempty(dxhist)
-                        @info title
-                    else
-                        histogram(filter(x -> 0 < x <= dx_q99, dx); nbins = 64, vertical = true, height = 10, width = 80, title) |> display
-                    end
+                    n99 = count(>(dx_high), dx)
+                    dxhist = filter(x -> dx_low < x < dx_high, dx)
+                    @info "$key: nz = $nz, n99 = $n99, $dx_low < dx < $dx_high"
+                    !isempty(dxhist) && display(histogram(dxhist; nbins = 64, vertical = true, height = 10, width = 80))
                 end
             end
             println()

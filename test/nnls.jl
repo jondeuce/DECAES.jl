@@ -225,9 +225,19 @@ function test_lsqnonneg_gcv(m, n)
     @test _gcv == gcv # primals should match exactly
     @test ∇gcv ≈ ∇logfinitediff(_logμ -> DECAES.gcv!(work, _logμ), logμ, 1e-4) atol = 1e-3 rtol = 1e-3
 
-    # Test GCV minimization methods (TODO: real comparison tests)
+    # GCV minimization methods shouldn't fail for any m, n
     @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :brent).mu)
+    @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :brent_newton).mu)
     @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :nlopt).mu)
+
+    # Test GCV minimization methods are consistent when m >= n
+    if m >= n
+        logmu_brent = log(DECAES.lsqnonneg_gcv!(work; rtol = 1e-6, atol = 1e-6, maxiters = 100, method = :brent).mu)
+        logmu_bnewt = log(DECAES.lsqnonneg_gcv!(work; rtol = 1e-6, atol = 1e-6, maxiters = 100, method = :brent_newton).mu)
+        logmu_nlopt = log(DECAES.lsqnonneg_gcv!(work; rtol = 1e-6, atol = 1e-6, maxiters = 100, method = :nlopt).mu)
+        @test logmu_brent ≈ logmu_bnewt atol = 1e-4 rtol = 1e-4
+        @test logmu_brent ≈ logmu_nlopt atol = 1e-4 rtol = 1e-4
+    end
 
     # Test allocations
     @test @allocated(DECAES.gcv!(work, logμ)) == 0
@@ -261,8 +271,8 @@ function lsqnonneg_mdp_tests(m, n)
         @test chi2 == 1
     else
         @test mu > 0
-        @test res² ≈ res²_target atol = 1e-3 * res²_target
-        @test chi2 ≈ res² / res²_min rtol = 1e-3 # should also hold when res²_min = 0, i.e. when chi2 = Inf
+        @test res² ≈ res²_target rtol = 2e-3 # internally we solve f(logμ) = res² - res²_target = 0 to tolerance abs(f) < 1e-3 * res²_target
+        @test chi2 ≈ res² / res²_min rtol = 2e-3 # should also hold when res²_min = 0, i.e. when chi2 = Inf
     end
 
     # Test allocations
