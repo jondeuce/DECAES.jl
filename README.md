@@ -1,15 +1,15 @@
 # DEcomposition and Component Analysis of Exponential Signals (DECAES)
 
-<p align="left">
-<img width="500px" src="./docs/src/assets/logo.gif">
-</p>
+<p align="left"> <img width="500px" src="./docs/src/assets/logo.gif"> </p>
 
 <!-- [![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://jondeuce.github.io/DECAES.jl/stable) -->
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jondeuce.github.io/DECAES.jl/dev)
+[![Source](https://img.shields.io/badge/source-github-blue)](https://github.com/jondeuce/DECAES.jl)
+<a href="https://doi.org/10.1016/j.zemedi.2020.04.001"> <img src="https://cdn.ncbi.nlm.nih.gov/corehtml/query/egifs/https:--linkinghub.elsevier.com-ihub-images-PubMedLink.gif" height="20"> </a>
+<!-- [![Z Med Phys](https://cdn.ncbi.nlm.nih.gov/corehtml/query/egifs/https:--linkinghub.elsevier.com-ihub-images-PubMedLink.gif)](https://doi.org/10.1016/j.zemedi.2020.04.001) -->
+
 [![Build Status](https://github.com/jondeuce/DECAES.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/jondeuce/DECAES.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 [![codecov.io](https://codecov.io/github/jondeuce/DECAES.jl/branch/master/graph/badge.svg)](https://codecov.io/github/jondeuce/DECAES.jl/branch/master)
-
-[![Z Med Phys](https://cdn.ncbi.nlm.nih.gov/corehtml/query/egifs/https:--linkinghub.elsevier.com-ihub-images-PubMedLink.gif)](https://doi.org/10.1016/j.zemedi.2020.04.001)
 
 DECAES is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) from multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
 Post-processing of these T2-distributions allows for the computation of measures such as the [myelin water fraction (MWF)](https://doi.org/10.1002/mrm.1910310614) or the [luminal water fraction (LWF)](https://doi.org/10.1148/radiol.2017161687).
@@ -83,11 +83,9 @@ As an illustration, here is a comparison between DECAES and [UBC MWF MATLAB tool
 
 [![JuliaCon 2021 - Matlab to Julia: Hours to Minutes for MRI Image Analysis](https://imgur.com/zJpRdtx.png)](https://www.youtube.com/watch?v=6OxsK2R5VkA)
 
-# Citing this work
+## Citing this work
 
-[![Z Med Phys](https://cdn.ncbi.nlm.nih.gov/corehtml/query/egifs/https:--linkinghub.elsevier.com-ihub-images-PubMedLink.gif)](https://doi.org/10.1016/j.zemedi.2020.04.001)
-
-If you use DECAES in your research, please cite the following:
+If you use DECAES in your research, please [cite our work](https://doi.org/10.1016/j.zemedi.2020.04.001):
 
 ```tex
 @article{DECAES.jl-2020,

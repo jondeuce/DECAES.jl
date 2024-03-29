@@ -50,25 +50,31 @@ function install()
 end
 
 function cli_script()
-    exe = joinpath(Sys.BINDIR, Base.julia_exename())
 
     cmds = String[]
+
+    # Julia executable path
+    exe = joinpath(Sys.BINDIR, Base.julia_exename())
     push!(cmds, exe)
-    push!(cmds, "--threads=auto")
+
+    # Julia flags. Note that --threads and --project are set via environment variables below so that users can overload them
     push!(cmds, "--startup-file=no")
     push!(cmds, "--color=yes")
 
+    # Forward remaining arguments to DECAES.main()
     if Sys.iswindows()
         push!(cmds, "-e \"using DECAES; main()\" %*")
     else
         push!(cmds, "-- \"\${BASH_SOURCE[0]}\" \"\$@\"")
     end
 
+    # Return batch script on Windows or bash script on Linux
     if Sys.iswindows()
         """
         @echo off
         setlocal
-        set JULIA_PROJECT=$(DECAES_PROJECT_SCRATCH)
+        if not defined JULIA_PROJECT set JULIA_PROJECT=$(DECAES_PROJECT_SCRATCH)
+        if not defined JULIA_NUM_THREADS set JULIA_NUM_THREADS=auto
         $(join(cmds, " ^\n    "))
         if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
         endlocal
@@ -77,7 +83,8 @@ function cli_script()
         """
         #!/usr/bin/env bash
         #=
-        JULIA_PROJECT=$(DECAES_PROJECT_SCRATCH) \\
+        JULIA_PROJECT=\"\${JULIA_PROJECT:-$(DECAES_PROJECT_SCRATCH)}\" \\
+        JULIA_NUM_THREADS=\"\${JULIA_NUM_THREADS:-auto}\" \\
         exec $(join(cmds, " \\\n    "))
         =#
         using DECAES
