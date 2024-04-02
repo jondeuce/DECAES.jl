@@ -37,7 +37,9 @@
 
 module NNLS
 
-using LinearAlgebra
+using Base.Cartesian: @nexprs
+using LinearAlgebra: LinearAlgebra, Factorization, LowerTriangular, UpperTriangular
+
 using MuladdMacro: MuladdMacro, @muladd
 using UnsafeArrays: UnsafeArrays, uview
 
@@ -84,7 +86,6 @@ function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
     @assert size(b) == (m,)
     work = NNLSWorkspace(T, m, n)
-    load!(work, A, b)
     return work
 end
 
@@ -146,7 +147,7 @@ References:
 """
 function nnls(A::AbstractMatrix{T}, b::AbstractVector{T}; kwargs...) where {T}
     work = NNLSWorkspace(A, b)
-    return nnls!(work; kwargs...)
+    return nnls!(work, A, b; kwargs...)
 end
 
 function nnls!(
@@ -157,7 +158,7 @@ function nnls!(
 ) where {T}
     GC.@preserve work begin
         load!(work, A, b)
-        nnls!(work, max_iter)
+        unsafe_nnls!(work, max_iter)
     end
     return solution(work)
 end
@@ -237,6 +238,7 @@ function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int
     end
 
     @inbounds u1 = A[nsetp, jup]
+
     @assert abs(u1) > 0
     up_u1 = up * u1
     if up_u1 >= 0
@@ -244,19 +246,39 @@ function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int
     end
 
     @inbounds A[nsetp, jup] = up
-    @inbounds for ip in nsetp+1:n
-        j = idx[ip]
-        sm = zero(T)
+
+    ipstart = nsetp + 1
+    iprem = ipstart + 4 * ((n - ipstart) ÷ 4) - 1
+    @inbounds for ip in ipstart:4:iprem # unroll over columns
+        @nexprs 4 α -> j_α = idx[ip+(α-1)]
+        @nexprs 4 α -> sm_α = zero(T)
         @simd for l in nsetp:m
-            sm = sm + A[l, j] * A[l, jup]
+            Al = A[l, jup]
+            @nexprs 4 α -> sm_α = sm_α + A[l, j_α] * Al
         end
-        if sm != 0
-            sm /= up_u1
+        @nexprs 4 α -> sm_α /= up_u1
+        @simd for l in nsetp:m
+            Al = A[l, jup]
+            @nexprs 4 α -> A[l, j_α] = A[l, j_α] + sm_α * Al
+        end
+    end
+
+    if iprem != n # remainder loop
+        @inbounds for ip in iprem+1:n
+            j = idx[ip]
+            sm = zero(T)
             @simd for l in nsetp:m
-                A[l, j] = A[l, j] + sm * A[l, jup]
+                sm = sm + A[l, j] * A[l, jup]
+            end
+            if sm != 0
+                sm /= up_u1
+                @simd for l in nsetp:m
+                    A[l, j] = A[l, j] + sm * A[l, jup]
+                end
             end
         end
     end
+
     @inbounds A[nsetp, jup] = u1
 
     return nothing
@@ -378,7 +400,7 @@ GIVEN AN M BY N MATRIX, A, AND AN M-VECTOR, B,  COMPUTE AN
 N-VECTOR, X, THAT SOLVES THE LEAST SQUARES PROBLEM
 A * X = B  SUBJECT TO X .GE. 0
 """
-function nnls!(
+function unsafe_nnls!(
     work::NNLSWorkspace{T},
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
@@ -408,13 +430,27 @@ function nnls!(
         end
 
         # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
-        @inbounds for ip in nsetp+1:n
-            j = idx[ip]
-            sm = zero(T)
-            @simd for l in nsetp+1:m
-                sm = sm + A[l, j] * b[l]
+        ipstart = nsetp + 1
+        iprem = ipstart + 8 * ((n - ipstart) ÷ 8) - 1
+        @inbounds for ip in ipstart:8:iprem # unroll over columns
+            @nexprs 8 α -> j_α = idx[ip+(α-1)]
+            @nexprs 8 α -> sm_α = zero(T)
+            @simd for l in ipstart:m
+                bl = b[l]
+                @nexprs 8 α -> sm_α = sm_α + A[l, j_α] * bl
             end
-            w[j] = sm
+            @nexprs 8 α -> w[j_α] = sm_α
+        end
+
+        if iprem != n # remainder loop
+            @inbounds for ip in iprem+1:n
+                j = idx[ip]
+                sm = zero(T)
+                @simd for l in ipstart:m
+                    sm = sm + A[l, j] * b[l]
+                end
+                w[j] = sm
+            end
         end
 
         @inbounds while true
