@@ -100,13 +100,13 @@ function verify_NNLS(m, n)
 
         F = cholesky!(NNLS.NormalEquation(), work)
         if n₊ > 0
-            x′ = rand(n₊)
-            b′ = rand(n₊)
-            x′′ = copy(x′)
-            b′′ = copy(b′)
+            x′, b′ = rand(n₊), rand(n₊)
+            x′′, b′′ = copy(x′), copy(b′)
             ldiv!(x′, F, b′)
+            @test b′ ≈ b′′
+            @test !(x′ ≈ x′′)
+            @test x′ == F \ b′
             @test x′ ≈ (A₊'A₊) \ b′
-            @test b′ ≈ b′′ && !(x′ ≈ x′′)
             @test @allocated(ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)) == 0
         end
     end # GC.@preserve

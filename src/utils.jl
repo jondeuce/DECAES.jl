@@ -434,7 +434,7 @@ end
 # https://github.com/JuliaLogging/LoggingExtras.jl/issues/15
 function TimestampLogger(logger, date_format = "yyyy-mm-dd HH:MM:SS")
     return TransformerLogger(logger) do log
-        return merge(log, (; message = "$(Dates.format(now(), date_format)) $(log.message)"))
+        return merge(log, (; message = "$(Dates.format(Dates.now(), date_format)) $(log.message)"))
     end
 end
 
@@ -639,4 +639,25 @@ function mock_T2_pipeline(; kwargs...)
     t2part = T2partSEcorr(t2dist, t2part_opts)
 
     return image, t2maps, t2dist, t2part
+end
+
+# Mock I/O for precompilation
+function mock_load_image()
+    mktempdir() do dir
+        for ndims in 3:4
+            img = rand((1:ndims)...)
+
+            file = tempname(dir) * ".mat"
+            MAT.matwrite(file, Dict("img" => img))
+            @assert img == load_image(file; ndims)
+
+            for ext in [".nii", ".nii.gz"]
+                file = tempname(dir) * ext
+                NIfTI.niwrite(file, NIfTI.NIVolume(img))
+                @assert img == load_image(file; ndims)
+            end
+
+            #TODO: read/write dummy PAR/REC and/or XML/REC
+        end
+    end
 end

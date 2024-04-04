@@ -38,7 +38,7 @@
 module NNLS
 
 using Base.Cartesian: @nexprs
-using LinearAlgebra: LinearAlgebra, Factorization, LowerTriangular, UpperTriangular
+using LinearAlgebra: LinearAlgebra, Factorization, UpperTriangular, ldiv!
 
 using MuladdMacro: MuladdMacro, @muladd
 using UnsafeArrays: UnsafeArrays, uview
@@ -116,15 +116,18 @@ function solve_triangular_system!(y, F::NormalEquationCholesky, ::Val{transp} = 
     return y
 end
 
-function LinearAlgebra.ldiv!(y::AbstractVector, F::NormalEquationCholesky, x::AbstractVector)
-    @assert length(x) == length(y) == F.work.nsetp[]
-    (y !== x) && copyto!(y, x)
-    solve_triangular_system!(y, F, Val(true)) # y = U'\x
-    solve_triangular_system!(y, F, Val(false)) # y = U\y = U\(U'\x)
-    return y
+function LinearAlgebra.ldiv!(F::NormalEquationCholesky, x::AbstractVector)
+    @assert length(x) == F.work.nsetp[]
+    solve_triangular_system!(x, F, Val(true)) # x -> U'\x
+    solve_triangular_system!(x, F, Val(false)) # U'\x -> U\(U'\x)
+    return x
 end
-LinearAlgebra.ldiv!(F::NormalEquationCholesky, x::AbstractVector) = ldiv!(x, F, x)
-Base.:\(F::NormalEquationCholesky, x::AbstractVector) = ldiv!(copy(x), F, x)
+function LinearAlgebra.ldiv!(y::AbstractVector, F::NormalEquationCholesky, x::AbstractVector)
+    @assert length(x) == length(y)
+    copyto!(y, x)
+    return ldiv!(F, y)
+end
+Base.:\(F::NormalEquationCholesky, x::AbstractVector) = ldiv!(F, copy(x))
 
 struct NormalEquation end
 
@@ -653,4 +656,4 @@ end
 
 end # @muladd
 
-end # module
+end # module NNLS
