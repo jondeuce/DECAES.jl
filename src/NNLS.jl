@@ -82,6 +82,20 @@ function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
     )
 end
 
+function Base.copy(w::NNLSWorkspace)
+    return NNLSWorkspace(
+        copy(w.A),
+        copy(w.b),
+        copy(w.x),
+        copy(w.w),
+        copy(w.zz),
+        copy(w.idx),
+        Ref(w.rnorm[]),
+        Ref(w.mode[]),
+        Ref(w.nsetp[]),
+    )
+end
+
 function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
     @assert size(b) == (m,)
@@ -104,6 +118,9 @@ function checkargs(work::NNLSWorkspace)
     @assert size(work.w) == (n,)
     @assert size(work.zz) == (m,)
     @assert size(work.idx) == (n,)
+    @assert 0 <= work.rnorm[]
+    @assert 0 <= work.mode[]
+    @assert 0 <= work.nsetp[] <= min(m, n)
 end
 
 struct NormalEquationCholesky{T, W <: NNLSWorkspace{T}} <: Factorization{T}
@@ -148,9 +165,9 @@ References:
     - Lawson, C.L. and R.J. Hanson, Solving Least-Squares Problems
     - Prentice-Hall, Chapter 23, p. 161, 1974
 """
-function nnls(A::AbstractMatrix{T}, b::AbstractVector{T}; kwargs...) where {T}
+function nnls(A::AbstractMatrix{T}, b::AbstractVector{T}, args...; kwargs...) where {T}
     work = NNLSWorkspace(A, b)
-    return nnls!(work, A, b; kwargs...)
+    return nnls!(work, A, b, args...; kwargs...)
 end
 
 function nnls!(
@@ -168,7 +185,7 @@ end
 
 """
 CONSTRUCTION AND/OR APPLICATION OF A SINGLE
-HOUSEHOLDER TRANSFORMATION..     Q = I + U*(U**T)/B
+HOUSEHOLDER TRANSFORMATION Q = I + U*(U**T)/B
 
 The original version of this code was developed by
 Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
@@ -176,7 +193,10 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function construct_householder!(u::AbstractVector{T}, up::T) where {T}
+function construct_householder!(
+    u::AbstractVector{T},
+    up::T,
+) where {T}
     if length(u) <= 1
         return up
     end
@@ -198,7 +218,7 @@ end
 
 """
 CONSTRUCTION AND/OR APPLICATION OF A SINGLE
-HOUSEHOLDER TRANSFORMATION..     Q = I + U*(U**T)/B
+HOUSEHOLDER TRANSFORMATION Q = I + U*(U**T)/B
 
 The original version of this code was developed by
 Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
@@ -206,7 +226,11 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) where {T}
+function apply_householder!(
+    u::AbstractVector{T},
+    up::T,
+    c::AbstractVector{T},
+) where {T}
     m = length(u)
     if m <= 1
         return nothing
@@ -234,7 +258,13 @@ function apply_householder!(u::AbstractVector{T}, up::T, c::AbstractVector{T}) w
     end
 end
 
-function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int}, nsetp::Int, jup::Int) where {T}
+function apply_householder!(
+    A::AbstractMatrix{T},
+    up::T,
+    idx::AbstractVector{Int},
+    nsetp::Int,
+    jup::Int,
+) where {T}
     m, n = size(A)
     if m - nsetp <= 0
         return nothing
@@ -287,39 +317,136 @@ function apply_householder!(A::AbstractMatrix{T}, up::T, idx::AbstractVector{Int
     return nothing
 end
 
+function apply_householder_dual!(
+    A::AbstractMatrix{T},
+    w::AbstractVector{T},
+    b::AbstractVector{T},
+    up::T,
+    idx::AbstractVector{Int},
+    nsetp::Int,
+    jup::Int,
+) where {T}
+    m, n = size(A)
+    if m - nsetp <= 0
+        return nothing
+    end
+
+    @inbounds u1 = A[nsetp, jup]
+
+    @assert abs(u1) > 0
+    up_u1 = up * u1
+    if up_u1 >= 0
+        return nothing
+    end
+
+    @inbounds A[nsetp, jup] = up
+
+    ipstart = nsetp + 1
+    iprem = ipstart + 4 * ((n - ipstart) ÷ 4) - 1
+    @inbounds for ip in ipstart:4:iprem # unroll over columns
+        @nexprs 4 α -> j_α = idx[ip+(α-1)]
+        @nexprs 4 α -> sm_α = zero(T)
+        @simd for l in nsetp:m
+            Al = A[l, jup]
+            @nexprs 4 α -> sm_α = sm_α + A[l, j_α] * Al
+        end
+        @nexprs 4 α -> sm_α /= up_u1
+        @nexprs 4 α -> w_α = zero(T)
+        Al = A[nsetp, jup]
+        @nexprs 4 α -> A[nsetp, j_α] = A[nsetp, j_α] + sm_α * Al
+        @simd for l in nsetp+1:m
+            bl = b[l]
+            Al = A[l, jup]
+            @nexprs 4 α -> A_α = A[l, j_α] + sm_α * Al
+            @nexprs 4 α -> w_α = w_α + A_α * bl
+            @nexprs 4 α -> A[l, j_α] = A_α
+        end
+        @nexprs 4 α -> w[j_α] = w_α
+    end
+
+    if iprem != n # remainder loop
+        @inbounds for ip in iprem+1:n
+            j = idx[ip]
+            sm = zero(T)
+            @simd for l in nsetp:m
+                sm = sm + A[l, j] * A[l, jup]
+            end
+            if sm != 0
+                sm /= up_u1
+                wj = zero(T)
+                A[nsetp, j] = A[nsetp, j] + sm * A[nsetp, jup]
+                @simd for l in nsetp+1:m
+                    Al = A[l, j] + sm * A[l, jup]
+                    wj = wj + Al * b[l]
+                    A[l, j] = Al
+                end
+                w[j] = wj
+            end
+        end
+    end
+
+    @inbounds A[nsetp, jup] = u1
+
+    return nothing
+end
+
 """
-COMPUTE ORTHOGONAL ROTATION MATRIX..
+COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
+"""
+@inline function compute_dual!(
+    w::AbstractVector{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    idx::AbstractVector{<:Integer},
+    nsetp::Integer,
+) where {T}
+    m, n = size(A)
+
+    ipstart = nsetp + 1
+    iprem = ipstart + 4 * ((n - ipstart) ÷ 4) - 1
+    @inbounds for ip in ipstart:4:iprem # unroll over columns
+        @nexprs 4 α -> j_α = idx[ip+(α-1)]
+        @nexprs 4 α -> sm_α = zero(T)
+        @simd for l in ipstart:m
+            bl = b[l]
+            @nexprs 4 α -> sm_α = sm_α + A[l, j_α] * bl
+        end
+        @nexprs 4 α -> w[j_α] = sm_α
+    end
+
+    if iprem != n # remainder loop
+        @inbounds for ip in iprem+1:n
+            j = idx[ip]
+            sm = zero(T)
+            @simd for l in ipstart:m
+                sm = sm + A[l, j] * b[l]
+            end
+            w[j] = sm
+        end
+    end
+
+    return w
+end
+
+"""
+COMPUTE ORTHOGONAL ROTATION MATRIX
 The original version of this code was developed by
 Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 1973 JUN 12, and published in the book
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 
-    COMPUTE.. MATRIX    (C, S) SO THAT (C, S)(A) = (SQRT(A**2+B**2))
-                        (-S,C)         (-S,C)(B)   (   0          )
+    COMPUTE MATRIX  (C, S) SO THAT (C, S)(A) = (SQRT(A**2+B**2))
+                    (-S,C)         (-S,C)(B)   (   0          )
     COMPUTE SIG = SQRT(A**2+B**2)
         SIG IS COMPUTED LAST TO ALLOW FOR THE POSSIBILITY THAT
         SIG MAY BE IN THE SAME LOCATION AS A OR B .
 """
 @inline function orthogonal_rotmat(a::T, b::T) where {T}
-    if abs(a) > abs(b)
-        xr = b / a
-        yr = sqrt(one(T) + xr * xr)
-        c = sign(a) / yr # note: sign(0) = 0 is consistent
-        s = c * xr
-        sig = abs(a) * yr
-    elseif b != 0
-        xr = a / b
-        yr = sqrt(one(T) + xr * xr)
-        s = sign(b) / yr # note: sign(0) = 0 is consistent
-        c = s * xr
-        sig = abs(b) * yr
-    else
-        sig = zero(T)
-        c = zero(T)
-        s = one(T)
-    end
-    return c, s, sig
+    σ = hypot(a, b)
+    c = a / σ
+    s = b / σ
+    return c, s, σ
 end
 
 @inline function orthogonal_rotmatvec(c::T, s::T, a::T, b::T) where {T}
@@ -399,9 +526,9 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 
-GIVEN AN M BY N MATRIX, A, AND AN M-VECTOR, B,  COMPUTE AN
+GIVEN AN M BY N MATRIX, A, AND AN M-VECTOR, B, COMPUTE AN
 N-VECTOR, X, THAT SOLVES THE LEAST SQUARES PROBLEM
-A * X = B  SUBJECT TO X .GE. 0
+A * X = B SUBJECT TO X .GE. 0
 """
 function unsafe_nnls!(
     work::NNLSWorkspace{T},
@@ -421,6 +548,9 @@ function unsafe_nnls!(
     work.mode[] = 1
     terminated = false
 
+    # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
+    compute_dual!(w, A, b, idx, nsetp) #TODO: use `mul!(w, A', b)` with `uview`s?
+
     # ******  MAIN LOOP BEGINS HERE  ******
     @inbounds while true
         local i_curr, j_curr, i_maxdual, j_maxdual
@@ -430,30 +560,6 @@ function unsafe_nnls!(
         if (nsetp + 1 > n || nsetp >= m)
             terminated = true
             break
-        end
-
-        # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
-        ipstart = nsetp + 1
-        iprem = ipstart + 8 * ((n - ipstart) ÷ 8) - 1
-        @inbounds for ip in ipstart:8:iprem # unroll over columns
-            @nexprs 8 α -> j_α = idx[ip+(α-1)]
-            @nexprs 8 α -> sm_α = zero(T)
-            @simd for l in ipstart:m
-                bl = b[l]
-                @nexprs 8 α -> sm_α = sm_α + A[l, j_α] * bl
-            end
-            @nexprs 8 α -> w[j_α] = sm_α
-        end
-
-        if iprem != n # remainder loop
-            @inbounds for ip in iprem+1:n
-                j = idx[ip]
-                sm = zero(T)
-                @simd for l in ipstart:m
-                    sm = sm + A[l, j] * b[l]
-                end
-                w[j] = sm
-            end
         end
 
         @inbounds while true
@@ -477,7 +583,7 @@ function unsafe_nnls!(
             up = construct_householder!(uview(A, nsetp+1:m, j_maxdual), up)
 
             if abs(A[nsetp+1, j_maxdual]) > 0
-                # COL J IS SUFFICIENTLY INDEPENDENT.  COPY B INTO ZZ, UPDATE ZZ
+                # COL J IS SUFFICIENTLY INDEPENDENT. COPY B INTO ZZ, UPDATE ZZ
                 # AND SOLVE FOR ZTEST ( = PROPOSED NEW VALUE FOR X(J) ).
                 copyto!(zz, b)
                 apply_householder!(uview(A, nsetp+1:m, j_maxdual), up, uview(zz, nsetp+1:m))
@@ -499,10 +605,10 @@ function unsafe_nnls!(
             break
         end
 
-        # THE INDEX  J=INDEX(IZ)  HAS BEEN SELECTED TO BE MOVED FROM
-        # SET Z TO SET P.    UPDATE B,  UPDATE INDICES,  APPLY HOUSEHOLDER
-        # TRANSFORMATIONS TO COLS IN NEW SET Z,  ZERO SUBDIAGONAL ELTS IN
-        # COL J,  SET W(J)=0.
+        # THE INDEX J=INDEX(IZ) HAS BEEN SELECTED TO BE MOVED FROM
+        # SET Z TO SET P. UPDATE B, UPDATE INDICES, APPLY HOUSEHOLDER
+        # TRANSFORMATIONS TO COLS IN NEW SET Z, ZERO SUBDIAGONAL ELTS IN
+        # COL J, SET W(J)=0.
         copyto!(b, zz)
 
         idx[i_maxdual] = idx[nsetp+1]
@@ -510,7 +616,7 @@ function unsafe_nnls!(
         nsetp          += 1
 
         if nsetp + 1 <= n
-            apply_householder!(A, up, idx, nsetp, j_maxdual)
+            apply_householder_dual!(A, w, b, up, idx, nsetp, j_maxdual)
         end
 
         if nsetp != m
@@ -528,9 +634,9 @@ function unsafe_nnls!(
             i_curr = idx[1]
         end
 
-        # ******  SECONDARY LOOP BEGINS HERE ******
-        #
-        # ITERATION COUNTER.
+        # ******  SECONDARY LOOP BEGINS HERE  ******
+        dual_flag = false
+
         @inbounds while true
             iter += 1
             if iter > max_iter
@@ -554,10 +660,11 @@ function unsafe_nnls!(
             end
 
             # IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE THEN ALPHA WILL
-            # STILL = 2.    IF SO EXIT FROM SECONDARY LOOP TO MAIN LOOP.
+            # STILL = 2. IF SO EXIT FROM SECONDARY LOOP TO MAIN LOOP.
             if alpha == 2
                 break
             end
+            dual_flag = true
 
             # OTHERWISE USE ALPHA WHICH WILL BE BETWEEN 0 AND 1 TO
             # INTERPOLATE BETWEEN THE OLD X AND THE NEW ZZ.
@@ -598,9 +705,9 @@ function unsafe_nnls!(
                 nsetp -= 1
                 idx[nsetp+1] = j_curr
 
-                # SEE IF THE REMAINING COEFFS IN SET P ARE FEASIBLE.  THEY SHOULD
+                # SEE IF THE REMAINING COEFFS IN SET P ARE FEASIBLE. THEY SHOULD
                 # BE BECAUSE OF THE WAY ALPHA WAS DETERMINED.
-                # IF ANY ARE INFEASIBLE IT IS DUE TO ROUND-OFF ERROR.  ANY
+                # IF ANY ARE INFEASIBLE IT IS DUE TO ROUND-OFF ERROR. ANY
                 # THAT ARE NONPOSITIVE WILL BE SET TO ZERO
                 # AND MOVED FROM SET P TO SET Z.
                 allfeasible = true
@@ -617,7 +724,7 @@ function unsafe_nnls!(
                 end
             end
 
-            # COPY B( ) INTO ZZ( ).  THEN SOLVE AGAIN AND LOOP BACK.
+            # COPY B( ) INTO ZZ( ). THEN SOLVE AGAIN AND LOOP BACK.
             copyto!(zz, b)
             solve_triangular_system!(zz, A, idx, nsetp)
             @inbounds if nsetp > 0
@@ -629,10 +736,14 @@ function unsafe_nnls!(
         end
         # ******  END OF SECONDARY LOOP  ******
 
+        if dual_flag
+            compute_dual!(w, A, b, idx, nsetp)
+        end
+
         @inbounds for ip in 1:nsetp
             x[idx[ip]] = zz[ip]
         end
-        # ALL NEW COEFFS ARE POSITIVE.  LOOP BACK TO BEGINNING.
+        # ALL NEW COEFFS ARE POSITIVE. LOOP BACK TO BEGINNING.
     end
 
     # ******  END OF MAIN LOOP  ******

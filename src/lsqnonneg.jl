@@ -738,7 +738,8 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
 end
 
 function initial_state(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
-    x₂ = (T(φ) * x₁ + x₄) / (T(φ) + 1)
+    φ = T(Base.MathConstants.φ)
+    x₂ = (φ * x₁ + x₄) / (φ + 1)
     x₃ = x₁ + (x₄ - x₂)
     x⃗ = SA[x₁, x₂, x₃, x₄]
     P⃗ = SA[f(x₁), f(x₂), f(x₃), f(x₄)]
@@ -750,7 +751,8 @@ is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x
 
 function move_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
     (; x⃗, P⃗) = state
-    x⃗ = SA[x⃗[1], (T(φ)*x⃗[1]+x⃗[3])/(T(φ)+1), x⃗[2], x⃗[3]]
+    φ = T(Base.MathConstants.φ)
+    x⃗ = SA[x⃗[1], (φ*x⃗[1]+x⃗[3])/(φ+1), x⃗[2], x⃗[3]]
     P⃗ = SA[P⃗[1], f(x⃗[2]), P⃗[2], P⃗[3]] # only P⃗[2] is recalculated
     return LCurveCornerState{T}(x⃗, P⃗)
 end
@@ -830,7 +832,8 @@ end
 
 function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2, T}}
     if interp_uniform
-        h = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / T(φ)
+        φ = T(Base.MathConstants.φ)
+        h = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / φ
         h₋ = h₊ = h
         x₋, x₀, x₊ = xₖ - h, xₖ, xₖ + h
         P₀ = Pₖ
@@ -991,6 +994,7 @@ end
 
 @inline solution(work::NNLSGCVRegProblem) = solution(work.nnls_prob_smooth_cache[])
 @inline ncomponents(work::NNLSGCVRegProblem) = ncomponents(work.nnls_prob_smooth_cache[])
+@inline LinearAlgebra.svdvals!(work::NNLSGCVRegProblem, A = work.A) = svdvals!(work.svd_work, A)
 
 @doc raw"""
     lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector)
@@ -1043,7 +1047,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
     logμ₀ = T(init)
 
     # Precompute singular values for GCV computation
-    svdvals!(work.svd_work, work.A)
+    svdvals!(work)
 
     # Non-zero lower bound for GCV to avoid log(0) in the objective function
     gcv_low = gcv_lower_bound(work)
@@ -1051,7 +1055,9 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
     # Objective functions
     reset_cache!(work.nnls_prob_smooth_cache)
     function log𝒢(logμ)
-        return log(max(gcv!(work, logμ), gcv_low))
+        𝒢 = gcv!(work, logμ)
+        𝒢 = max(𝒢, gcv_low)
+        return log(𝒢)
     end
     function log𝒢_and_∇log𝒢(logμ)
         𝒢, ∇𝒢 = gcv_and_∇gcv!(work, logμ)
@@ -1113,6 +1119,7 @@ end
 # where here L = Id and λ = μ.
 function gcv!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
+    #   NOTE: assumes `svdvals!(work)` has been called and that the singular values `work.γ` are ready
     (; m, n, γ) = work
 
     # Solve regularized NNLS problem
@@ -1130,6 +1137,7 @@ end
 
 function gcv_and_∇gcv!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
+    #   NOTE: assumes `svdvals!(work)` has been called and that the singular values `work.γ` are ready
     (; m, n, γ) = work
 
     # Solve regularized NNLS problem

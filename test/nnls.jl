@@ -45,7 +45,7 @@ function verify_NNLS(m, n)
         # Solution
         @test all(>(0), x₊)
         @test all(==(0), x₀)
-        @test x₊ ≈ (A₊'A₊) \ (A₊'b)
+        @test x₊ ≈ (A₊' * A₊) \ (A₊' * b)
         @test x₊ ≈ A₊ \ b
 
         # Dual (i.e. gradient)
@@ -95,8 +95,8 @@ function verify_NNLS(m, n)
         end
 
         # Cholesky factors
-        @test A₊'A₊ ≈ U'U
-        @test A₊'A₊ ≈ L * L'
+        @test A₊' * A₊ ≈ U' * U
+        @test A₊' * A₊ ≈ L * L'
 
         F = cholesky!(NNLS.NormalEquation(), work)
         if n₊ > 0
@@ -106,9 +106,33 @@ function verify_NNLS(m, n)
             @test b′ ≈ b′′
             @test !(x′ ≈ x′′)
             @test x′ == F \ b′
-            @test x′ ≈ (A₊'A₊) \ b′
+            @test x′ ≈ (A₊' * A₊) \ b′
             @test @allocated(ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)) == 0
         end
+
+        # QR factors
+        #   Note: qr(A) = QR relates to cholesky(A'A) = LL' = U'U via:
+        #   A'A = U'U = (QR)'(QR) = R'R => R = U (up to row sign)
+        posdiag(R) = UpperTriangular(Diagonal(sign.(diag(R))) * R) # ensure diagonal is positive
+        R = qr(A₊).R
+        @test posdiag(R) ≈ posdiag(U)
+
+        # Test that solve is independent of initial x, idx, nsetp
+        work′ = copy(work)
+        work′.x .= rand(n)
+        work′.idx .= Random.randperm(n)
+        work′.nsetp[] = rand(0:min(m, n))
+        NNLS.nnls!(work′, A, b)
+
+        @test work′.A ≈ work.A
+        @test work′.b ≈ work.b
+        @test work′.x ≈ work.x
+        @test work′.w ≈ work.w
+        @test work′.zz ≈ work.zz
+        @test work′.idx == work.idx
+        @test work′.rnorm[] ≈ work.rnorm[]
+        @test work′.mode[] == work.mode[]
+        @test work′.nsetp[] == work.nsetp[]
     end # GC.@preserve
 
     return work
@@ -219,7 +243,7 @@ function test_lsqnonneg_gcv(m, n)
     @test work.γ == svdvals(A) # should match exactly (same underlying LAPACK call)
 
     # Test GCV degrees of freedom
-    @test DECAES.gcv_dof(A, μ) ≈ tr(I - A * ((A'A + μ^2 * I) \ A')) # "degrees of freedom" of normal equation matrix
+    @test DECAES.gcv_dof(A, μ) ≈ tr(I - A * ((A' * A + μ^2 * I) \ A')) # "degrees of freedom" of normal equation matrix
     @test DECAES.∇gcv_dof(A, μ) ≈ ∇logfinitediff(_logμ -> DECAES.gcv_dof(A, exp(_logμ)), logμ, 1e-6) atol = 1e-4 rtol = 1e-4
 
     # Test GCV loss function
@@ -311,7 +335,7 @@ d/dμ ||x(μ)||^2:
     for (m, n) in NNLS_SIZES
         A, b = rand_NNLS_data(m, n)
         A_μ = μ -> [A; μ * LinearAlgebra.I]
-        B_μ = μ -> LinearAlgebra.cholesky!(LinearAlgebra.Symmetric(A'A + μ^2 * I))
+        B_μ = μ -> LinearAlgebra.cholesky!(LinearAlgebra.Symmetric(A' * A + μ^2 * I))
         x_μ = μ -> A_μ(μ) \ [b; zeros(n)]
 
         μ = 0.99
@@ -321,26 +345,26 @@ d/dμ ||x(μ)||^2:
         # Derivative of solution x w.r.t. μ
         f = _μ -> x_μ(_μ)
         dx_dμ = -2 * μ * (B \ x)
-        @test dx_dμ ≈ -2 * μ * (B \ (B \ (A'b)))
+        @test dx_dμ ≈ -2 * μ * (B \ (B \ (A' * b)))
         @test dx_dμ ≈ ∇logfinitediff(f ∘ exp, log(μ), 1e-6) rtol = 1e-4
 
         # Derivative of A*x (or equivalently, A*x-b) w.r.t. μ
         f = _μ -> A * x_μ(_μ)
         dAx_dμ = A * dx_dμ
-        @test dAx_dμ ≈ -2 * μ * (A * (B \ (B \ (A'b))))
+        @test dAx_dμ ≈ -2 * μ * (A * (B \ (B \ (A' * b))))
         @test dAx_dμ ≈ ∇logfinitediff(f ∘ exp, log(μ), 1e-6) rtol = 1e-4
 
         # Derivative of solution l2-norm ||x||^2 w.r.t. μ
         f = _μ -> sum(abs2, x_μ(_μ))
-        dx²_dμ = 2 * x'dx_dμ
-        @test dx²_dμ ≈ (-4 * μ) * b' * (A * (B \ (B \ (B \ (A'b)))))
+        dx²_dμ = 2 * dot(x, dx_dμ)
+        @test dx²_dμ ≈ -4 * μ * dot(b, (A * (B \ (B \ (B \ (A' * b))))))
         @test dx²_dμ ≈ ∇logfinitediff(f ∘ exp, log(μ), 1e-6) rtol = 1e-4
 
         # Derivative of residual l2-norm ||A*x-b||^2 w.r.t. μ
         f = _μ -> sum(abs2, A * x_μ(_μ) - b)
-        dAxb_dμ = -2μ^2 * x'dx_dμ
-        @test dAxb_dμ ≈ 2 * (A * x - b)'dAx_dμ
-        @test dAxb_dμ ≈ -4 * μ * ((A * x - b)' * (A * (B \ (B \ (A'b)))))
+        dAxb_dμ = -2μ^2 * dot(x, dx_dμ)
+        @test dAxb_dμ ≈ 2 * dot(A * x - b, dAx_dμ)
+        @test dAxb_dμ ≈ -4 * μ * dot(A * x - b, A * (B \ (B \ (A' * b))))
         @test dAxb_dμ ≈ ∇logfinitediff(f ∘ exp, log(μ), 1e-6) rtol = 1e-4
     end
 end
