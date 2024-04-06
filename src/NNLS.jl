@@ -38,7 +38,7 @@
 module NNLS
 
 using Base.Cartesian: @nexprs
-using LinearAlgebra: LinearAlgebra, Factorization, UpperTriangular, ldiv!
+using LinearAlgebra: LinearAlgebra, Factorization, UpperTriangular, ldiv!, norm
 
 using MuladdMacro: MuladdMacro, @muladd
 using UnsafeArrays: UnsafeArrays, uview
@@ -75,7 +75,7 @@ function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
         zeros(T, n),    # x
         zeros(T, n),    # w
         zeros(T, m),    # zz
-        zeros(Int, n),  # idx
+        collect(1:n),   # idx
         Ref(zero(T)),   # rnorm
         Ref(0),         # mode
         Ref(0),         # nsetp
@@ -174,13 +174,26 @@ function nnls!(
     work::NNLSWorkspace{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T};
-    max_iter::Int = 3 * size(A, 2),
+    kwargs...,
 ) where {T}
     GC.@preserve work begin
         load!(work, A, b)
-        unsafe_nnls!(work, max_iter)
+        unsafe_nnls!(work; kwargs...)
     end
     return solution(work)
+end
+
+function nnls!(
+    work::NNLSWorkspace{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    idx::AbstractVector{Int},
+    nsetp::Int;
+    kwargs...
+) where {T}
+    copyto!(work.idx, idx)
+    work.nsetp[] = nsetp
+    return nnls!(work, A, b; warm_start = true, kwargs...)
 end
 
 """
@@ -397,8 +410,8 @@ COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
     w::AbstractVector{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T},
-    idx::AbstractVector{<:Integer},
-    nsetp::Integer,
+    idx::AbstractVector{Int},
+    nsetp::Int,
 ) where {T}
     m, n = size(A)
 
@@ -462,7 +475,13 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, idx::AbstractVector{Int}, nsetp::Int, ::Val{transp} = Val(false)) where {T, transp}
+function solve_triangular_system!(
+    zz::AbstractVector{T},
+    A::AbstractMatrix{T},
+    idx::AbstractVector{Int},
+    nsetp::Int,
+    ::Val{transp} = Val(false),
+) where {T, transp}
     if nsetp <= 0
         return zz
     end
@@ -503,7 +522,11 @@ function solve_triangular_system!(zz::AbstractVector{T}, A::AbstractMatrix{T}, i
     return zz
 end
 
-function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, nsetp::Int) where {T}
+function largest_positive_dual(
+    w::AbstractVector{T},
+    idx::AbstractVector{Int},
+    nsetp::Int,
+) where {T}
     n = length(w)
     wmax = zero(T)
     i_wmax = 0
@@ -515,6 +538,101 @@ function largest_positive_dual(w::AbstractVector{T}, idx::AbstractVector{Int}, n
         end
     end
     return wmax, i_wmax
+end
+
+function unsafe_init_nnls!(work::NNLSWorkspace{T}) where {T}
+    checkargs(work)
+    (; A, b, x, w, zz, idx) = work
+    nsetp = work.nsetp[]
+    m, n = size(A)
+
+    # Apply Householder transformations
+    up = zero(T)
+    @inbounds for ip in 1:nsetp
+        j = idx[ip]
+
+        f = uview(b, ip:m)
+        u = uview(A, ip:m, j)
+
+        up = construct_householder!(u, up)
+
+        apply_householder!(u, up, f)
+        apply_householder!(A, up, idx, ip, j)
+
+        @simd for i in ip+1:m
+            A[i, j] = 0
+        end
+    end
+
+    copyto!(zz, b)
+    solve_triangular_system!(zz, A, idx, nsetp)
+
+    # Remove columns until solution satisfies non-negativity constraints
+    i_curr = 1
+
+    @inbounds while true
+        # SEE IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE.
+        # IF NOT COMPUTE ALPHA.
+        remove_cols = false
+        @inbounds for ip in 1:nsetp
+            if zz[ip] <= 0
+                i_curr = ip
+                remove_cols = true
+                break
+            end
+        end
+
+        # IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE THEN ALPHA WILL
+        # STILL = 2. IF SO EXIT FROM SECONDARY LOOP TO MAIN LOOP.
+        if !remove_cols
+            break
+        end
+
+        # MODIFY A AND B AND THE INDEX ARRAYS TO MOVE COEFFICIENT I
+        # FROM SET P TO SET Z.
+        j_curr = idx[i_curr]
+        if i_curr != nsetp
+            i_curr += 1
+            @inbounds for ip in i_curr:nsetp
+                j = idx[ip]
+                idx[ip-1] = j
+
+                cc, ss, sig = orthogonal_rotmat(A[ip-1, j], A[ip, j])
+                A[ip-1, j] = sig
+                A[ip, j] = zero(T)
+
+                # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
+                @simd for l in 1:j-1
+                    A[ip-1, l], A[ip, l] = orthogonal_rotmatvec(cc, ss, A[ip-1, l], A[ip, l])
+                end
+                @simd for l in j+1:n
+                    A[ip-1, l], A[ip, l] = orthogonal_rotmatvec(cc, ss, A[ip-1, l], A[ip, l])
+                end
+
+                # Apply procedure G2 (CC,SS,B(J-1),B(J))
+                b[ip-1], b[ip] = orthogonal_rotmatvec(cc, ss, b[ip-1], b[ip])
+            end
+        end
+
+        nsetp -= 1
+        idx[nsetp+1] = j_curr
+
+        # COPY B( ) INTO ZZ( ). THEN SOLVE AGAIN AND LOOP BACK.
+        copyto!(zz, b)
+        solve_triangular_system!(zz, A, idx, nsetp)
+    end
+
+    fill!(x, zero(T))
+    @inbounds for ip in 1:nsetp
+        x[idx[ip]] = zz[ip]
+    end
+
+    fill!(w, zero(T))
+    compute_dual!(w, A, b, idx, nsetp)
+
+    work.nsetp[] = nsetp
+
+    return nothing
 end
 
 """
@@ -531,25 +649,31 @@ N-VECTOR, X, THAT SOLVES THE LEAST SQUARES PROBLEM
 A * X = B SUBJECT TO X .GE. 0
 """
 function unsafe_nnls!(
-    work::NNLSWorkspace{T},
+    work::NNLSWorkspace{T};
     max_iter::Int = 3 * size(work.A, 2),
+    warm_start::Bool = false,
 ) where {T}
 
     checkargs(work)
     (; A, b, x, w, zz, idx) = work
     m, n = size(A)
 
+    if warm_start
+        unsafe_init_nnls!(work)
+        nsetp = work.nsetp[]
+    else
+        nsetp = 0
+        fill!(x, zero(T))
+        fill!(w, zero(T))
+        copyto!(idx, 1:n)
+        compute_dual!(w, A, b, idx, nsetp)
+    end
+
     iter = 0
-    nsetp = 0
     up = zero(T)
-    fill!(x, zero(T))
-    copyto!(idx, 1:n)
 
-    work.mode[] = 1
+    work.mode[] = 0
     terminated = false
-
-    # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
-    compute_dual!(w, A, b, idx, nsetp) #TODO: use `mul!(w, A', b)` with `uview`s?
 
     # ******  MAIN LOOP BEGINS HERE  ******
     @inbounds while true
@@ -640,7 +764,7 @@ function unsafe_nnls!(
         @inbounds while true
             iter += 1
             if iter > max_iter
-                work.mode[] = 3
+                work.mode[] = 1
                 terminated = true
                 break
             end

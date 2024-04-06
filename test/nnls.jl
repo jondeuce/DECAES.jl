@@ -1,11 +1,10 @@
 const NNLS_SIZES = vec(collect(Iterators.product([1, 2, 5, 8, 13, 16, 25, 32], [1, 2, 5, 8, 13, 16, 25, 32])))
 
 function rand_NNLS_data(m, n)
-    # A strictly positive, unconstrained x has negative entries
     x = rand(n)
-    x[1+(rand()>0.5):2:end] .*= -1 # flip even (or odd) signs
-    A = rand(m, n)
-    b = A * x
+    x[rand(1:2):2:end] .*= -1 # flip even (or odd) signs
+    A = rand(m, n) # A strictly positive
+    b = A * x # b corresponds to unconstrained x with negative entries
     return A, b
 end
 
@@ -15,132 +14,142 @@ end
 ∇logfinitediff(f, logx, h = √eps(one(logx))) = ∇finitediff(f, logx, h) ./ exp(logx)
 ∇²logfinitediff(f, logx, h = ∛eps(one(logx))) = (∇²finitediff(f, logx, h) - ∇finitediff(f, logx, h)) ./ exp(2 * logx)
 
-function verify_NNLS(m, n)
+function verify_NNLS(m, n, μ = 0.0)
     A, b = rand_NNLS_data(m, n)
+    if μ > 0
+        # Tikhonov-padded problem: min_{x ≥ 0} ||Ax-b||² + μ²||x||²
+        A = [A; μ * LinearAlgebra.I]
+        b = [b; zeros(n)]
+        m += n
+    end
     work = NNLS.NNLSWorkspace(A, b)
 
     NNLS.load!(work, A, b)
     @test work.A == A
     @test work.b == b
-    NNLS.nnls!(work, A, b)
 
-    GC.@preserve work begin
-        x  = NNLS.solution(work)
-        w  = NNLS.dual(work)
-        n₊ = NNLS.ncomponents(work)
-        U  = NNLS.choleskyfactor(work, Val(:U))
-        L  = NNLS.choleskyfactor(work, Val(:L))
+    for mode in [:direct, :shuffle]
+        # Fill workspace with junk values
+        work.A .= randn(m, n)
+        work.b .= randn(m)
+        work.x .= randn(n)
+        work.w .= randn(n)
+        work.zz .= randn(m)
+        work.idx .= rand(Int, n)
+        work.rnorm[] = rand()
+        work.mode[] = rand(1:100)
+        work.nsetp[] = rand(0:min(m, n))
 
-        # Solution partitioning
-        i₊ = work.idx[1:n₊]
-        i₀ = work.idx[n₊+1:end]
-        x₊, x₀ = x[i₊], x[i₀]
-        w₀, w₋ = w[i₊], w[i₀]
-        A₊, A₀ = A[:, i₊], A[:, i₀]
-
-        @test isperm(work.idx)
-        @test NNLS.components(work) == i₊
-        @test setdiff(1:n, NNLS.components(work)) == sort(i₀)
-
-        # Solution
-        @test all(>(0), x₊)
-        @test all(==(0), x₀)
-        @test x₊ ≈ (A₊' * A₊) \ (A₊' * b)
-        @test x₊ ≈ A₊ \ b
-
-        # Dual (i.e. gradient)
-        if NNLS.residualnorm(work) > 0
-            # Solution is not exact and gradient has negative components
-            @test all(<(0), w₋)
-            @test all(==(0), w₀)
-            @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-12 atol = 1e-8
-            @test w ≈ -A' * (A * x - b) rtol = 1e-12 atol = 1e-8
+        if mode === :direct
+            NNLS.nnls!(work, A, b)
+        elseif mode === :shuffle
+            NNLS.nnls!(work, A, b, Random.randperm(n), rand(0:min(m, n)))
         else
-            # Solution is exact, gradient is zero
-            @test all(==(0), w)
+            error("Invalid mode :$mode")
         end
+        @test work.mode[] == 0 # success
 
-        # KKT conditions
-        @test all(>=(0), x) # primal feasibility
-        @test all(<=(0), w) # dual feasibility
-        @test all(==(0), x .* w) # complementary slackness
+        GC.@preserve work begin
+            x  = NNLS.solution(work)
+            w  = NNLS.dual(work)
+            n₊ = NNLS.ncomponents(work)
+            U  = NNLS.choleskyfactor(work, Val(:U))
+            L  = NNLS.choleskyfactor(work, Val(:L))
 
-        # Internals
-        @test U == work.A[1:n₊, i₊]
-        @test L == work.A[1:n₊, i₊]'
-        @test U * x₊ ≈ work.b[1:n₊]
+            # Solution partitioning
+            i₊ = work.idx[1:n₊]
+            i₀ = work.idx[n₊+1:end]
+            x₊, x₀ = x[i₊], x[i₀]
+            w₀, w₋ = w[i₊], w[i₀]
+            A₊, A₀ = A[:, i₊], A[:, i₀]
 
-        @test work.zz[1:n₊] == x₊
-        @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋
-        @test work.zz[n₊+1:end] == work.b[n₊+1:end]
-        @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
+            @test isperm(work.idx)
+            @test NNLS.components(work) == i₊
+            @test setdiff(1:n, NNLS.components(work)) == sort(i₀)
 
-        if n₊ > 0
-            b₊ = rand(n₊)
-            U⁻¹b₊ = copy(b₊)
-            NNLS.solve_triangular_system!(U⁻¹b₊, U, 1:n₊, n₊, Val(false))
-            @test U⁻¹b₊ ≈ U \ b₊
+            # Solution
+            @test all(>(0), x₊)
+            @test all(==(0), x₀)
+            @test x₊ ≈ (A₊' * A₊) \ (A₊' * b)
+            @test x₊ ≈ A₊ \ b
 
-            L⁻¹b₊ = copy(b₊)
-            NNLS.solve_triangular_system!(L⁻¹b₊, U, 1:n₊, n₊, Val(true))
-            @test L⁻¹b₊ ≈ L \ b₊
+            # Dual (i.e. gradient)
+            if NNLS.residualnorm(work) > 0
+                # Solution is not exact and gradient has negative components
+                @test all(<(0), w₋)
+                @test all(==(0), w₀)
+                @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-12 atol = 1e-8
+                @test w ≈ -A' * (A * x - b) rtol = 1e-12 atol = 1e-8
+            else
+                # Solution is exact, gradient is zero
+                @test all(==(0), w)
+            end
 
-            U⁻¹b₊ = copy(b₊)
-            NNLS.solve_triangular_system!(U⁻¹b₊, work.A, work.idx, n₊, Val(false))
-            @test U⁻¹b₊ ≈ U \ b₊
+            # KKT conditions
+            @test all(>=(0), x) # primal feasibility
+            @test all(<=(0), w) # dual feasibility
+            @test all(==(0), x .* w) # complementary slackness
 
-            L⁻¹b₊ = copy(b₊)
-            NNLS.solve_triangular_system!(L⁻¹b₊, work.A, work.idx, n₊, Val(true))
-            @test L⁻¹b₊ ≈ L \ b₊
-        end
+            # Internals
+            @test U == work.A[1:n₊, i₊]
+            @test L == work.A[1:n₊, i₊]'
+            @test U * x₊ ≈ work.b[1:n₊]
 
-        # Cholesky factors
-        @test A₊' * A₊ ≈ U' * U
-        @test A₊' * A₊ ≈ L * L'
+            @test work.zz[1:n₊] == x₊
+            @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋
+            @test work.zz[n₊+1:end] == work.b[n₊+1:end]
+            @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
 
-        F = cholesky!(NNLS.NormalEquation(), work)
-        if n₊ > 0
-            x′, b′ = rand(n₊), rand(n₊)
-            x′′, b′′ = copy(x′), copy(b′)
-            ldiv!(x′, F, b′)
-            @test b′ ≈ b′′
-            @test !(x′ ≈ x′′)
-            @test x′ == F \ b′
-            @test x′ ≈ (A₊' * A₊) \ b′
-            @test @allocated(ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)) == 0
-        end
+            if n₊ > 0
+                b₊ = rand(n₊)
+                U⁻¹b₊ = copy(b₊)
+                NNLS.solve_triangular_system!(U⁻¹b₊, U, 1:n₊, n₊, Val(false))
+                @test U⁻¹b₊ ≈ U \ b₊
 
-        # QR factors
-        #   Note: qr(A) = QR relates to cholesky(A'A) = LL' = U'U via:
-        #   A'A = U'U = (QR)'(QR) = R'R => R = U (up to row sign)
-        posdiag(R) = UpperTriangular(Diagonal(sign.(diag(R))) * R) # ensure diagonal is positive
-        R = qr(A₊).R
-        @test posdiag(R) ≈ posdiag(U)
+                L⁻¹b₊ = copy(b₊)
+                NNLS.solve_triangular_system!(L⁻¹b₊, U, 1:n₊, n₊, Val(true))
+                @test L⁻¹b₊ ≈ L \ b₊
 
-        # Test that solve is independent of initial x, idx, nsetp
-        work′ = copy(work)
-        work′.x .= rand(n)
-        work′.idx .= Random.randperm(n)
-        work′.nsetp[] = rand(0:min(m, n))
-        NNLS.nnls!(work′, A, b)
+                U⁻¹b₊ = copy(b₊)
+                NNLS.solve_triangular_system!(U⁻¹b₊, work.A, work.idx, n₊, Val(false))
+                @test U⁻¹b₊ ≈ U \ b₊
 
-        @test work′.A ≈ work.A
-        @test work′.b ≈ work.b
-        @test work′.x ≈ work.x
-        @test work′.w ≈ work.w
-        @test work′.zz ≈ work.zz
-        @test work′.idx == work.idx
-        @test work′.rnorm[] ≈ work.rnorm[]
-        @test work′.mode[] == work.mode[]
-        @test work′.nsetp[] == work.nsetp[]
-    end # GC.@preserve
+                L⁻¹b₊ = copy(b₊)
+                NNLS.solve_triangular_system!(L⁻¹b₊, work.A, work.idx, n₊, Val(true))
+                @test L⁻¹b₊ ≈ L \ b₊
+            end
+
+            # Cholesky factors
+            @test A₊' * A₊ ≈ U' * U
+            @test A₊' * A₊ ≈ L * L'
+
+            F = cholesky!(NNLS.NormalEquation(), work)
+            if n₊ > 0
+                x′, b′ = rand(n₊), rand(n₊)
+                x′′, b′′ = copy(x′), copy(b′)
+                ldiv!(x′, F, b′)
+                @test b′ ≈ b′′
+                @test !(x′ ≈ x′′)
+                @test x′ == F \ b′
+                @test x′ ≈ (A₊' * A₊) \ b′
+                @test @allocated(ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)) == 0
+            end
+
+            # QR factors
+            #   Note: qr(A) = QR relates to cholesky(A'A) = LL' = U'U via:
+            #   A'A = U'U = (QR)'(QR) = R'R => R = U (up to row sign)
+            posdiag(R) = UpperTriangular(Diagonal(sign.(diag(R))) * R) # ensure diagonal is positive
+            R = qr(A₊).R
+            @test posdiag(R) ≈ posdiag(U)
+        end # GC.@preserve
+    end
 
     return work
 end
 
 @testset "NNLS" begin
-    for (m, n) in NNLS_SIZES
-        verify_NNLS(m, n)
+    for (m, n) in NNLS_SIZES, μ in [0.0, 1e-2]
+        verify_NNLS(m, n, μ)
     end
 end
 
@@ -377,9 +386,9 @@ function NNLSTikhonovRegProblem_tests(m, n)
     withsolve(f, μ) = (DECAES.solve!(work, μ); return f(work))
 
     GC.@preserve work for (i, μ) in enumerate([0.01, 0.05, 0.25, 0.99])
-        @test xor(i > 1, isnan(DECAES.mu(work))) # μ should be initialized to NaN
-        @test DECAES.mu!(work, μ) == μ
-        @test DECAES.mu(work) == μ
+        @test xor(i > 1, isnan(DECAES.regparam(work))) # μ should be initialized to NaN
+        @test DECAES.regparam!(work, μ) == μ
+        @test DECAES.regparam(work) == μ
 
         x = DECAES.solve!(work, μ)
         @test all(>=(0), x)
@@ -388,7 +397,7 @@ function NNLSTikhonovRegProblem_tests(m, n)
         @test withsolve(DECAES.seminorm_sq, μ) ≈ sum(abs2, x)
 
         @test @allocated(DECAES.solve!(work, μ)) == 0
-        @test @allocated(DECAES.mu(work)) == 0
+        @test @allocated(DECAES.regparam(work)) == 0
 
         ∇μ = DECAES.∇regnorm(work)
         @test ∇μ ≈ ∇logfinitediff(_logμ -> withsolve(DECAES.regnorm, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-3
@@ -457,5 +466,43 @@ end
 @testset "NNLSTikhonovRegProblem" begin
     for (m, n) in NNLS_SIZES
         NNLSTikhonovRegProblem_tests(m, n)
+    end
+end
+
+function NNLSTikhonovRegProblemCache_tests(m, n, ::Val{N} = Val(5)) where {N}
+    A, b = rand_NNLS_data(m, n)
+    work0 = NNLSTikhonovRegProblem(A, b)
+    work = NNLSTikhonovRegProblemCache(A, b, Val(N))
+
+    # Import to test at least as many μ values as the cache size
+    count = 0
+    GC.@preserve work work0 for (i, μ) in enumerate(exp10.(range(-3.0, 0.0; length = 2 * N)))
+        DECAES.solve!(work0, μ)
+        x0 = DECAES.solution(work0)
+
+        DECAES.solve!(work, μ)
+        x = DECAES.solution(work[])
+        @test x ≈ x0
+        @test DECAES.regparam(work[]) == μ
+
+        DECAES.solve!(work, μ)
+        @test x === DECAES.solution(work[]) # retrieves cached solution
+        @test x ≈ x0
+        @test DECAES.regparam(work[]) == μ
+
+        count += 1
+        if count <= N
+            @test !any(isnan.(DECAES.regparam.(work.cache[1:count])))
+            @test all(isnan.(DECAES.regparam.(work.cache[count+1:N])))
+        else
+            @test !any(isnan.(DECAES.regparam.(work.cache)))
+        end
+        @test work.idx[] == mod1(count, N)
+    end
+end
+
+@testset "NNLSTikhonovRegProblemCache" begin
+    for (m, n) in NNLS_SIZES
+        NNLSTikhonovRegProblemCache_tests(m, n)
     end
 end

@@ -46,12 +46,12 @@ end
 @testset "brent_newton_minimize" begin
     f_df = sincos
     x, fx = DECAES.brent_newton_minimize(f_df, 4.0, 5.8, 5.1; xatol = 1e-6, xrtol = 0.0)
-    @test abs(x - 3π/2) <= 1e-6
+    @test abs(x - 3π / 2) <= 1e-6
 
     x, fx = DECAES.brent_newton_minimize(f_df, 4.2, 6.1, 5.0; xatol = 0.0, xrtol = 1e-7)
-    @test abs(x - 3π/2) <= 1e-7 * 3π/2
+    @test abs(x - 3π / 2) <= 1e-7 * 3π / 2
 
-    f_df = x -> (exp(x) - x/2, exp(x) - 0.5)
+    f_df = x -> (exp(x) - x / 2, exp(x) - 0.5)
     x, fx = DECAES.brent_newton_minimize(f_df, -2.0, 1.0, -0.1; xatol = 1e-8, xrtol = 0.0)
     @test abs(x - log(0.5)) <= 1e-8
 

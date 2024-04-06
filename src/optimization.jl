@@ -319,6 +319,7 @@ Optim.jl is licensed under the MIT License:
 function brent_minimize(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
     @assert x₁ < x₂ "x₁ must be less than x₂"
 
+    φ = T(Base.MathConstants.φ) # φ ≈ 1.618034
     α = 2 - T(φ) # α ≈ 0.381966
     x = x₁ + α * (x₂ - x₁)
     y = f(x)

@@ -16,7 +16,7 @@ using DECAES: NormalHermiteSplines
 using DECAES:
     GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
     LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,
-    NNLSProblem, NNLSTikhonovRegProblem,
+    NNLSProblem, NNLSTikhonovRegProblem, NNLSTikhonovRegProblemCache,
     lcurve_corner
 
 # Environment flags

@@ -16,7 +16,7 @@ function NNLSProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
 end
 
 # Solve NNLS problem
-solve!(work::NNLSProblem, A = work.A, b = work.b) = NNLS.nnls!(work.nnls_work, A, b)
+solve!(work::NNLSProblem, A = work.A, b = work.b; kwargs...) = NNLS.nnls!(work.nnls_work, A, b; kwargs...)
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
@@ -77,12 +77,12 @@ end
 TikhonovPaddedMatrix(A::AbstractMatrix, μ::Real) = TikhonovPaddedMatrix(A, Ref(μ))
 Base.size(P::TikhonovPaddedMatrix) = ((m, n) = size(P.A); return (m + n, n))
 Base.parent(P::TikhonovPaddedMatrix) = P.A
-mu(P::TikhonovPaddedMatrix) = P.μ[]
-mu!(P::TikhonovPaddedMatrix, μ::Real) = P.μ[] = μ
+regparam(P::TikhonovPaddedMatrix) = P.μ[]
+regparam!(P::TikhonovPaddedMatrix, μ::Real) = P.μ[] = μ
 
 function Base.copyto!(B::AbstractMatrix{T}, P::TikhonovPaddedMatrix{T}) where {T}
     @assert size(P) == size(B)
-    A, μ = parent(P), mu(P)
+    A, μ = parent(P), regparam(P)
     m, n = size(A)
     @inbounds for j in 1:n
         @simd for i in 1:m
@@ -116,7 +116,7 @@ end
 function NNLSTikhonovRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, μ::Real = T(NaN)) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(TikhonovPaddedMatrix(A, μ), PaddedVector(b, n))
-    buffers = (x = zeros(T, n), y = zeros(T, n))
+    buffers = (; x = zeros(T, n), y = zeros(T, n))
     return NNLSTikhonovRegProblem(A, b, m, n, nnls_prob, buffers)
 end
 
@@ -143,13 +143,13 @@ lsqnonneg_tikh(A::AbstractMatrix, b::AbstractVector, μ::Real) = lsqnonneg_tikh!
 lsqnonneg_tikh_work(A::AbstractMatrix, b::AbstractVector) = NNLSTikhonovRegProblem(A, b)
 lsqnonneg_tikh!(work::NNLSTikhonovRegProblem, μ::Real) = solve!(work, μ)
 
-mu(work::NNLSTikhonovRegProblem) = mu(work.nnls_prob.A)
-mu!(work::NNLSTikhonovRegProblem, μ::Real) = mu!(work.nnls_prob.A, μ)
+regparam(work::NNLSTikhonovRegProblem) = regparam(work.nnls_prob.A)
+regparam!(work::NNLSTikhonovRegProblem, μ::Real) = regparam!(work.nnls_prob.A, μ)
 
-function solve!(work::NNLSTikhonovRegProblem, μ::Real)
+function solve!(work::NNLSTikhonovRegProblem, μ::Real; kwargs...)
     # Set regularization parameter and solve NNLS problem
-    mu!(work, μ)
-    solve!(work.nnls_prob)
+    regparam!(work, μ)
+    solve!(work.nnls_prob; kwargs...)
     return solution(work)
 end
 
@@ -158,8 +158,8 @@ end
 
 @inline loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_prob.nnls_work)^2
 
-regnorm(work::NNLSTikhonovRegProblem) = mu(work)^2 * seminorm_sq(work) # μ²||x||²
-∇regnorm(work::NNLSTikhonovRegProblem) = 2 * mu(work) * seminorm_sq(work) + mu(work)^2 * ∇seminorm_sq(work) # d/dμ [μ²||x||²] = 2μ||x||² + μ² d/dμ [||x||²]
+regnorm(work::NNLSTikhonovRegProblem) = regparam(work)^2 * seminorm_sq(work) # μ²||x||²
+∇regnorm(work::NNLSTikhonovRegProblem) = 2 * regparam(work) * seminorm_sq(work) + regparam(work)^2 * ∇seminorm_sq(work) # d/dμ [μ²||x||²] = 2μ||x||² + μ² d/dμ [||x||²]
 
 resnorm(work::NNLSTikhonovRegProblem) = √(resnorm_sq(work)) # ||Ax-b||
 resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - regnorm(work), 0) # ||Ax-b||²
@@ -194,7 +194,7 @@ function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
         x₊ = NNLS.positive_solution(nnls_work)
         tmp = uview(work.buffers.y, 1:length(x₊))
 
-        μ = mu(work)
+        μ = regparam(work)
         copyto!(tmp, x₊)
         NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
         xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
@@ -210,7 +210,7 @@ function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
         x₊ = NNLS.positive_solution(nnls_work)
         tmp = uview(work.buffers.y, 1:length(x₊))
 
-        μ = mu(work)
+        μ = regparam(work)
         copyto!(tmp, x₊)
         NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
         xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
@@ -244,24 +244,49 @@ struct NNLSTikhonovRegProblemCache{N, W <: NTuple{N}}
     cache::W
     idx::Base.RefValue{Int}
 end
-function NNLSTikhonovRegProblemCache(A::AbstractMatrix{T}, b::AbstractVector{T}, ::Val{N} = Val(5)) where {T, N}
+function NNLSTikhonovRegProblemCache(A::AbstractMatrix{T}, b::AbstractVector{T}, ::Val{N} = Val(8)) where {T, N}
     cache = ntuple(_ -> NNLSTikhonovRegProblem(A, b), N)
     idx = Ref(1)
     return NNLSTikhonovRegProblemCache(cache, idx)
 end
-increment_cache_index!(work::NNLSTikhonovRegProblemCache{N}) where {N} = (work.idx[] = mod1(work.idx[] + 1, N))
-set_cache_index!(work::NNLSTikhonovRegProblemCache{N}, i) where {N} = (work.idx[] = mod1(i, N))
-reset_cache!(work::NNLSTikhonovRegProblemCache{N}) where {N} = foreach(w -> mu!(w, NaN), work.cache)
-Base.getindex(work::NNLSTikhonovRegProblemCache) = work.cache[work.idx[]]
+reset_cache!(work::NNLSTikhonovRegProblemCache{N}) where {N} = foreach(w -> regparam!(w, NaN), work.cache)
+Base.getindex(work::NNLSTikhonovRegProblemCache) = work.cache[get_cache_index(work)]
+
+function next_cache_index!(work::NNLSTikhonovRegProblemCache{N}) where {N}
+    for (i, w) in enumerate(work.cache)
+        if isnan(regparam(w))
+            set_cache_index!(work, i)
+            return work.idx[]
+        end
+    end
+    set_cache_index!(work, work.idx[] + 1)
+    return work.idx[]
+end
+@inline get_cache_index(work::NNLSTikhonovRegProblemCache) = work.idx[]
+@inline set_cache_index!(work::NNLSTikhonovRegProblemCache{N}, i) where {N} = (work.idx[] = mod1(i, N))
 
 function solve!(work::NNLSTikhonovRegProblemCache, μ::Real)
-    i = findfirst(w -> μ == mu(w), work.cache)
-    if i === nothing
-        increment_cache_index!(work)
+    # Find index of cached workspace with μi nearest to μ
+    emptycache = true
+    idx, Δμmax = 0, oftype(μ, Inf)
+    for (i, μi) in enumerate(regparam.(work.cache))
+        if !isnan(μi)
+            emptycache = false
+            idx, Δμ = i, abs(μ - μi)
+            Δμ < Δμmax && ((idx, Δμmax) = (i, Δμ))
+            Δμmax == 0 && break
+        end
+    end
+
+    if emptycache || Δμmax > 0
+        # No cached solves; solve from scratch
+        next_cache_index!(work)
         solve!(work[], μ)
     else
-        set_cache_index!(work, i)
+        # Exact match; return cached solution
+        set_cache_index!(work, idx)
     end
+
     return solution(work[])
 end
 
