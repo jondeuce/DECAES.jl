@@ -25,59 +25,63 @@ See also:
 
     "Size of first 3 dimensions of input 4D image. This argument has no default, but is inferred automatically as `size(image)[1:3]` when calling `T2mapSEcorr(image; kwargs...)`."
     MatrixSize::NTuple{3, Int}
-    @assert all(MatrixSize .>= 1)
+    @assert all(MatrixSize .>= 1) "MatrixSize must be a tuple of 3 positive integers, but MatrixSize = $MatrixSize."
 
     "Number of echoes in input signal. This argument is has no default, but is inferred automatically as `size(image, 4)` when calling `T2mapSEcorr(image; kwargs...)`."
     nTE::Int
-    @assert nTE >= 4
+    @assert nTE >= 4 "At least four echoes are required for T2 mapping, but nTE = $nTE."
 
     "Interecho spacing (Units: seconds). This argument has no default."
     TE::T # seconds
-    @assert TE > 0.0
+    @assert TE > 0.0 "Echo spacing must be positive, but TE = $TE."
 
     "Number of T2 times to estimate in the multi-exponential analysis. This argument has no default."
     nT2::Int
-    @assert nT2 >= 2
+    @assert nT2 >= 2 "At least two T2 components are required for T2 mapping, but nT2 = $nT2."
 
     "Tuple of min and max T2 values (Units: seconds). This argument has no default."
     T2Range::NTuple{2, T} # seconds
-    @assert 0.0 < T2Range[1] < T2Range[2]
+    @assert 0.0 < T2Range[1] < T2Range[2] "T2Range must a sorted 2-tuple of positive values, but T2Range = $T2Range."
 
     "Assumed value of T1 (Units: seconds)."
     T1::T = 1.0 # seconds
-    @assert T1 > 0.0
+    @assert T1 > 0.0 "T1 must be positive, but T1 = $T1."
 
     "First echo intensity cutoff for empty voxels."
     Threshold::T = !legacy ? 0.0 : 200.0
-    @assert Threshold >= 0.0
+    @assert Threshold >= 0.0 "First echo signal threshold must be non-negative, but Threshold = $Threshold."
 
     "Minimum refocusing angle for flip angle optimization (Units: degrees)."
     MinRefAngle::T = 50.0 # degrees
-    @assert 0.0 <= MinRefAngle <= 180.0
+    @assert 0.0 <= MinRefAngle <= 180.0 "Minimum refocusing angle must be in the range [0, 180], but MinRefAngle = $MinRefAngle."
 
     "During flip angle optimization, goodness of fit is checked for up to `nRefAngles` angles in the range `[MinRefAngle, 180]`. The optimal angle is then determined through interpolation from these samples."
     nRefAngles::Int = !legacy ? 32 : 8
-    @assert nRefAngles >= 2
+    @assert nRefAngles >= 2 "Maximum number of angles to check during flip angle optimization must be at least 2, but nRefAngles = $nRefAngles."
 
     "Initial number of angles to check during flip angle optimization before refinement near likely optima. Setting `nRefAnglesMin` equal to `nRefAngles` forces all angles to be checked."
     nRefAnglesMin::Int = !legacy ? min(5, nRefAngles) : nRefAngles
-    @assert 2 <= nRefAnglesMin <= nRefAngles
+    @assert 2 <= nRefAnglesMin <= nRefAngles "Minimum number of angles to check during flip angle optimization must be in the range [2, nRefAngles], but nRefAngles = $nRefAngles and nRefAnglesMin = $nRefAnglesMin."
 
     "Regularization routine to use. One of \"none\", \"chi2\", \"gcv\", or \"lcurve\", representing no regularization, `Chi2Factor`-based Tikhonov regularization, Generalized Cross-Validation method, or L-Curve based regularization, respectively."
     Reg::String
-    @assert Reg ∈ ("none", "chi2", "gcv", "lcurve")
+    @assert Reg ∈ ("none", "lcurve", "chi2", "gcv", "mdp")
 
     "Constraint on ``\\chi^2`` used for regularization when `Reg == \"chi2\"`."
     Chi2Factor::Union{T, Nothing} = nothing
-    @assert (Reg == "chi2" && Chi2Factor !== nothing && Chi2Factor > 1.0) || Reg != "chi2"
+    @assert Reg != "chi2" || (Reg == "chi2" && Chi2Factor !== nothing && Chi2Factor > 1.0) "Chi2Factor must be greater than 1.0, but Chi2Factor = $Chi2Factor."
+
+    "Estimate of the homoscedastic noise level ``|b_i - \\hat{b}_i|``, where ``b`` is the unknown true signal and ``\\hat{b}`` is the measured corrupted signal. For Gaussian noise, this is the standard deviation."
+    NoiseLevel::Union{T, Nothing} = nothing
+    @assert Reg != "mdp" || (Reg == "mdp" && NoiseLevel !== nothing && NoiseLevel > 0.0) "Noise level must be positive, but NoiseLevel = $NoiseLevel."
 
     "Refocusing pulse control angle (Units: degrees)."
     RefConAngle::T = 180.0 # degrees
-    @assert 0.0 <= RefConAngle <= 180.0
+    @assert 0.0 <= RefConAngle <= 180.0 "Refocusing control angle must be in the range [0, 180], but RefConAngle = $RefConAngle."
 
     "Instead of optimizing flip angle, use `SetFlipAngle` for all voxels (Units: degrees)."
     SetFlipAngle::Union{T, Nothing} = nothing
-    @assert SetFlipAngle === nothing || 0.0 <= SetFlipAngle <= 180.0
+    @assert SetFlipAngle === nothing || 0.0 <= SetFlipAngle <= 180.0 "Fixed flip angle must be in the range [0, 180], but SetFlipAngle = $SetFlipAngle."
 
     "Boolean flag to include a 3D array of the ``\\ell^2``-norms of the residuals from the NNLS fits in the output maps dictionary."
     SaveResidualNorm::Bool = false
@@ -101,7 +105,7 @@ Base.convert(::Type{Dict{Symbol, Any}}, o::T2mapOptions) = Dict{Symbol, Any}(Pai
 Base.convert(::Type{Dict{String, Any}}, o::T2mapOptions) = Dict{String, Any}(Pair{String, Any}[string(f) => getfield(o, f) for f in fieldsof(T2mapOptions, Vector)])
 Base.Dict{T, Any}(o::T2mapOptions) where {T} = convert(Dict{T, Any}, o)
 
-t2_times(o::T2mapOptions{T}) where {T} = logrange(o.T2Range..., o.nT2)
+T2_component_times(o::T2mapOptions{T}) where {T} = logrange(o.T2Range..., o.nT2)
 flip_angles(o::T2mapOptions{T}) where {T} = o.SetFlipAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetFlipAngle]
 refcon_angles(o::T2mapOptions{T}) where {T} = o.RefConAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.RefConAngle]
 

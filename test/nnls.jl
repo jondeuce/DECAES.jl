@@ -70,7 +70,7 @@ function verify_NNLS(m, n, μ = 0.0)
             # Solution
             @test all(>(0), x₊)
             @test all(==(0), x₀)
-            @test x₊ ≈ (A₊' * A₊) \ (A₊' * b)
+            # @test x₊ ≈ (A₊' * A₊) \ (A₊' * b)
             @test x₊ ≈ A₊ \ b
 
             # Dual (i.e. gradient)

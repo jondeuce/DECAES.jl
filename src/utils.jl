@@ -592,24 +592,26 @@ function mock_image(o::MockImageOpts{T}) where {T}
     end
 
     indices = CartesianIndices(MatrixSize)
-    blocksize = max(ceil(Int, length(indices) / Threads.nthreads()), 1)
-    tforeach(allocate, indices; blocksize) do I, (m, work1, work2)
+    blocksize = max(div(length(indices), Threads.nthreads(), RoundUp), 1)
+    tforeach(allocate, indices; blocksize) do I, buffers
+        (; m, work1, work2) = buffers
         sfr = SFRRange[1] + (SFRRange[2] - SFRRange[1]) * rand(T) # short T2 fraction
+        mfr = 1 - sfr # long T2 fraction
         T21 = T21Range[1] + (T21Range[2] - T21Range[1]) * rand(T) # short T2
         T22 = T22Range[1] + (T22Range[2] - T22Range[1]) * rand(T) # long T2
         dc1 = EPGdecaycurve!(work1, EPGOptions((; ETL = nTE, α = FlipAngle, TE, T2 = T21, T1, β = T(180.0))))
         dc2 = EPGdecaycurve!(work2, EPGOptions((; ETL = nTE, α = FlipAngle, TE, T2 = T22, T1, β = T(180.0))))
         @inbounds begin
-            m .= sfr .* dc1 .+ (1 - sfr) .* dc2 # bi-exponential signal with EPG correction
-            σM = m[1] * σ
+            # Note: no need to normalize `m`, since convex combinations of EPG decay curves have maximum value 1,
+            #       and therefore the relative noise level `σ` equals the absolute noise level.
+            m .= sfr .* dc1 .+ mfr .* dc2 # bi-exponential signal with EPG correction
             @simd for k in 1:nTE
-                zR, zI = σM * randn(T), σM * randn(T)
+                zR, zI = σ * randn(T), σ * randn(T)
                 m[k] = √((m[k] + zR)^2 + zI^2)
             end
             M[I, :] .= m
         end
     end
-    M ./= mean(@views M[:, :, :, 1]) # normalize mean of first echo to 1
 
     return M
 end

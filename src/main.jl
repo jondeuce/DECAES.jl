@@ -118,13 +118,20 @@ add_arg_table!(CLI_SETTINGS,
     "--Reg",
     Dict(
         :arg_type => String,
-        :help => "routine used for choosing regularization parameter. One of \"lcurve\", \"gcv\", \"chi2\", or \"none\", representing L-curve based regularization, generalized cross-validation based regularization, --Chi2Factor based Tikhonov regularization, and no regularization, respectively. Required parameter",
+        :help => "method used for choosing the Tikhonov regularization parameter. One of \"lcurve\", \"gcv\", \"chi2\", \"mdp\", or \"none\". These flags correspond to the L-curve method, generalized cross-validation, the chi-squared method, Morozov's discrepency principle, and zero regularization. Required parameter",
+        :group => :t2_map_part_required,
+    ),
+    "--RegParams",
+    Dict(
+        :nargs => '+', # If --RegParams is passed, at least one input is required
+        :arg_type => Float64,
+        :help => "parameters for the regularization method chosen via --Reg. Required parameter if --Reg=\"chi2\" or --Reg=\"mdp\"",
         :group => :t2_map_part_required,
     ),
     "--Chi2Factor",
     Dict(
         :arg_type => Float64,
-        :help => "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution. Required parameter when --Reg=\"chi2\"",
+        :help => "if --Reg=\"chi2\", the T2 distribution is regularized such that the chi^2 goodness of fit is increased by a multiplicative factor --Chi2Factor relative to the unregularized solution. Required parameter when --Reg=\"chi2\". Note: this flag is now deprecated and will be removed in future releases; use --RegParams instead",
         :group => :t2_map_part_required,
     ),
 )
@@ -423,29 +430,29 @@ function parse_cli(args)
 end
 
 function handle_cli_deprecations!(opts)
-    # handle_renamed_cli_flag!(opts; oldflag = :Progress, newflag = nothing, deleteflag = true)
-    handle_renamed_cli_flag!(opts; oldflag = :legacy, newflag = nothing, deleteflag = false)
-    return opts
-end
+    # if get(opts, :Progress, nothing) !== nothing
+    #     warn_deprecated_future_removed(:Progress)
+    # end
 
-function handle_renamed_cli_flag!(opts; oldflag, newflag, defaultvalue = nothing, deleteflag = true)
-    if get(opts, oldflag, defaultvalue) != defaultvalue
-        if newflag === nothing
-            @warn "The flag --$oldflag is deprecated and will be removed in future releases."
-        elseif opts[oldflag] != defaultvalue
-            error("The flag --$newflag and the deprecated flag --$oldflag were both passed; use --$newflag only.")
+    if get(opts, :legacy, nothing) !== nothing
+        warn_deprecated_future_removed(:legacy)
+    end
+
+    if get(opts, :Chi2Factor, nothing) !== nothing
+        if get(opts, :RegParams, Float64[]) != Float64[]
+            error_conflicted_flags(:Chi2Factor, :RegParams)
         else
-            @warn "The flag --$oldflag is deprecated and will be removed in future releases; use --$newflag instead."
-        end
-        if newflag !== nothing
-            opts[newflag] = opts[oldflag]
-        end
-        if deleteflag
-            delete!(opts, oldflag)
+            warn_deprecated_renamed(:Chi2Factor, :RegParams)
+            opts[:RegParams] = Float64[opts[:Chi2Factor]]
         end
     end
+    delete!(opts, :Chi2Factor)
+
     return opts
 end
+warn_deprecated_future_removed(oldflag) = @warn "The flag --$oldflag is deprecated and will be removed in future releases."
+warn_deprecated_renamed(oldflag, newflag) = @warn "The flag --$oldflag is deprecated and will be removed in future releases; use --$newflag instead."
+error_conflicted_flags(oldflag, newflag) = error("The flag --$newflag and the deprecated flag --$oldflag were both passed; use --$newflag only.")
 
 function verify_cli_args!(opts)
     # Verify argument interdependencies which can't be enforced by ArgParse
@@ -460,6 +467,15 @@ function clean_cli_args!(opts)
     if opts[:betargs] isa String
         opts[:betargs] = clean_bet_args(opts[:betargs])::Vector{String}
     end
+
+    if opts[:Reg] == "chi2"
+        @assert length(opts[:RegParams]) == 1 "Must set chi2 factor via --RegParams when --Reg=\"chi2\""
+        opts[:Chi2Factor] = only(opts[:RegParams])
+    elseif opts[:Reg] == "mdp"
+        @assert length(opts[:RegParams]) == 1 "Must set noise level via --RegParams when --Reg=\"mdp\""
+        opts[:NoiseLevel] = only(opts[:RegParams])
+    end
+
     return opts
 end
 

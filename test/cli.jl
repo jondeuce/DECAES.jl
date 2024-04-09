@@ -17,7 +17,7 @@ legacy_default_paramdict = Dict{Symbol, Any}(
     :SPWin => (14e-3, 40e-3),
     :MPWin => (40e-3, 200e-3),
     :Reg => "chi2",
-    :Chi2Factor => 1.02,
+    :RegParams => 1.02,
     :Threshold => 200.0,
     :legacy => true,
 )
@@ -76,7 +76,8 @@ function run_main(image, args; make_settings_file::Bool)
     return (; t2maps, t2dist, t2parts)
 end
 
-function construct_args(paramdict;
+function construct_args(
+    paramdict;
     argstype,
     inputfilename = nothing,
     outputpath = nothing,
@@ -85,6 +86,7 @@ function construct_args(paramdict;
     T2part::Bool = true,
 )
 
+    paramdict = copy(paramdict)
     legacy = get!(paramdict, :legacy, false)
     if legacy
         # Add legacy default options to paramdict
@@ -127,7 +129,7 @@ function construct_args(paramdict;
         t2part_args = T2part ? Dict{Symbol, Any}() : nothing
 
         # Only these params are used within MATLAB (possibly spelled differently)
-        mat_t2map_params  = [:Chi2Factor, :MinRefAngle, :nRefAngles, :nT2, :RefConAngle, :Reg, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
+        mat_t2map_params  = [:MinRefAngle, :nRefAngles, :nT2, :RefConAngle, :Reg, :RegParams, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
         mat_t2part_params = [:T2Range, :SPWin, :MPWin, :Sigmoid]
 
         for (param, paramval) in paramdict
@@ -145,6 +147,13 @@ function construct_args(paramdict;
 
         t2map_fields = DECAES.fieldsof(T2mapOptions, Set)
         t2part_fields = DECAES.fieldsof(T2partOptions, Set)
+
+        if paramdict[:Reg] == "chi2"
+            paramdict[:Chi2Factor] = paramdict[:RegParams]
+        elseif paramdict[:Reg] == "mdp"
+            paramdict[:NoiseLevel] = paramdict[:RegParams]
+        end
+
         for (param, paramval) in paramdict
             T2map && (param ∈ t2map_fields) && (t2map_args[param] = paramval)
             T2part && (param ∈ t2part_fields) && (t2part_args[param] = paramval)
@@ -158,6 +167,7 @@ function jl_to_mat_param!(opts, param, paramval)
 
     # T2mapSEcorr parameters which aren't in the MATLAB API
     new_t2map_params = Set{Symbol}([
+        :NoiseLevel,
         :SaveResidualNorm,
         :SaveDecayCurve,
         :SaveNNLSBasis,
@@ -170,8 +180,11 @@ function jl_to_mat_param!(opts, param, paramval)
         opts[:nAngles] = paramval
     elseif param == :RefConAngle # renamed parameter
         opts[:RefCon] = paramval
-    elseif param == :Reg # renamed value: "no" => "none", "lcurve" => "gcv"
-        opts[:Reg] = paramval == "none" ? "no" : paramval == "gcv" ? "lcurve" : paramval
+    elseif param == :Reg # renamed value
+        paramvalmap = Dict("none" => "no", "gcv" => "lcurve", "chi2" => "chi2")
+        opts[:Reg] = paramvalmap[paramval]
+    elseif param == :RegParams # renamed parameter
+        opts[:Chi2Factor] = paramval
     elseif param == :SPWin # renamed parameter
         opts[:spwin] = paramval
     elseif param == :MPWin # renamed parameter
@@ -219,8 +232,8 @@ function run_cli_tests()
         (:MinRefAngle .=> [55.0],),
         (:RefConAngle .=> [172.0],),
         (
-            :Reg        .=> ["none", "chi2", "lcurve", "gcv"],
-            :Chi2Factor .=> [nothing, 1.025, nothing, nothing],
+            :Reg       .=> ["lcurve", "gcv", "chi2", "mdp", "none"],
+            :RegParams .=> [nothing, nothing, 1.025, 3e-4, nothing],
         ),
         (:SPWin .=> [(13e-3, 37e-3)],),
         (:SaveResidualNorm .=> [true],),
@@ -239,10 +252,10 @@ function run_cli_tests()
         (:nRefAnglesMin .=> [4, 7],), # Include even/odd
         (:nT2 .=> [2, 47],), # Include even/odd
         (
-            :legacy     .=> [true, true, true, true],
-            :Threshold  .=> [0.0, 1.0, 0.0, 1.0],
-            :Reg        .=> ["none", "chi2", "lcurve", "gcv"],
-            :Chi2Factor .=> [nothing, 1.025, nothing, nothing],
+            :legacy    .=> [true, true],
+            :Threshold .=> [1.0, 0.0],
+            :Reg       .=> ["gcv", "chi2", "none"],
+            :RegParams .=> [nothing, 1.025, nothing],
         ),
     ]
 
@@ -259,6 +272,7 @@ function run_cli_tests()
         end
 
         image = DECAES.mock_image(; MatrixSize = (2, 2, 2), nTE = rand(4:64))
+        image ./= mean(@views image[:, :, :, 1]) # normalize first-echo signal intensity to unit mean
         settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true, false]), :T2map => true, :T2part => true)
         settings_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => rand([true, false]), :T2map => true, :T2part => true)
         jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
@@ -355,8 +369,8 @@ function matlab_tests()
         (:MinRefAngle .=> [60.0],),
         (:nRefAngles .=> [7, 12],),
         (
-            :Reg        .=> ["none", "chi2", "lcurve", "gcv"],
-            :Chi2Factor .=> [nothing, 1.03, nothing, nothing],
+            :Reg       .=> ["gcv", "chi2", "none"],
+            :RegParams .=> [nothing, 1.03, nothing],
         ),
         (:SetFlipAngle .=> [178.0],),
         (:SaveRegParam .=> [true],),
@@ -413,6 +427,7 @@ function matlab_tests()
 
             # Run T2mapSEcorr
             image = DECAES.mock_image(; MatrixSize = (2, 2, 2), nTE = rand(4:64))
+            image ./= mean(@views image[:, :, :, 1]) # normalize first-echo signal intensity to unit mean
             t2maps_jl, t2dist_jl = DECAES.redirect_to_devnull() do
                 return T2mapSEcorr(image; jl_t2map_kwargs...)
             end

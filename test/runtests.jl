@@ -8,6 +8,7 @@ using Pkg
 using PolynomialRoots: PolynomialRoots
 using Random
 using StaticArrays
+using Statistics
 using TOML
 
 using DECAES
