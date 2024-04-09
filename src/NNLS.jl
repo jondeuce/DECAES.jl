@@ -55,6 +55,7 @@ struct NNLSWorkspace{T}
     w::Vector{T}
     zz::Vector{T}
     idx::Vector{Int}
+    diag::Vector{Bool}
     rnorm::Base.RefValue{T}
     mode::Base.RefValue{Int}
     nsetp::Base.RefValue{Int}
@@ -63,9 +64,9 @@ end
 @inline dual(work::NNLSWorkspace) = work.w
 @inline residualnorm(work::NNLSWorkspace) = work.rnorm[]
 @inline ncomponents(work::NNLSWorkspace) = work.nsetp[]
-@inline components(work::NNLSWorkspace) = uview(work.idx, 1:ncomponents(work))
-@inline positive_solution(work::NNLSWorkspace) = uview(solution(work), components(work))
-@inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = UpperTriangular(uview(work.A, 1:ncomponents(work), components(work)))
+@inline components(work::NNLSWorkspace) = @views work.idx[1:ncomponents(work)]
+@inline positive_solution(work::NNLSWorkspace) = @views solution(work)[components(work)]
+@inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = @views UpperTriangular(work.A[1:ncomponents(work), 1:ncomponents(work)])
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = choleskyfactor(work, Val(:U))'
 
 function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
@@ -76,6 +77,7 @@ function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
         zeros(T, n),    # w
         zeros(T, m),    # zz
         collect(1:n),   # idx
+        zeros(Bool, n), # diag
         Ref(zero(T)),   # rnorm
         Ref(0),         # mode
         Ref(0),         # nsetp
@@ -90,6 +92,7 @@ function Base.copy(w::NNLSWorkspace)
         copy(w.w),
         copy(w.zz),
         copy(w.idx),
+        copy(w.diag),
         Ref(w.rnorm[]),
         Ref(w.mode[]),
         Ref(w.nsetp[]),
@@ -129,7 +132,7 @@ end
 @inline Base.size(F::NormalEquationCholesky) = (n = size(F.work.A, 2); return (n, n))
 
 function solve_triangular_system!(y, F::NormalEquationCholesky, ::Val{transp} = Val(false)) where {transp}
-    solve_triangular_system!(y, F.work.A, F.work.idx, F.work.nsetp[], Val(transp))
+    solve_triangular_system!(y, F.work.A, F.work.nsetp[], Val(transp))
     return y
 end
 
@@ -178,7 +181,7 @@ function nnls!(
 ) where {T}
     GC.@preserve work begin
         load!(work, A, b)
-        unsafe_nnls!(work; kwargs...)
+        unsafe_nnls!(work)
     end
     return solution(work)
 end
@@ -187,13 +190,14 @@ function nnls!(
     work::NNLSWorkspace{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T},
-    idx::AbstractVector{Int},
-    nsetp::Int;
-    kwargs...
+    λ::T;
+    kwargs...,
 ) where {T}
-    copyto!(work.idx, idx)
-    work.nsetp[] = nsetp
-    return nnls!(work, A, b; warm_start = true, kwargs...)
+    GC.@preserve work begin
+        load!(work, A, b)
+        unsafe_nnls!(work, λ)
+    end
+    return solution(work)
 end
 
 """
@@ -206,27 +210,27 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function construct_householder!(
-    u::AbstractVector{T},
-    up::T,
-) where {T}
-    if length(u) <= 1
-        return up
+@inline function construct_householder!(x::AbstractVector{T}) where {T}
+    if length(x) == 0
+        return zero(T)
     end
 
-    sm = zero(T)
-    @simd for i in eachindex(u)
-        ui = u[i]
-        sm = sm + ui * ui
+    @inbounds alpha = x[1]
+    xnorm = norm(x)
+    if xnorm == 0
+        return zero(T)
     end
-    cl = sqrt(sm)
 
-    @inbounds u1 = u[1]
-    cl = ifelse(u1 > 0, -cl, cl)
-    up = u1 - cl
-    @inbounds u[1] = cl
+    beta = copysign(xnorm, alpha)
+    alpha += beta
 
-    return up
+    @inbounds x[1] = -beta
+    @inbounds @simd for i in 2:length(x)
+        x[i] /= alpha
+    end
+
+    tau = alpha / beta
+    return tau
 end
 
 """
@@ -240,92 +244,32 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
 function apply_householder!(
-    u::AbstractVector{T},
-    up::T,
     c::AbstractVector{T},
+    u::AbstractVector{T},
+    tau::T,
 ) where {T}
     m = length(u)
-    if m <= 1
+    if m == 0
         return nothing
     end
 
     @inbounds u1 = u[1]
-    @assert abs(u1) > 0
-    up_u1 = up * u1
-    if up_u1 >= 0
-        return nothing
-    end
+    @inbounds u[1] = 1
 
-    @inbounds c1 = c[1]
-    sm = c1 * up
-    @simd for i in 2:m
+    sm = zero(T)
+    @simd for i in 1:m
         sm = sm + c[i] * u[i]
     end
 
+    sm *= -tau
+
     @inbounds if sm != 0
-        sm /= up_u1
-        c[1] = c[1] + sm * up
-        @simd for i in 2:m
+        @simd for i in 1:m
             c[i] = c[i] + sm * u[i]
         end
     end
-end
 
-function apply_householder!(
-    A::AbstractMatrix{T},
-    up::T,
-    idx::AbstractVector{Int},
-    nsetp::Int,
-    jup::Int,
-) where {T}
-    m, n = size(A)
-    if m - nsetp <= 0
-        return nothing
-    end
-
-    @inbounds u1 = A[nsetp, jup]
-
-    @assert abs(u1) > 0
-    up_u1 = up * u1
-    if up_u1 >= 0
-        return nothing
-    end
-
-    @inbounds A[nsetp, jup] = up
-
-    ipstart = nsetp + 1
-    iprem = ipstart + 4 * ((n - ipstart) ÷ 4) - 1
-    @inbounds for ip in ipstart:4:iprem # unroll over columns
-        @nexprs 4 α -> j_α = idx[ip+(α-1)]
-        @nexprs 4 α -> sm_α = zero(T)
-        @simd for l in nsetp:m
-            Al = A[l, jup]
-            @nexprs 4 α -> sm_α = sm_α + A[l, j_α] * Al
-        end
-        @nexprs 4 α -> sm_α /= up_u1
-        @simd for l in nsetp:m
-            Al = A[l, jup]
-            @nexprs 4 α -> A[l, j_α] = A[l, j_α] + sm_α * Al
-        end
-    end
-
-    if iprem != n # remainder loop
-        @inbounds for ip in iprem+1:n
-            j = idx[ip]
-            sm = zero(T)
-            @simd for l in nsetp:m
-                sm = sm + A[l, j] * A[l, jup]
-            end
-            if sm != 0
-                sm /= up_u1
-                @simd for l in nsetp:m
-                    A[l, j] = A[l, j] + sm * A[l, jup]
-                end
-            end
-        end
-    end
-
-    @inbounds A[nsetp, jup] = u1
+    @inbounds u[1] = u1
 
     return nothing
 end
@@ -334,71 +278,60 @@ function apply_householder_dual!(
     A::AbstractMatrix{T},
     w::AbstractVector{T},
     b::AbstractVector{T},
-    up::T,
-    idx::AbstractVector{Int},
-    nsetp::Int,
-    jup::Int,
+    tau::T,
+    j1::Int,
+    m1::Int,
 ) where {T}
-    m, n = size(A)
-    if m - nsetp <= 0
+    if j1 > m1
         return nothing
     end
 
-    @inbounds u1 = A[nsetp, jup]
+    @inbounds aii = A[j1, j1]
+    @inbounds A[j1, j1] = 1
 
-    @assert abs(u1) > 0
-    up_u1 = up * u1
-    if up_u1 >= 0
-        return nothing
-    end
-
-    @inbounds A[nsetp, jup] = up
-
-    ipstart = nsetp + 1
-    iprem = ipstart + 4 * ((n - ipstart) ÷ 4) - 1
-    @inbounds for ip in ipstart:4:iprem # unroll over columns
-        @nexprs 4 α -> j_α = idx[ip+(α-1)]
+    n = size(A, 2)
+    N = (j1 + 1) + 4 * ((n - (j1 + 1)) ÷ 4) - 1
+    @inbounds for j in j1+1:4:N # unroll over columns
+        @nexprs 4 α -> j_α = j + (α - 1)
         @nexprs 4 α -> sm_α = zero(T)
-        @simd for l in nsetp:m
-            Al = A[l, jup]
-            @nexprs 4 α -> sm_α = sm_α + A[l, j_α] * Al
+        @simd for i in j1:m1
+            ui = A[i, j1]
+            @nexprs 4 α -> sm_α = sm_α + A[i, j_α] * ui
         end
-        @nexprs 4 α -> sm_α /= up_u1
+        @nexprs 4 α -> sm_α *= -tau
         @nexprs 4 α -> w_α = zero(T)
-        Al = A[nsetp, jup]
-        @nexprs 4 α -> A[nsetp, j_α] = A[nsetp, j_α] + sm_α * Al
-        @simd for l in nsetp+1:m
-            bl = b[l]
-            Al = A[l, jup]
-            @nexprs 4 α -> A_α = A[l, j_α] + sm_α * Al
-            @nexprs 4 α -> w_α = w_α + A_α * bl
-            @nexprs 4 α -> A[l, j_α] = A_α
+        @nexprs 4 α -> A[j1, j_α] = A[j1, j_α] + sm_α
+        @simd for i in j1+1:m1
+            bi = b[i]
+            ui = A[i, j1]
+            @nexprs 4 α -> A_α = A[i, j_α] + sm_α * ui
+            @nexprs 4 α -> w_α = w_α + A_α * bi
+            @nexprs 4 α -> A[i, j_α] = A_α
         end
         @nexprs 4 α -> w[j_α] = w_α
     end
 
-    if iprem != n # remainder loop
-        @inbounds for ip in iprem+1:n
-            j = idx[ip]
+    if N != n # remainder loop
+        @inbounds for j in N+1:n
             sm = zero(T)
-            @simd for l in nsetp:m
-                sm = sm + A[l, j] * A[l, jup]
+            @simd for i in j1:m1
+                sm = sm + A[i, j] * A[i, j1]
             end
+            sm *= -tau
             if sm != 0
-                sm /= up_u1
                 wj = zero(T)
-                A[nsetp, j] = A[nsetp, j] + sm * A[nsetp, jup]
-                @simd for l in nsetp+1:m
-                    Al = A[l, j] + sm * A[l, jup]
-                    wj = wj + Al * b[l]
-                    A[l, j] = Al
+                A[j1, j] = A[j1, j] + sm
+                @simd for i in j1+1:m1
+                    Aij = A[i, j] + sm * A[i, j1]
+                    wj = wj + Aij * b[i]
+                    A[i, j] = Aij
                 end
                 w[j] = wj
             end
         end
     end
 
-    @inbounds A[nsetp, jup] = u1
+    @inbounds A[j1, j1] = aii
 
     return nothing
 end
@@ -410,29 +343,26 @@ COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
     w::AbstractVector{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T},
-    idx::AbstractVector{Int},
-    nsetp::Int,
+    j1::Int,
+    m1::Int,
 ) where {T}
-    m, n = size(A)
-
-    ipstart = nsetp + 1
-    iprem = ipstart + 4 * ((n - ipstart) ÷ 4) - 1
-    @inbounds for ip in ipstart:4:iprem # unroll over columns
-        @nexprs 4 α -> j_α = idx[ip+(α-1)]
+    n = size(A, 2)
+    N = j1 + 4 * ((n - j1) ÷ 4) - 1
+    @inbounds for j in j1:4:N # unroll over columns
+        @nexprs 4 α -> j_α = j + (α - 1)
         @nexprs 4 α -> sm_α = zero(T)
-        @simd for l in ipstart:m
-            bl = b[l]
-            @nexprs 4 α -> sm_α = sm_α + A[l, j_α] * bl
+        @simd for i in j1:m1
+            bi = b[i]
+            @nexprs 4 α -> sm_α = sm_α + A[i, j_α] * bi
         end
         @nexprs 4 α -> w[j_α] = sm_α
     end
 
-    if iprem != n # remainder loop
-        @inbounds for ip in iprem+1:n
-            j = idx[ip]
+    if N != n # remainder loop
+        @inbounds for j in N+1:n
             sm = zero(T)
-            @simd for l in ipstart:m
-                sm = sm + A[l, j] * b[l]
+            @simd for i in j1:m1
+                sm = sm + A[i, j] * b[i]
             end
             w[j] = sm
         end
@@ -475,164 +405,54 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-function solve_triangular_system!(
-    zz::AbstractVector{T},
+@inline function solve_triangular_system!(
+    z::AbstractVector{T},
     A::AbstractMatrix{T},
-    idx::AbstractVector{Int},
-    nsetp::Int,
+    n::Int = size(A, 2),
     ::Val{transp} = Val(false),
 ) where {T, transp}
-    if nsetp <= 0
-        return zz
-    end
-
     if !transp
         # Solve the upper-triangular system Ux=b in-place where:
-        #   U = A[1:nsetp, idx[1:nstep]]
-        #   b = zz[1:nsetp]
-        #   x = zz[1:nsetp] (i.e. RHS b is overwritten)
-        @inbounds j = idx[nsetp]
-        @inbounds zz[nsetp] /= A[nsetp, j]
-        @inbounds for ip in nsetp-1:-1:1
-            zz1 = zz[ip+1]
-            @simd for l in 1:ip
-                zz[l] = zz[l] - A[l, j] * zz1
+        #   U = A[1:n, 1:n]
+        #   b = z[1:n]
+        #   x = z[1:n] (i.e. RHS b is overwritten)
+        @inbounds for j in n:-1:1
+            zi = z[j] / A[j, j]
+            @simd for i in 1:j-1
+                z[i] = z[i] - A[i, j] * zi
             end
-            j = idx[ip]
-            zz[ip] /= A[ip, j]
+            z[j] = zi
         end
     else
         # Solve the lower-triangular system Lx=b in-place where:
-        #   L = A[1:nsetp, idx[1:nstep]]' (i.e. transpose of U above)
-        #   b = zz[1:nsetp]
-        #   x = zz[1:nsetp] (i.e. RHS b is overwritten)
-        @inbounds j = idx[1]
-        @inbounds zz[1] /= A[1, j]
-        @inbounds for ip in 2:nsetp
-            j = idx[ip]
-            zz1 = zz[ip]
-            @simd for l in 1:ip-1
-                zz1 = zz1 - A[l, j] * zz[l]
+        #   L = A[1:n, 1:n]' (i.e. transpose of U above)
+        #   b = z[1:n]
+        #   x = z[1:n] (i.e. RHS b is overwritten)
+        @inbounds for j in 1:n
+            z1 = z[j]
+            @simd for l in 1:j-1
+                z1 = z1 - A[l, j] * z[l]
             end
-            zz1 /= A[ip, j]
-            zz[ip] = zz1
+            z1 /= A[j, j]
+            z[j] = z1
         end
     end
-
-    return zz
+    return z
 end
 
-function largest_positive_dual(
+@inline function largest_positive_dual(
     w::AbstractVector{T},
-    idx::AbstractVector{Int},
-    nsetp::Int,
+    j1::Int,
 ) where {T}
-    n = length(w)
     wmax = zero(T)
-    i_wmax = 0
-    @inbounds for ip in nsetp+1:n
-        j = idx[ip]
+    jmax = 0
+    @inbounds for j in j1:length(w)
         if w[j] > wmax
             wmax = w[j]
-            i_wmax = ip
+            jmax = j
         end
     end
-    return wmax, i_wmax
-end
-
-function unsafe_init_nnls!(work::NNLSWorkspace{T}) where {T}
-    checkargs(work)
-    (; A, b, x, w, zz, idx) = work
-    nsetp = work.nsetp[]
-    m, n = size(A)
-
-    # Apply Householder transformations
-    up = zero(T)
-    @inbounds for ip in 1:nsetp
-        j = idx[ip]
-
-        f = uview(b, ip:m)
-        u = uview(A, ip:m, j)
-
-        up = construct_householder!(u, up)
-
-        apply_householder!(u, up, f)
-        apply_householder!(A, up, idx, ip, j)
-
-        @simd for i in ip+1:m
-            A[i, j] = 0
-        end
-    end
-
-    copyto!(zz, b)
-    solve_triangular_system!(zz, A, idx, nsetp)
-
-    # Remove columns until solution satisfies non-negativity constraints
-    i_curr = 1
-
-    @inbounds while true
-        # SEE IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE.
-        # IF NOT COMPUTE ALPHA.
-        remove_cols = false
-        @inbounds for ip in 1:nsetp
-            if zz[ip] <= 0
-                i_curr = ip
-                remove_cols = true
-                break
-            end
-        end
-
-        # IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE THEN ALPHA WILL
-        # STILL = 2. IF SO EXIT FROM SECONDARY LOOP TO MAIN LOOP.
-        if !remove_cols
-            break
-        end
-
-        # MODIFY A AND B AND THE INDEX ARRAYS TO MOVE COEFFICIENT I
-        # FROM SET P TO SET Z.
-        j_curr = idx[i_curr]
-        if i_curr != nsetp
-            i_curr += 1
-            @inbounds for ip in i_curr:nsetp
-                j = idx[ip]
-                idx[ip-1] = j
-
-                cc, ss, sig = orthogonal_rotmat(A[ip-1, j], A[ip, j])
-                A[ip-1, j] = sig
-                A[ip, j] = zero(T)
-
-                # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
-                @simd for l in 1:j-1
-                    A[ip-1, l], A[ip, l] = orthogonal_rotmatvec(cc, ss, A[ip-1, l], A[ip, l])
-                end
-                @simd for l in j+1:n
-                    A[ip-1, l], A[ip, l] = orthogonal_rotmatvec(cc, ss, A[ip-1, l], A[ip, l])
-                end
-
-                # Apply procedure G2 (CC,SS,B(J-1),B(J))
-                b[ip-1], b[ip] = orthogonal_rotmatvec(cc, ss, b[ip-1], b[ip])
-            end
-        end
-
-        nsetp -= 1
-        idx[nsetp+1] = j_curr
-
-        # COPY B( ) INTO ZZ( ). THEN SOLVE AGAIN AND LOOP BACK.
-        copyto!(zz, b)
-        solve_triangular_system!(zz, A, idx, nsetp)
-    end
-
-    fill!(x, zero(T))
-    @inbounds for ip in 1:nsetp
-        x[idx[ip]] = zz[ip]
-    end
-
-    fill!(w, zero(T))
-    compute_dual!(w, A, b, idx, nsetp)
-
-    work.nsetp[] = nsetp
-
-    return nothing
+    return wmax, jmax
 end
 
 """
@@ -651,44 +471,38 @@ A * X = B SUBJECT TO X .GE. 0
 function unsafe_nnls!(
     work::NNLSWorkspace{T};
     max_iter::Int = 3 * size(work.A, 2),
-    warm_start::Bool = false,
 ) where {T}
 
     checkargs(work)
     (; A, b, x, w, zz, idx) = work
     m, n = size(A)
 
-    if warm_start
-        unsafe_init_nnls!(work)
-        nsetp = work.nsetp[]
-    else
-        nsetp = 0
-        fill!(x, zero(T))
-        fill!(w, zero(T))
-        copyto!(idx, 1:n)
-        compute_dual!(w, A, b, idx, nsetp)
+    @simd for i in 1:n
+        x[i] = 0
+        w[i] = 0
+        idx[i] = i
     end
+    compute_dual!(w, A, b, 1, m)
 
+    nsetp = 0
     iter = 0
-    up = zero(T)
-
     work.mode[] = 0
     terminated = false
 
     # ******  MAIN LOOP BEGINS HERE  ******
     @inbounds while true
-        local i_curr, j_curr, i_maxdual, j_maxdual
-
         # QUIT IF ALL COEFFICIENTS ARE ALREADY IN THE SOLUTION.
         # OR IF M COLS OF A HAVE BEEN TRIANGULARIZED.
-        if (nsetp + 1 > n || nsetp >= m)
+        if (nsetp >= n || nsetp >= m)
             terminated = true
             break
         end
 
+        jmax = nsetp
+        tau = zero(T)
         @inbounds while true
             # FIND LARGEST POSITIVE W(J).
-            wmax, i_wmax = largest_positive_dual(w, idx, nsetp)
+            wmax, jmax = largest_positive_dual(w, nsetp + 1)
 
             # IF WMAX .LE. 0. GO TO TERMINATION.
             # THIS INDICATES SATISFACTION OF THE KUHN-TUCKER CONDITIONS.
@@ -697,21 +511,22 @@ function unsafe_nnls!(
                 break
             end
 
-            i_maxdual = i_wmax
-            j_maxdual = idx[i_maxdual]
-
             # THE SIGN OF W(J) IS OK FOR J TO BE MOVED TO SET P.
             # BEGIN THE TRANSFORMATION AND CHECK NEW DIAGONAL ELEMENT TO AVOID
             # NEAR LINEAR DEPENDENCE.
-            Asave = A[nsetp+1, j_maxdual]
-            up = construct_householder!(uview(A, nsetp+1:m, j_maxdual), up)
+            u = uview(A, nsetp+1:m, jmax)
 
-            if abs(A[nsetp+1, j_maxdual]) > 0
+            u1 = u[1]
+            tau = construct_householder!(u)
+
+            if abs(u[1]) > 0
                 # COL J IS SUFFICIENTLY INDEPENDENT. COPY B INTO ZZ, UPDATE ZZ
                 # AND SOLVE FOR ZTEST ( = PROPOSED NEW VALUE FOR X(J) ).
                 copyto!(zz, b)
-                apply_householder!(uview(A, nsetp+1:m, j_maxdual), up, uview(zz, nsetp+1:m))
-                ztest = zz[nsetp+1] / A[nsetp+1, j_maxdual]
+
+                c = uview(zz, nsetp+1:m)
+                apply_householder!(c, u, tau)
+                ztest = c[1] / u[1]
 
                 # SEE IF ZTEST IS POSITIVE
                 if ztest > 0
@@ -722,9 +537,10 @@ function unsafe_nnls!(
             # REJECT J AS A CANDIDATE TO BE MOVED FROM SET Z TO SET P.
             # RESTORE A(NPP1,J), SET W(J)=0., AND LOOP BACK TO TEST DUAL
             # COEFFS AGAIN.
-            A[nsetp+1, j_maxdual] = Asave
-            w[j_maxdual] = zero(T)
+            u[1] = u1
+            w[jmax] = zero(T)
         end
+
         if terminated
             break
         end
@@ -734,29 +550,29 @@ function unsafe_nnls!(
         # TRANSFORMATIONS TO COLS IN NEW SET Z, ZERO SUBDIAGONAL ELTS IN
         # COL J, SET W(J)=0.
         copyto!(b, zz)
+        nsetp += 1
 
-        idx[i_maxdual] = idx[nsetp+1]
-        idx[nsetp+1]   = j_maxdual
-        nsetp          += 1
-
-        if nsetp + 1 <= n
-            apply_householder_dual!(A, w, b, up, idx, nsetp, j_maxdual)
-        end
-
-        if nsetp != m
-            @simd for l in nsetp+1:m
-                A[l, j_maxdual] = zero(T)
+        # Swap columns
+        if jmax != nsetp
+            idx[nsetp], idx[jmax] = idx[jmax], idx[nsetp]
+            @simd for i in 1:m
+                A[i, nsetp], A[i, jmax] = A[i, jmax], A[i, nsetp]
             end
         end
 
-        w[j_maxdual] = zero(T)
+        if nsetp < n
+            apply_householder_dual!(A, w, b, tau, nsetp, m)
+        end
+
+        @simd for i in nsetp+1:m
+            A[i, nsetp] = zero(T)
+        end
+
+        w[nsetp] = zero(T)
 
         # SOLVE THE TRIANGULAR SYSTEM.
         # STORE THE SOLUTION TEMPORARILY IN ZZ().
-        solve_triangular_system!(zz, A, idx, nsetp)
-        @inbounds if nsetp > 0
-            i_curr = idx[1]
-        end
+        solve_triangular_system!(zz, A, nsetp)
 
         # ******  SECONDARY LOOP BEGINS HERE  ******
         dual_flag = false
@@ -771,14 +587,15 @@ function unsafe_nnls!(
 
             # SEE IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE.
             # IF NOT COMPUTE ALPHA.
+            imv = nsetp
             alpha = T(2)
-            @inbounds for ip in 1:nsetp
-                j = idx[ip]
-                if zz[ip] <= 0
-                    t = -x[j] / (zz[ip] - x[j])
+            @inbounds for i in 1:nsetp
+                if zz[i] <= 0
+                    xi = x[idx[i]]
+                    t = -xi / (zz[i] - xi)
                     if alpha > t
+                        imv = i
                         alpha = t
-                        i_curr = ip
                     end
                 end
             end
@@ -792,42 +609,44 @@ function unsafe_nnls!(
 
             # OTHERWISE USE ALPHA WHICH WILL BE BETWEEN 0 AND 1 TO
             # INTERPOLATE BETWEEN THE OLD X AND THE NEW ZZ.
-            @inbounds for ip in 1:nsetp
-                j = idx[ip]
-                x[j] = x[j] + alpha * (zz[ip] - x[j])
+            @inbounds for i in 1:nsetp
+                ix = idx[i]
+                x[ix] = x[ix] + alpha * (zz[i] - x[ix])
             end
 
             # MODIFY A AND B AND THE INDEX ARRAYS TO MOVE COEFFICIENT I
             # FROM SET P TO SET Z.
-            j_curr = idx[i_curr]
             @inbounds while true
-                x[j_curr] = zero(T)
+                x[idx[imv]] = zero(T)
 
-                if i_curr != nsetp
-                    i_curr += 1
-                    @inbounds for ip in i_curr:nsetp
-                        j = idx[ip]
-                        idx[ip-1] = j
-
-                        cc, ss, sig = orthogonal_rotmat(A[ip-1, j], A[ip, j])
-                        A[ip-1, j] = sig
-                        A[ip, j] = zero(T)
+                if imv != nsetp
+                    @inbounds for i in imv+1:nsetp
+                        cc, ss, rr = orthogonal_rotmat(A[i-1, i], A[i, i])
+                        A[i-1, i] = rr
+                        A[i, i] = zero(T)
 
                         # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
-                        @simd for l in 1:j-1
-                            A[ip-1, l], A[ip, l] = orthogonal_rotmatvec(cc, ss, A[ip-1, l], A[ip, l])
+                        @simd for j in 1:i-1
+                            A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
                         end
-                        @simd for l in j+1:n
-                            A[ip-1, l], A[ip, l] = orthogonal_rotmatvec(cc, ss, A[ip-1, l], A[ip, l])
+                        @simd for j in i+1:n
+                            A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
                         end
 
                         # Apply procedure G2 (CC,SS,B(J-1),B(J))
-                        b[ip-1], b[ip] = orthogonal_rotmatvec(cc, ss, b[ip-1], b[ip])
+                        b[i-1], b[i] = orthogonal_rotmatvec(cc, ss, b[i-1], b[i])
+                    end
+
+                    # swap columns
+                    @inbounds for j in imv:nsetp-1
+                        @simd for i in 1:m
+                            A[i, j+1], A[i, j] = A[i, j], A[i, j+1]
+                        end
+                        idx[j], idx[j+1] = idx[j+1], idx[j]
                     end
                 end
 
                 nsetp -= 1
-                idx[nsetp+1] = j_curr
 
                 # SEE IF THE REMAINING COEFFS IN SET P ARE FEASIBLE. THEY SHOULD
                 # BE BECAUSE OF THE WAY ALPHA WAS DETERMINED.
@@ -835,11 +654,10 @@ function unsafe_nnls!(
                 # THAT ARE NONPOSITIVE WILL BE SET TO ZERO
                 # AND MOVED FROM SET P TO SET Z.
                 allfeasible = true
-                @inbounds for ip in 1:nsetp
-                    j_curr = idx[ip]
-                    if x[j_curr] <= 0
+                @inbounds for i in 1:nsetp
+                    if x[idx[i]] <= 0
                         allfeasible = false
-                        i_curr = ip
+                        imv = i
                         break
                     end
                 end
@@ -850,22 +668,20 @@ function unsafe_nnls!(
 
             # COPY B( ) INTO ZZ( ). THEN SOLVE AGAIN AND LOOP BACK.
             copyto!(zz, b)
-            solve_triangular_system!(zz, A, idx, nsetp)
-            @inbounds if nsetp > 0
-                i_curr = idx[1]
-            end
+            solve_triangular_system!(zz, A, nsetp)
         end
+
         if terminated
             break
         end
         # ******  END OF SECONDARY LOOP  ******
 
         if dual_flag
-            compute_dual!(w, A, b, idx, nsetp)
+            compute_dual!(w, A, b, nsetp + 1, m)
         end
 
-        @inbounds for ip in 1:nsetp
-            x[idx[ip]] = zz[ip]
+        @inbounds for i in 1:nsetp
+            x[idx[i]] = zz[i]
         end
         # ALL NEW COEFFS ARE POSITIVE. LOOP BACK TO BEGINNING.
     end
@@ -876,14 +692,276 @@ function unsafe_nnls!(
 
     sm = zero(T)
     if nsetp < m
-        @simd for ip in nsetp+1:m
-            bi = b[ip]
-            zz[ip] = bi
+        @simd for i in nsetp+1:m
+            bi = b[i]
+            zz[i] = bi
             sm = sm + bi * bi
         end
     else
         fill!(w, zero(T))
     end
+
+    work.rnorm[] = sqrt(sm)
+    work.nsetp[] = nsetp
+    return work.x
+end
+
+function unsafe_nnls!(
+    work::NNLSWorkspace{T},
+    λ::T;
+    max_iter::Int = 3 * size(work.A, 2),
+) where {T}
+
+    checkargs(work)
+    (; A, b, x, w, zz, idx, diag) = work
+    M, N = size(A)
+    m = M - N
+    @assert M >= N "A must be of the form [A₀; λ*I], but size(A) = $(size(A))"
+
+    @inbounds for j in 1:N
+        for i in m+1:M
+            A[i, j] = 0
+        end
+    end
+    @simd for i in 1:N
+        x[i] = 0
+        w[i] = 0
+        idx[i] = i
+        b[m+i] = 0
+        diag[i] = false
+    end
+    compute_dual!(w, A, b, 1, m)
+
+    nsetp = 0
+    iter = 0
+    work.mode[] = 0
+    terminated = false
+
+    # ******  MAIN LOOP BEGINS HERE  ******
+    @inbounds while true
+        # QUIT IF ALL COEFFICIENTS ARE ALREADY IN THE SOLUTION.
+        # OR IF M COLS OF A HAVE BEEN TRIANGULARIZED.
+        if nsetp >= N
+            terminated = true
+            break
+        end
+
+        jmax = nsetp
+        tau = zero(T)
+        @inbounds while true
+            # FIND LARGEST POSITIVE W(J).
+            wmax, jmax = largest_positive_dual(w, nsetp + 1)
+
+            # IF WMAX .LE. 0. GO TO TERMINATION.
+            # THIS INDICATES SATISFACTION OF THE KUHN-TUCKER CONDITIONS.
+            if wmax <= 0
+                terminated = true
+                break
+            end
+
+            if !diag[idx[jmax]]
+                A[m+1, jmax] = λ
+            end
+
+            # THE SIGN OF W(J) IS OK FOR J TO BE MOVED TO SET P.
+            # BEGIN THE TRANSFORMATION AND CHECK NEW DIAGONAL ELEMENT TO AVOID
+            # NEAR LINEAR DEPENDENCE.
+            u = uview(A, nsetp+1:min(m + 1, M), jmax)
+
+            u1 = u[1]
+            tau = construct_householder!(u)
+
+            if abs(u[1]) > 0
+                # COL J IS SUFFICIENTLY INDEPENDENT. COPY B INTO ZZ, UPDATE ZZ
+                # AND SOLVE FOR ZTEST ( = PROPOSED NEW VALUE FOR X(J) ).
+                copyto!(zz, b)
+
+                c = uview(zz, nsetp+1:min(m + 1, M))
+                apply_householder!(c, u, tau)
+                ztest = c[1] / u[1]
+
+                # SEE IF ZTEST IS POSITIVE
+                if ztest > 0
+                    break
+                end
+            end
+
+            # REJECT J AS A CANDIDATE TO BE MOVED FROM SET Z TO SET P.
+            # RESTORE A(NPP1,J), SET W(J)=0., AND LOOP BACK TO TEST DUAL
+            # COEFFS AGAIN.
+            u[1] = u1
+
+            w[jmax] = zero(T)
+            if m < M
+                A[m+1, jmax] = 0
+            end
+        end
+
+        if terminated
+            break
+        end
+
+        # THE INDEX J=INDEX(IZ) HAS BEEN SELECTED TO BE MOVED FROM
+        # SET Z TO SET P. UPDATE B, UPDATE INDICES, APPLY HOUSEHOLDER
+        # TRANSFORMATIONS TO COLS IN NEW SET Z, ZERO SUBDIAGONAL ELTS IN
+        # COL J, SET W(J)=0.
+        copyto!(b, zz)
+        nsetp += 1
+
+        if !diag[idx[jmax]]
+            m = min(m + 1, M)
+            diag[idx[jmax]] = true
+        end
+
+        # Swap columns
+        if jmax != nsetp
+            idx[nsetp], idx[jmax] = idx[jmax], idx[nsetp]
+            @simd for i in 1:m
+                A[i, nsetp], A[i, jmax] = A[i, jmax], A[i, nsetp]
+            end
+        end
+
+        if nsetp + 1 <= N
+            apply_householder_dual!(A, w, b, tau, nsetp, m)
+        end
+
+        @simd for i in nsetp+1:m
+            A[i, nsetp] = zero(T)
+        end
+
+        w[nsetp] = zero(T)
+
+        # SOLVE THE TRIANGULAR SYSTEM.
+        # STORE THE SOLUTION TEMPORARILY IN ZZ().
+        solve_triangular_system!(zz, A, nsetp)
+
+        # ******  SECONDARY LOOP BEGINS HERE  ******
+        dual_flag = false
+
+        @inbounds while true
+            iter += 1
+            if iter > max_iter
+                work.mode[] = 1
+                terminated = true
+                break
+            end
+
+            # SEE IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE.
+            # IF NOT COMPUTE ALPHA.
+            imv = nsetp
+            alpha = T(2)
+            @inbounds for i in 1:nsetp
+                if zz[i] <= 0
+                    xi = x[idx[i]]
+                    t = -xi / (zz[i] - xi)
+                    if alpha > t
+                        imv = i
+                        alpha = t
+                    end
+                end
+            end
+
+            # IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE THEN ALPHA WILL
+            # STILL = 2. IF SO EXIT FROM SECONDARY LOOP TO MAIN LOOP.
+            if alpha == 2
+                break
+            end
+            dual_flag = true
+
+            # OTHERWISE USE ALPHA WHICH WILL BE BETWEEN 0 AND 1 TO
+            # INTERPOLATE BETWEEN THE OLD X AND THE NEW ZZ.
+            @inbounds for i in 1:nsetp
+                ix = idx[i]
+                x[ix] = x[ix] + alpha * (zz[i] - x[ix])
+            end
+
+            # MODIFY A AND B AND THE INDEX ARRAYS TO MOVE COEFFICIENT I
+            # FROM SET P TO SET Z.
+            @inbounds while true
+                x[idx[imv]] = zero(T)
+
+                if imv != nsetp
+                    @inbounds for i in imv+1:nsetp
+                        cc, ss, rr = orthogonal_rotmat(A[i-1, i], A[i, i])
+                        A[i-1, i] = rr
+                        A[i, i] = zero(T)
+
+                        # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
+                        @simd for j in 1:i-1
+                            A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
+                        end
+                        @simd for j in i+1:N
+                            A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
+                        end
+
+                        # Apply procedure G2 (CC,SS,B(J-1),B(J))
+                        b[i-1], b[i] = orthogonal_rotmatvec(cc, ss, b[i-1], b[i])
+                    end
+
+                    # swap columns
+                    @inbounds for j in imv:nsetp-1
+                        @simd for i in 1:m
+                            A[i, j+1], A[i, j] = A[i, j], A[i, j+1]
+                        end
+                        idx[j], idx[j+1] = idx[j+1], idx[j]
+                    end
+                end
+
+                nsetp -= 1
+
+                # SEE IF THE REMAINING COEFFS IN SET P ARE FEASIBLE. THEY SHOULD
+                # BE BECAUSE OF THE WAY ALPHA WAS DETERMINED.
+                # IF ANY ARE INFEASIBLE IT IS DUE TO ROUND-OFF ERROR. ANY
+                # THAT ARE NONPOSITIVE WILL BE SET TO ZERO
+                # AND MOVED FROM SET P TO SET Z.
+                allfeasible = true
+                @inbounds for i in 1:nsetp
+                    if x[idx[i]] <= 0
+                        allfeasible = false
+                        imv = i
+                        break
+                    end
+                end
+                if allfeasible
+                    break
+                end
+            end
+
+            # COPY B( ) INTO ZZ( ). THEN SOLVE AGAIN AND LOOP BACK.
+            copyto!(zz, b)
+            solve_triangular_system!(zz, A, nsetp)
+        end
+
+        if terminated
+            break
+        end
+        # ******  END OF SECONDARY LOOP  ******
+
+        if dual_flag
+            compute_dual!(w, A, b, nsetp + 1, m)
+        end
+
+        @inbounds for i in 1:nsetp
+            x[idx[i]] = zz[i]
+        end
+        # ALL NEW COEFFS ARE POSITIVE. LOOP BACK TO BEGINNING.
+    end
+
+    # ******  END OF MAIN LOOP  ******
+    # COME TO HERE FOR TERMINATION.
+    # COMPUTE THE NORM OF THE FINAL RESIDUAL VECTOR.
+
+    sm = zero(T)
+    @simd for i in nsetp+1:M
+        bi = b[i]
+        zz[i] = bi
+        sm = sm + bi * bi
+    end
+    if nsetp == N
+        # Equivalent to unconstrained problem
+        fill!(w, zero(T))
+    end
+
     work.rnorm[] = sqrt(sm)
     work.nsetp[] = nsetp
     return work.x

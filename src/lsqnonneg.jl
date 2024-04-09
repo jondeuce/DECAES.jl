@@ -16,7 +16,8 @@ function NNLSProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
 end
 
 # Solve NNLS problem
-solve!(work::NNLSProblem, A = work.A, b = work.b; kwargs...) = NNLS.nnls!(work.nnls_work, A, b; kwargs...)
+solve!(work::NNLSProblem, args...; kwargs...) = solve!(work, work.A, work.b, args...; kwargs...)
+solve!(work::NNLSProblem, A::AbstractMatrix, b::AbstractVector, args...; kwargs...) = NNLS.nnls!(work.nnls_work, A, b, args...; kwargs...)
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
@@ -116,7 +117,7 @@ end
 function NNLSTikhonovRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, μ::Real = T(NaN)) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(TikhonovPaddedMatrix(A, μ), PaddedVector(b, n))
-    buffers = (; x = zeros(T, n), y = zeros(T, n))
+    buffers = (; null_soln = zeros(T, n), tmp = zeros(T, n))
     return NNLSTikhonovRegProblem(A, b, m, n, nnls_prob, buffers)
 end
 
@@ -149,7 +150,7 @@ regparam!(work::NNLSTikhonovRegProblem, μ::Real) = regparam!(work.nnls_prob.A, 
 function solve!(work::NNLSTikhonovRegProblem, μ::Real; kwargs...)
     # Set regularization parameter and solve NNLS problem
     regparam!(work, μ)
-    solve!(work.nnls_prob; kwargs...)
+    solve!(work.nnls_prob, μ; kwargs...)
     return solution(work)
 end
 
@@ -192,10 +193,10 @@ function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
         (; nnls_work) = work.nnls_prob
         B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
         x₊ = NNLS.positive_solution(nnls_work)
-        tmp = uview(work.buffers.y, 1:length(x₊))
+        tmp = uview(work.buffers.tmp, 1:length(x₊))
+        copyto!(tmp, x₊)
 
         μ = regparam(work)
-        copyto!(tmp, x₊)
         NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
         xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
 
@@ -208,10 +209,10 @@ function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
         (; nnls_work) = work.nnls_prob
         B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
         x₊ = NNLS.positive_solution(nnls_work)
-        tmp = uview(work.buffers.y, 1:length(x₊))
+        tmp = uview(work.buffers.tmp, 1:length(x₊))
+        copyto!(tmp, x₊)
 
         μ = regparam(work)
-        copyto!(tmp, x₊)
         NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
         xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
 
@@ -267,12 +268,13 @@ end
 
 function solve!(work::NNLSTikhonovRegProblemCache, μ::Real)
     # Find index of cached workspace with μi nearest to μ
+    T = promote_type(typeof(μ), typeof(regparam(work[])))
     emptycache = true
-    idx, Δμmax = 0, oftype(μ, Inf)
+    idx, Δμmax = 0, T(Inf)
     for (i, μi) in enumerate(regparam.(work.cache))
         if !isnan(μi)
             emptycache = false
-            idx, Δμ = i, abs(μ - μi)
+            idx, Δμ = i, μ == μi == T(Inf) ? zero(T) : T(abs(μ - μi))
             Δμ < Δμmax && ((idx, Δμmax) = (i, Δμ))
             Δμmax == 0 && break
         end
@@ -545,18 +547,23 @@ end
 lsqnonneg_mdp_work(A::AbstractMatrix, b::AbstractVector) = NNLSMDPRegProblem(A, b)
 
 function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
+    @assert δ > 0 "Residual norm δ must be a positive value, but got δ = $δ"
+
     # Non-regularized solution
     solve!(work.nnls_prob)
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
 
-    #TODO: throw error if δ > ||b||, since ||A * x(μ) - b|| <= ||b|| when A, x, b are componentwise nonnegative, or return... what?
-    # if δ >= norm(work.nnls_prob.b)
-    #     error("δ = $δ is greater than the norm of the data vector ||b|| = $(norm(work.nnls_prob.b))")
-    # end
-    if δ <= res²_min
-        x_final = x_unreg
-        return (; x = x_final, mu = zero(T), chi2 = one(T))
+    if δ <= √res²_min
+        # Limit as δ -> res_min⁺ from above is the unregularized solution
+        return (; x = x_unreg, mu = zero(T), chi2 = one(T))
+    end
+
+    res²_max = sum(abs2, work.nnls_prob.b)
+    if δ >= √res²_max
+        # Limit as δ -> ||b|| from below is the infinitely regularized solution, i.e. x = 0, since ||A * x(μ -> +∞) - b|| -> ||b||.
+        x_final = work.nnls_prob_smooth_cache[].buffers.null_soln # zero solution
+        return (; x = x_final, mu = T(Inf), chi2 = res²_max / res²_min)
     end
 
     # Prepare to solve

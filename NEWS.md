@@ -5,6 +5,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.5.2] - Feb 19, 2024
+- Deprecated `--Chi2Factor` in favour of `--RegParams`
 - Deprecated experimental `--compile` CLI flag. DECAES app can instead by built by setting the environment variable `DECAES_COMPILE_APP=true` and running `]build DECAES`.
 
 ## [0.5.0] - May 16, 2023

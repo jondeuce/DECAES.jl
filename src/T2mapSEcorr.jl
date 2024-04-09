@@ -489,8 +489,10 @@ function T2_distribution!(t2work::T2DistWorkspace{ChiSquared{T}, T}) where {T}
 end
 
 function T2_distribution!(t2work::T2DistWorkspace{MDP{T}, T}) where {T}
-    (; reg, nnls_work, decay_scale, μ, χ²fact) = t2work
-    x, μ[], χ²fact[] = lsqnonneg_mdp!(nnls_work, reg.NoiseLevel / decay_scale[])
+    (; reg, nnls_work, decay_basis, decay_data, decay_scale, μ, χ²fact) = t2work
+    σ = reg.NoiseLevel / decay_scale[] # homoscedastic standard deviation: σ² = 𝔼[||ηᵢ||²] = 𝔼[(bᵢ - b̂ᵢ)²]
+    δ = √(T(length(decay_data))) * σ # noise vector norm estimate: δ² = 𝔼[||η||²] = n * σ²
+    x, μ[], χ²fact[] = lsqnonneg_mdp!(nnls_work, δ)
     return x
 end
 
