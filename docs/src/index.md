@@ -40,7 +40,7 @@ Using Julia v1.9 or later you can install DECAES as follows:
 $ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
 ```
 
-This will add DECAES.jl to a named Julia project environment separate from your global environment, and build the `decaes` executable at `~/.julia/bin` for running DECAES from the command line.
+This will add DECAES.jl to a named Julia project environment separate from your global environment, and build the `decaes` launcher script at `~/.julia/bin` for running DECAES from the command line.
 
 ## [Updating DECAES](@id updating)
 

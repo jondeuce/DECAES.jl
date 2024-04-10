@@ -80,3 +80,22 @@ end
     @test DECAES.mapfindmin(Float64, f, x) == (0, 0.0, 2) && count[] == 10
     @test DECAES.mapfindmax(Float64, f, x) == (2, 4.0, 4) && count[] == 14
 end
+
+@testset "SVDValsWorkspace" begin
+    for (m, n) in Iterators.product(1:5, 1:5)
+        A = randn(m, n)
+        work = DECAES.SVDValsWorkspace(A)
+        @test work.A !== A # should make a copy
+
+        γ0 = svdvals(A)
+        γ1 = svdvals!(work)
+        @test γ0 == γ1 # should match exactly, calling same LAPACK routine
+
+        γ2 = svdvals!(work, A)
+        @test γ1 === γ2 # returns same internal buffer
+        @test γ0 == γ2 # should match exactly, calling same LAPACK routine
+
+        @test @allocated(svdvals!(work)) == 0
+        @test @allocated(svdvals!(work, A)) == 0
+    end
+end

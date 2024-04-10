@@ -138,9 +138,11 @@ See also:
 
   - [`T2partSEcorr`](@ref)
   - [`lsqnonneg`](@ref)
-  - [`lsqnonneg_chi2`](@ref)
-  - [`lsqnonneg_gcv`](@ref)
+  - [`lsqnonneg_tikh`](@ref)
   - [`lsqnonneg_lcurve`](@ref)
+  - [`lsqnonneg_gcv`](@ref)
+  - [`lsqnonneg_chi2`](@ref)
+  - [`lsqnonneg_mdp`](@ref)
   - [`EPGdecaycurve`](@ref)
 """
 T2mapSEcorr(image::Array{T, 4}; kwargs...) where {T} = T2mapSEcorr(image, T2mapOptions(image; kwargs...))
@@ -424,6 +426,7 @@ end
 # T2-distribution fitting
 # =========================================================
 abstract type RegularizationMethod end
+struct NoRegularization <: RegularizationMethod end
 struct LCurve <: RegularizationMethod end
 struct GCV <: RegularizationMethod end
 struct ChiSquared{T} <: RegularizationMethod
@@ -433,24 +436,23 @@ end
 struct MDP{T} <: RegularizationMethod
     NoiseLevel::T
 end
-struct NoRegularization <: RegularizationMethod end
 
 function regularization_method(o::T2mapOptions)
     reg =
+        o.Reg == "none"   ? NoRegularization() : # Fit T2 distribution using unregularized NNLS
         o.Reg == "lcurve" ? LCurve() : # Fit T2 distribution using L-curve-based regularized NNLS
         o.Reg == "gcv"    ? GCV() : # Fit T2 distribution using GCV-based regularized NNLS
         o.Reg == "chi2"   ? ChiSquared(o.Chi2Factor, o.legacy) : # Fit T2 distribution using chi2-based regularized NNLS
         o.Reg == "mdp"    ? MDP(o.NoiseLevel) : # Fit T2 distribution using Morizov discrepancy principle-based regularized NNLS
-        o.Reg == "none"   ? NoRegularization() : # Fit T2 distribution using unregularized NNLS
         error("Unrecognized regularization method: $(o.Reg)")
     return reg
 end
 
+nnls_workspace(::NoRegularization, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_work(decay_basis, decay_data)
 nnls_workspace(::LCurve, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_lcurve_work(decay_basis, decay_data)
 nnls_workspace(::GCV, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_gcv_work(decay_basis, decay_data)
 nnls_workspace(::ChiSquared, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_chi2_work(decay_basis, decay_data)
 nnls_workspace(::MDP, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_mdp_work(decay_basis, decay_data)
-nnls_workspace(::NoRegularization, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}) where {T} = lsqnonneg_work(decay_basis, decay_data)
 
 struct T2DistWorkspace{Reg, T, W}
     reg::Reg
@@ -468,6 +470,12 @@ function T2DistWorkspace(reg::RegularizationMethod, decay_basis::Matrix{T}, deca
     μ, χ²fact = Ref(T(NaN)), Ref(T(NaN))
     nnls_work = nnls_workspace(reg, decay_basis, decay_data)
     return T2DistWorkspace(reg, nnls_work, decay_basis, decay_data, decay_scale, μ, χ²fact)
+end
+
+function T2_distribution!(t2work::T2DistWorkspace{NoRegularization, T}) where {T}
+    (; nnls_work, μ, χ²fact) = t2work
+    μ[], χ²fact[] = zero(T), one(T)
+    return lsqnonneg!(nnls_work)
 end
 
 function T2_distribution!(t2work::T2DistWorkspace{LCurve, T}) where {T}
@@ -494,12 +502,6 @@ function T2_distribution!(t2work::T2DistWorkspace{MDP{T}, T}) where {T}
     δ = √(T(length(decay_data))) * σ # noise vector norm estimate: δ² = 𝔼[||η||²] = n * σ²
     x, μ[], χ²fact[] = lsqnonneg_mdp!(nnls_work, δ)
     return x
-end
-
-function T2_distribution!(t2work::T2DistWorkspace{NoRegularization, T}) where {T}
-    (; nnls_work, μ, χ²fact) = t2work
-    μ[], χ²fact[] = zero(T), one(T)
-    return lsqnonneg!(nnls_work)
 end
 
 T2_distribution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)

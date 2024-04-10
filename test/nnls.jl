@@ -422,6 +422,9 @@ end
 end
 
 function test_lsqnonneg_gcv(m, n)
+    # GCV requires m >= n
+    m < n && return
+
     A, b = rand_NNLS_data(m, n)
     work = DECAES.NNLSGCVRegProblem(A, b)
     logμ = randn()
@@ -451,9 +454,7 @@ function test_lsqnonneg_gcv(m, n)
     @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :brent_newton).mu)
     @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :nlopt).mu)
 
-    if m >= n
-        #TODO: Test GCV minimization methods are consistent when m >= n
-    end
+    #TODO: Test that different GCV minimization methods are consistent when m >= n
 
     # Test allocations
     @test @allocated(DECAES.gcv!(work, logμ)) == 0

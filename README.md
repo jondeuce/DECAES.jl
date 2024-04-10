@@ -33,7 +33,7 @@ $ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")
 This will do two things:
 
 1. Add DECAES.jl to a named Julia project environment separate from your global environment
-2. Build the `decaes` executable at `~/.julia/bin` for running DECAES from the command line
+2. Build the `decaes` launcher script at `~/.julia/bin` for running DECAES from the command line
 
 DECAES can then be run from the command line via `decaes <COMMAND LINE ARGS>`, provided `~/.julia/bin` is added to your `PATH`.
 Run `decaes --help` for available arguments.

@@ -53,12 +53,12 @@ end
 ####
 
 function with_singlethreaded_blas(f)
-    nblasthreads = LinearAlgebra.BLAS.get_num_threads()
+    nblasthreads = BLAS.get_num_threads()
     try
-        LinearAlgebra.BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
+        BLAS.set_num_threads(1) # Prevent BLAS from stealing julia threads
         f()
     finally
-        LinearAlgebra.BLAS.set_num_threads(nblasthreads) # Reset BLAS threads
+        BLAS.set_num_threads(nblasthreads) # Reset BLAS threads
     end
 end
 
@@ -95,7 +95,7 @@ end
 
 function LinearAlgebra.svdvals!(work::SVDValsWorkspace, A::AbstractMatrix)
     copyto!(work.A, A)
-    return LinearAlgebra.svdvals!(work)
+    return svdvals!(work)
 end
 
 # See: https://github.com/JuliaLang/julia/blob/64de065a183ac70bb049f7f9e30d790f8845dd2b/stdlib/LinearAlgebra/src/lapack.jl#L1590
@@ -545,7 +545,7 @@ function mock_t2map_opts(::Type{T} = Float64; kwargs...) where {T}
         nT2 = 40,
         Reg = "lcurve",
         Chi2Factor = 1.02,
-        NoiseLevel = 1e-3, # SNR = 60
+        NoiseLevel = exp10(-T(get(kwargs, :SNR, 60.0)) / 20),
         t2map_kwargs...,
     )
 end

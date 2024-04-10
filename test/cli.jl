@@ -1,7 +1,6 @@
-# Arbitrary default required parameters used during testing
+# Arbitrary default required parameters used during testing (nTE and nT2 handled separately)
 default_paramdict = Dict{Symbol, Any}(
     :TE => 8e-3,
-    :nT2 => 42,
     :T2Range => (12e-3, 1.8),
     :SPWin => (12e-3, 37e-3),
     :MPWin => (37e-3, 650e-3),
@@ -9,10 +8,9 @@ default_paramdict = Dict{Symbol, Any}(
     :legacy => false,
 )
 
-# Legacy settings which previously had defaults, or whose defaults have changed
+# Legacy settings which previously had defaults, or whose defaults have changed (nTE and nT2 handled separately)
 legacy_default_paramdict = Dict{Symbol, Any}(
     :TE => 10e-3,
-    :nT2 => 40,
     :T2Range => (15e-3, 2.0),
     :SPWin => (14e-3, 40e-3),
     :MPWin => (40e-3, 200e-3),
@@ -31,51 +29,7 @@ function write_image(filename, image)
     end
 end
 
-# Call main function on image file `image`
-function run_main(image, args; make_settings_file::Bool)
-    # Write input image to file for reading
-    inputfilename = args[1]
-    outputpath = args[3]
-    inputfilebasename = joinpath(outputpath, "input")
-    write_image(inputfilename, image)
-
-    # Run main, possibly writing CLI args to settings file first
-    try
-        if make_settings_file
-            settings_file = joinpath(outputpath, "settings.txt")
-            open(settings_file, "w") do file
-                return println(file, join(args, "\n"))
-            end
-            DECAES.redirect_to_devnull() do
-                return main(["@" * settings_file])
-            end
-        else
-            DECAES.redirect_to_devnull() do
-                return main(args)
-            end
-        end
-    catch e
-        @info "CLI failed with settings:"
-        display(args)
-        rethrow(e)
-    end
-
-    # Check that only requested files were created
-    t2maps_file, t2dist_file, t2parts_file, settings_file = inputfilebasename .* (".t2maps.mat", ".t2dist.mat", ".t2parts.mat", ".settings.txt")
-    T2map, T2part = ("--T2map" ∈ args), ("--T2part" ∈ args)
-
-    @test !xor(T2map, isfile(t2maps_file))
-    @test !xor(T2map, isfile(t2dist_file))
-    @test !xor(T2part, isfile(t2parts_file))
-    @test !xor(make_settings_file, isfile(settings_file))
-
-    t2maps  = T2map ? DECAES.MAT.matread(t2maps_file) : nothing
-    t2dist  = T2map ? DECAES.MAT.matread(t2dist_file)["dist"] : nothing
-    t2parts = T2part ? DECAES.MAT.matread(t2parts_file) : nothing
-
-    return (; t2maps, t2dist, t2parts)
-end
-
+# Build t2map and t2part arguments for calling `DECAES.main` via CLI, MATLAB, or Julia
 function construct_args(
     paramdict;
     argstype,
@@ -163,6 +117,75 @@ function construct_args(
     end
 end
 
+# Populate `paramdict` with random image parameters
+function image_params!(paramdict)
+    # Image parameters
+    get!(paramdict, :MatrixSize, (2, 2, 2))
+    get!(paramdict, :nTE, rand(4:64))
+    get!(paramdict, :nT2, rand(4:64))
+    if get(paramdict, :Reg, "") == "gcv"
+        paramdict[:nT2] = min(paramdict[:nT2], paramdict[:nTE]) # GCV requires nT2 <= nTE
+    end
+    return paramdict
+end
+
+# Generate a mock 4D image for testing
+function construct_test_image(paramdict; kwargs...)
+    image = DECAES.mock_image(;
+        MatrixSize = paramdict[:MatrixSize],
+        nTE = paramdict[:nTE],
+        nT2 = paramdict[:nT2],
+        kwargs...
+    )
+    image ./= mean(@views image[:, :, :, 1]) # normalize first-echo signal intensity to unit mean
+    return image
+end
+
+# Call main function on image file `image`
+function run_main(image, args; make_settings_file::Bool)
+    # Write input image to file for reading
+    inputfilename = args[1]
+    outputpath = args[3]
+    inputfilebasename = joinpath(outputpath, "input")
+    write_image(inputfilename, image)
+
+    # Run main, possibly writing CLI args to settings file first
+    try
+        if make_settings_file
+            settings_file = joinpath(outputpath, "settings.txt")
+            open(settings_file, "w") do file
+                return println(file, join(args, "\n"))
+            end
+            DECAES.redirect_to_devnull() do
+                return main(["@" * settings_file])
+            end
+        else
+            DECAES.redirect_to_devnull() do
+                return main(args)
+            end
+        end
+    catch e
+        @info "CLI failed with settings:"
+        display(args)
+        rethrow(e)
+    end
+
+    # Check that only requested files were created
+    t2maps_file, t2dist_file, t2parts_file, settings_file = inputfilebasename .* (".t2maps.mat", ".t2dist.mat", ".t2parts.mat", ".settings.txt")
+    T2map, T2part = ("--T2map" ∈ args), ("--T2part" ∈ args)
+
+    @test !xor(T2map, isfile(t2maps_file))
+    @test !xor(T2map, isfile(t2dist_file))
+    @test !xor(T2part, isfile(t2parts_file))
+    @test !xor(make_settings_file, isfile(settings_file))
+
+    t2maps  = T2map ? DECAES.MAT.matread(t2maps_file) : nothing
+    t2dist  = T2map ? DECAES.MAT.matread(t2dist_file)["dist"] : nothing
+    t2parts = T2part ? DECAES.MAT.matread(t2parts_file) : nothing
+
+    return (; t2maps, t2dist, t2parts)
+end
+
 function jl_to_mat_param!(opts, param, paramval)
 
     # T2mapSEcorr parameters which aren't in the MATLAB API
@@ -196,11 +219,17 @@ function jl_to_mat_param!(opts, param, paramval)
     return opts
 end
 
-function test_field!(allpassed, x, y, prefix = "failed:"; kwargs...)
-    passed = size(x) == size(y) && isapprox(x, y; kwargs..., nans = true)
+function showall(; kwargs...)
+    for (k, v) in kwargs
+        @info string(k) * " => " * sprint(show, MIME"text/plain"(), v)
+    end
+end
+
+function test_field!(allpassed, x, y, prefix = "failed:"; atol = 0.0, rtol = atol > 0 ? 0.0 : √eps())
+    passed = size(x) == size(y) && isapprox(x, y; atol, rtol, nans = true)
     allpassed[] &= passed
-    !passed && println(prefix * " (" * field_error_string(x, y) * ")")
-    @test passed
+    !passed && @warn prefix * " (" * field_error_string(x, y) * ")"
+    @test x ≈ y atol = atol rtol = rtol nans = true
 end
 field_error_string(x, y) = size(x) != size(y) ? "size(x) = $(size(x)), size(y) = $(size(y))" : "size = $(size(y)), max val = $(maximum(abs, y)), max diff = $(maximum(abs, x.-y)), rel diff = $(maximum(abs, (x.-y)./y))"
 
@@ -250,7 +279,8 @@ function run_cli_tests()
         (:Threshold .=> [1.0, Inf],), # Include non-zero and infinite (i.e. either some or all voxels skipped)
         (:nRefAngles .=> [9, 10],), # Include even/odd
         (:nRefAnglesMin .=> [4, 7],), # Include even/odd
-        (:nT2 .=> [2, 47],), # Include even/odd
+        (:nTE .=> [4, 5, 8, 47],), # Include even/odd, and minimum number (4)
+        (:nT2 .=> [2, 3, 8, 47],), # Include even/odd, and minimum number (2)
         (
             :legacy    .=> [true, true],
             :Threshold .=> [1.0, 0.0],
@@ -271,8 +301,9 @@ function run_cli_tests()
             paramdict[param] = paramval
         end
 
-        image = DECAES.mock_image(; MatrixSize = (2, 2, 2), nTE = rand(4:64))
-        image ./= mean(@views image[:, :, :, 1]) # normalize first-echo signal intensity to unit mean
+        image_params!(paramdict)
+        image = construct_test_image(paramdict)
+
         settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true, false]), :T2map => true, :T2part => true)
         settings_kwargs_cli = Dict{Symbol, Any}(:argstype => :cli, :quiet => rand([true, false]), :T2map => true, :T2part => true)
         jl_t2map_kwargs, jl_t2part_kwargs = construct_args(paramdict; settings_kwargs_jl...)
@@ -303,11 +334,8 @@ function run_cli_tests()
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !(t2map_passed && t2part_passed)
                 println("\n ------------------------------- \n")
-                println("CLI with --T2map and --T2part failed: $param_val_pairs")
-                @show jl_t2map_kwargs
-                @show jl_t2part_kwargs
-                @show cli_t2map_args
-                @show paramdict
+                @error "CLI with --T2map and --T2part failed"
+                showall(; param_val_pairs, paramdict, jl_t2map_kwargs, jl_t2part_kwargs, cli_t2map_args)
                 println("\n ------------------------------- \n")
             end
         end
@@ -323,11 +351,8 @@ function run_cli_tests()
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
             if !t2part_passed
                 println("\n ------------------------------- \n")
-                println("CLI with --T2part only failed: $param_val_pairs")
-                @show jl_t2map_kwargs
-                @show jl_t2part_kwargs
-                @show cli_t2part_args
-                @show paramdict
+                @error "CLI with --T2part only failed"
+                showall(; param_val_pairs, paramdict, jl_t2map_kwargs, jl_t2part_kwargs, cli_t2part_args)
                 println("\n ------------------------------- \n")
             end
         end
@@ -398,6 +423,9 @@ function matlab_tests()
                 paramdict[param] = paramval
             end
 
+            image_params!(paramdict)
+            image = construct_test_image(paramdict)
+
             # The MATLAB flag "lcurve" for choosing the regularization parameter uses the Generalized Cross-Validation (GCV) method.
             # There are several issues with comparing the DECAES implementation with MATLAB:
             #   1.  GCV involves minimizing a functional GCV(mu), which is implemented using an internal call to `fminbnd` with a tolerance of 1e-3,
@@ -426,8 +454,6 @@ function matlab_tests()
             mat_t2map_kwargs, _ = construct_args(paramdict; settings_kwargs_mat...)
 
             # Run T2mapSEcorr
-            image = DECAES.mock_image(; MatrixSize = (2, 2, 2), nTE = rand(4:64))
-            image ./= mean(@views image[:, :, :, 1]) # normalize first-echo signal intensity to unit mean
             t2maps_jl, t2dist_jl = DECAES.redirect_to_devnull() do
                 return T2mapSEcorr(image; jl_t2map_kwargs...)
             end
@@ -437,10 +463,8 @@ function matlab_tests()
             allpassed = test_compare_t2map(t2maps_jl, t2dist_jl, t2maps_mat, t2dist_mat; rtol)
             if !allpassed
                 println("\n ------------------------------- \n")
-                println("MATLAB T2mapSEcorr comparison failed: $param_val_pairs")
-                @show jl_t2map_kwargs
-                @show mat_t2map_kwargs
-                @show paramdict
+                @error "MATLAB T2mapSEcorr comparison failed"
+                showall(; paramdict, param_val_pairs, jl_t2map_kwargs, mat_t2map_kwargs)
                 println("\n ------------------------------- \n")
             end
         end
@@ -456,6 +480,7 @@ function matlab_tests()
             for (param, paramval) in param_val_pairs
                 paramdict[param] = paramval
             end
+
             _, jl_t2part_kwargs  = construct_args(paramdict; settings_kwargs_jl...)
             _, mat_t2part_kwargs = construct_args(paramdict; settings_kwargs_mat...)
 
@@ -470,10 +495,8 @@ function matlab_tests()
             allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
             if !allpassed
                 println("\n ------------------------------- \n")
-                println("MATLAB T2partSEcorr comparison failed: $param_val_pairs")
-                @show jl_t2part_kwargs
-                @show mat_t2part_kwargs
-                @show paramdict
+                @error "MATLAB T2partSEcorr comparison failed"
+                showall(; paramdict, param_val_pairs, jl_t2part_kwargs, mat_t2part_kwargs)
                 println("\n ------------------------------- \n")
             end
         end

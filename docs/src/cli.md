@@ -6,7 +6,7 @@ DECAES provides a command line interface (CLI) for calling the main analysis fun
 
 There are two equivalent ways to use the [command line interface (CLI)](https://jondeuce.github.io/DECAES.jl/dev/cli), assuming DECAES is already [installed](@ref installation):
 
-**1. (Recommended) `decaes` launcher:** Use the executable `~/.julia/bin/decaes` which comes with DECAES:
+**1. (Recommended) `decaes` launcher:** Use the script `~/.julia/bin/decaes` which comes with DECAES:
 
 ```bash
 $ decaes <COMMAND LINE ARGS>
