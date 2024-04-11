@@ -183,12 +183,11 @@ function T2mapSEcorr!(
     indices_blocks = split_indices(length(indices), default_blocksize())
 
     # Run analysis in parallel
-    signals = permutedims(image[indices, :]) # permute image for cache locality
-
     with_singlethreaded_blas() do
         workerpool(with_thread_buffer, indices_blocks; ntasks, verbose = !opts.Silent) do inds, thread_buffer
-            GC.@preserve thread_buffer maps dist signals @inbounds for j in inds
-                voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(signals, :, j), opts, indices[j])
+            GC.@preserve thread_buffer maps dist image @inbounds for j in inds
+                I = indices[j]
+                voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(image, I, :), opts, I)
             end
         end
     end
