@@ -204,10 +204,10 @@ function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps{T}, dist::T2Dist
     # Copy decay curve into the thread buffer and normalize
     @inbounds begin
         max_signal = zero(T)
-        @simd for i in 1:opts.nTE
+        for i in 1:opts.nTE
             bᵢ = signal[i]
+            max_signal = bᵢ > max_signal ? bᵢ : max_signal
             decay_data[i] = bᵢ
-            max_signal = max(max_signal, bᵢ)
         end
         @simd for i in 1:opts.nTE
             # Note: all processed voxels have `signal[1] > opts.Threshold >= 0`, therefore `max_signal > 0`
