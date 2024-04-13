@@ -8,7 +8,7 @@ function execute(cmd::Cmd)
     err = Pipe()
     process = run(pipeline(ignorestatus(cmd); stdout = err, stderr = err))
     close(err.in)
-    return (stderr = String(read(err)), exitcode = process.exitcode)
+    return (; stderr = String(read(err)), exitcode = process.exitcode)
 end
 
 function install()
@@ -50,7 +50,7 @@ function install()
 end
 
 function cli_script()
-
+    # Create a batch (Windows) or bash (Unix) script for running DECAES CLI
     cmds = String[]
 
     # Julia executable path
@@ -68,8 +68,8 @@ function cli_script()
         push!(cmds, "-- \"\${BASH_SOURCE[0]}\" \"\$@\"")
     end
 
-    # Return batch script on Windows or bash script on Linux
     if Sys.iswindows()
+        # Windows batch script
         """
         @echo off
         setlocal
@@ -80,6 +80,7 @@ function cli_script()
         endlocal
         """
     else
+        # Unix shell script
         """
         #!/usr/bin/env bash
         #=

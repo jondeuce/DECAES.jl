@@ -15,17 +15,19 @@ versions = [
 settings_files = [
     "settings.txt",
 ]
-cli_extra_args = `--Reg lcurve  --SaveResidualNorm --SaveRegParam --quiet`
+cli_extra_args = `--Reg lcurve --SaveResidualNorm --SaveRegParam --quiet`
 
 for (julia_version, decaes_versions) in versions
     for decaes_version in decaes_versions, settings in settings_files
-        @info "----------------"
-        @info "Running DECAES with Julia $(julia_version) and DECAES $(decaes_version)"
-        @info "----------------"
-
         project_dir = joinpath(@__DIR__, "envs", "julia-v" * julia_version, decaes_version)
         output_dir = joinpath(@__DIR__, "output", splitext(settings)[1], "julia-v" * julia_version * "_" * decaes_version)
-        @time run(`julia +$(julia_version) --startup-file=no --project=$(project_dir) --threads=$(Threads.nthreads()) -e "using DECAES; main()" @$(joinpath(@__DIR__, "settings", settings)) --output $(output_dir) $(cli_extra_args)`)
+        cmd = `julia +$(julia_version) --startup-file=no --project=$(project_dir) --threads=auto -e "using DECAES; main()" -- @$(joinpath(@__DIR__, "settings", settings)) --output $(output_dir) $(cli_extra_args)`
+
+        @info "----------------"
+        @info "Running DECAES with Julia $(julia_version) and DECAES $(decaes_version)" cmd
+        @info "----------------"
+        println()
+        @time run(cmd)
         println()
     end
 end

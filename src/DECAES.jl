@@ -16,7 +16,7 @@ using Statistics: Statistics, mean, std
 using ArgParse: ArgParse, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
 using Dierckx: Dierckx
 using DocStringExtensions: DocStringExtensions, @doc, FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
-using ForwardDiff: ForwardDiff, DiffResults
+using ForwardDiff: ForwardDiff, DiffResults, Dual
 using LoggingExtras: LoggingExtras, FileLogger, LevelOverrideLogger, TeeLogger, TransformerLogger
 using MAT: MAT
 using MuladdMacro: MuladdMacro, @muladd
@@ -28,6 +28,7 @@ using Parameters: Parameters, @with_kw, @with_kw_noshow
 using PrecompileTools: PrecompileTools, @compile_workload, @setup_workload
 using ProgressMeter: ProgressMeter, Progress, BarGlyphs
 # using Roots: Roots
+# using SLEEFPirates: SLEEFPirates
 # using SIMD: SIMD, FloatingTypes, Vec, shufflevector
 using Scratch: Scratch, @get_scratch!, get_scratch!
 using SpecialFunctions: SpecialFunctions, erfc, erfinv
@@ -64,7 +65,7 @@ export main
         main(["--help"])
         main(["--version"])
         mock_load_image()
-        for Reg in ["lcurve", "gcv", "chi2", "mdp"]
+        for Reg in ["none", "lcurve", "gcv", "chi2", "mdp"]
             NumVoxels = max(4, Threads.nthreads()) * default_blocksize()
             mock_T2_pipeline(; MatrixSize = (NumVoxels, 1, 1), Reg)
         end

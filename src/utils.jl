@@ -342,7 +342,7 @@ function tforeach(work!, allocate, x::AbstractArray; blocksize::Int = default_bl
     nt = Threads.nthreads()
     len = length(x)
     if nt > 1 && len > blocksize
-        @sync for p in split_indices(len, blocksize)
+        @sync for p in split_indices(; length = len, minchunksize = blocksize)
             Threads.@spawn allocate() do resource
                 @simd for i in p
                     work!(x[i], resource)
@@ -359,6 +359,26 @@ function tforeach(work!, allocate, x::AbstractArray; blocksize::Int = default_bl
     return nothing
 end
 tforeach(f, x::AbstractArray; kwargs...) = tforeach((x, r) -> f(x), g -> g(nothing), x; kwargs...)
+
+function tmap!(f, y::AbstractArray, x::AbstractArray; blocksize::Int = 1024^2)
+    if Threads.nthreads() > 1 && length(x) >= blocksize
+        Threads.@threads for i in eachindex(x, y)
+            @inbounds xi = x[i]
+            @inbounds y[i] = f(xi)
+        end
+    else
+        @inbounds @simd for i in eachindex(x, y)
+            xi = x[i]
+            y[i] = f(xi)
+        end
+    end
+    return x
+end
+tmap!(f, x::AbstractArray; kwargs...) = tmap!(f, x, x; kwargs...)
+
+tfill!(v, x) = tmap!(Returns(v), x)
+tfill(v, sz::NTuple{N, Int}) where {N} = tfill!(v, Array{typeof(v), N}(undef, sz))
+tfill(v, sz::Int...) = tfill(v, sz)
 
 default_blocksize() = 64
 
@@ -421,11 +441,29 @@ function workerpool(work!, allocate, inputs, args...; kwargs...)
     return workerpool(work!, allocate, ch, args...; ninputs = length(inputs), kwargs...)
 end
 
-function split_indices(len::Int, basesize::Int)
-    len′ = Int64(len) # Avoid overflow on 32-bit machines
-    np = max(1, div(len′, basesize))
-    return [Int(1 + ((i - 1) * len′) ÷ np):Int((i * len′) ÷ np) for i in 1:np]
+function split_indices(; length::Int, minchunksize::Union{Int, Nothing} = nothing, maxpartitions::Union{Int, Nothing} = nothing)
+    @assert minchunksize === nothing || minchunksize::Int > 0 "Basesize must be a positive integer, got minchunksize = $minchunksize"
+    @assert maxpartitions === nothing || maxpartitions::Int > 0 "Maximum partitions must be a positive integer, got maxpartitions = $maxpartitions"
+    return split_indices(length, something(minchunksize, 1)::Int, something(maxpartitions, length)::Int)
 end
+
+function split_indices(len::Int, minchunksize::Int, maxpartitions::Int)
+    # Partition the range `1:len` into at most `maxpartitions` ranges with balanced lengths which are all at least `min(len, minchunksize)`
+    chunks = len >= minchunksize * maxpartitions ? maxpartitions : len >= minchunksize ? len ÷ minchunksize : 1
+    return split_indices(len, chunks)
+end
+
+function split_indices(len::Int, chunks::Int)
+    # Partition the range `1:len` into `chunks` ranges with balanced lengths
+    return MappedArray{UnitRange{Int64}}(SubRange(len, chunks), 1:chunks)
+end
+
+# Produce the `i`th subrange resulting from dividing `1:len` into `chunks` partitions. Assumes 1 <= chunks <= len
+struct SubRange
+    len::Int64 # avoid overflow on 32-bit machines
+    chunks::Int64
+end
+(r::SubRange)(i::Int) = Int(1 + ((i - 1) * r.len) ÷ r.chunks):Int((i * r.len) ÷ r.chunks)
 
 ####
 #### Logging
