@@ -17,7 +17,139 @@ end
 
 # Solve NNLS problem
 solve!(work::NNLSProblem, args...; kwargs...) = solve!(work, work.A, work.b, args...; kwargs...)
-solve!(work::NNLSProblem, A::AbstractMatrix, b::AbstractVector, args...; kwargs...) = NNLS.nnls!(work.nnls_work, A, b, args...; kwargs...)
+
+# The nnls algorithm selects candidate `x_j`s based on the largest gradient
+# of ||Ax - b||, ie. j = max (A'(Ax - b))_j. In DECAES, the initial gradient
+# A'b is sorted and thus the last column of A will always be chosen first.
+# Since j = n, will not always result in x_j >= 0 we will bypass the first
+# iteration and initialize the gradient with x_0 = [0; x_n].
+function solve!(
+    work::NNLSProblem{T},
+    A::AbstractMatrix,
+    b::AbstractVector;
+    kwargs...
+) where {T}
+    m, n = size(A)
+    C = work.nnls_work.A
+    f = work.nnls_work.b
+    x = work.nnls_work.x
+    w = work.nnls_work.w
+    z = work.nnls_work.zz
+    idx = work.nnls_work.idx
+
+    # x = A[:,end] \ b
+    c = view(A, :, n)
+    den = zero(T)
+    @inbounds @simd for i in eachindex(c)
+        den += c[i]*c[i]
+    end
+
+    xj = zero(eltype(c))
+    @inbounds @simd for i in 1:m
+        xj += (c[i] / den) * b[i]
+    end
+
+    # w = -A'*(Ax - b)
+    @inbounds @simd for i in 1:m
+        z[i] = b[i] - c[i]*xj
+    end
+
+    @inbounds for j in 1:n-1
+        wj = zero(T)
+        @simd for i in 1:m
+            Aij = A[i,j]
+            wj += Aij * z[i]
+            # initialize nnls workspace
+            C[i,j] = Aij
+        end
+        w[j] = wj
+    end
+    @inbounds w[end] = 0
+
+    # initialize nnls workspace
+    @inbounds for i in 1:m
+        f[i] = b[i]
+        C[i,n] = A[i,n]
+    end
+
+    @inbounds for j in 1:n
+        x[j] = 0
+        idx[j] = j
+    end
+
+    return NNLS.unsafe_nnls!(work.nnls_work; kwargs..., dual_init=true)
+end
+
+function solve!(
+    work::NNLSProblem{T},
+    A::AbstractMatrix,
+    b::AbstractVector,
+    μ::Real;
+    kwargs...
+) where {T}
+    A0 = parent(A)
+    b0 = parent(b)
+    m, n = size(A0)
+
+    C = work.nnls_work.A
+    f = work.nnls_work.b
+    x = work.nnls_work.x
+    w = work.nnls_work.w
+    z = work.nnls_work.zz
+    idx = work.nnls_work.idx
+    diag = work.nnls_work.diag
+
+    # x = A[:,end] \ b
+    c = view(A0, :, n)
+    den = zero(T)
+    @inbounds @simd for i in eachindex(c)
+        den += c[i]*c[i]
+    end
+    den += μ*μ
+
+    xj = zero(eltype(c))
+    @inbounds @simd for i in 1:m
+        xj += (c[i] / den) * b0[i]
+    end
+
+    # w = -A'*(Ax - b)
+    @inbounds @simd for i in 1:m
+        z[i] = b0[i] - c[i]*xj
+    end
+
+    @inbounds for j in 1:n-1
+        wj = zero(T)
+        @simd for i in 1:m
+            Aij = A0[i,j]
+            wj += Aij * z[i]
+            # initialize nnls workspace
+            C[i,j] = Aij
+        end
+        w[j] = wj
+    end
+    @inbounds w[end] = 0
+
+    # initialize nnls workspace
+    @inbounds for i in 1:m
+        f[i] = b0[i]
+        C[i,n] = A0[i,n]
+    end
+
+    @inbounds for j in 1:n
+        for i in m+1:size(C, 1)
+            C[i,j] = 0
+        end
+    end
+
+    @inbounds for j in 1:n
+        x[j] = 0
+        f[m+j] = 0
+        idx[j] = j
+        diag[j] = false
+    end
+
+    return NNLS.unsafe_nnls!(work.nnls_work, μ; kwargs..., dual_init=true)
+end
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
@@ -62,10 +194,10 @@ function Base.copyto!(y::AbstractVector{T}, x::PaddedVector{T}) where {T}
     @assert size(x) == size(y)
     (; b, pad) = x
     m = length(b)
-    @simd for i in 1:m
+    @inbounds @simd for i in 1:m
         y[i] = b[i]
     end
-    @simd for i in m+1:m+pad
+    @inbounds @simd for i in m+1:m+pad
         y[i] = zero(T)
     end
     return y
@@ -90,8 +222,11 @@ function Base.copyto!(B::AbstractMatrix{T}, P::TikhonovPaddedMatrix{T}) where {T
             B[i, j] = A[i, j]
         end
         @simd for i in m+1:m+n
-            B[i, j] = ifelse(i == m + j, μ, zero(T))
+            B[i, j] = zero(T)
         end
+    end
+    @inbounds for j in 1:n
+        B[m+j, j] = μ
     end
     return B
 end
