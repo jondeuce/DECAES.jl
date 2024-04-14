@@ -209,7 +209,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
 @inline function construct_householder!(x::AbstractVector{T}) where {T}
-    if length(x) == 0
+    if length(x) <= 1
         return zero(T)
     end
 
@@ -323,7 +323,7 @@ function apply_householder!(
     tau::T,
 ) where {T}
     m = length(u)
-    if m == 0
+    if m <= 1
         return nothing
     end
 
@@ -356,7 +356,7 @@ function apply_householder_dual!(
     j1::Int,
     m1::Int,
 ) where {T}
-    if j1 > m1
+    if j1 >= m1
         return nothing
     end
 

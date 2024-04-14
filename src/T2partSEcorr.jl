@@ -57,8 +57,7 @@ function T2partSEcorr(T2distributions::Array{T, 4}, opts::T2partOptions{T}) wher
     # Run T2-Part analysis
     ntasks = opts.Threaded ? Threads.nthreads() : 1
     indices = CartesianIndices(opts.MatrixSize)
-    blocksize = ceil(Int, length(indices) / ntasks)
-    indices_blocks = split_indices(length(indices), blocksize)
+    indices_blocks = split_indices(; length = length(indices), minchunksize = default_blocksize(), maxpartitions = ntasks)
 
     with_singlethreaded_blas() do
         workerpool(with_thread_buffer, indices_blocks; ntasks, verbose = !opts.Silent) do inds, thread_buffer
@@ -83,10 +82,10 @@ Base.convert(::Type{Dict{String, Any}}, maps::T2Parts) = Dict{String, Any}(Any[s
 
 function T2Parts(opts::T2partOptions{T}) where {T}
     return T2Parts(;
-        sfr = fill(T(NaN), opts.MatrixSize...),
-        sgm = fill(T(NaN), opts.MatrixSize...),
-        mfr = fill(T(NaN), opts.MatrixSize...),
-        mgm = fill(T(NaN), opts.MatrixSize...),
+        sfr = tfill(T(NaN), opts.MatrixSize...),
+        sgm = tfill(T(NaN), opts.MatrixSize...),
+        mfr = tfill(T(NaN), opts.MatrixSize...),
+        mgm = tfill(T(NaN), opts.MatrixSize...),
     )
 end
 

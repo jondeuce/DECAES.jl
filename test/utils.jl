@@ -99,3 +99,40 @@ end
         @test @allocated(svdvals!(work, A)) == 0
     end
 end
+
+@testset "split_indices" begin
+    function test_valid_partition(p, len)
+        @test first(first(p)) == 1
+        @test last(last(p)) == len
+        @test all(i -> last(p[i-1]) + 1 == first(p[i]), 2:length(p))
+    end
+
+    for len in 1:20, minchunksize in 1:20
+        p = DECAES.split_indices(; length = len, minchunksize)
+        test_valid_partition(p, len)
+
+        if len <= minchunksize
+            @test length(p) == 1
+            @test length(only(p)) == len
+        else
+            @test 1 <= length(p) <= len
+            @test length(p) == len ÷ minchunksize
+            @test all(c -> length(c) >= minchunksize, p)
+        end
+    end
+
+    for len in 1:10, minchunksize in 1:10, maxpartitions in 1:10
+        _basesize = min(len, max(minchunksize, len ÷ maxpartitions))
+        p = DECAES.split_indices(; length = len, minchunksize, maxpartitions)
+        test_valid_partition(p, len)
+
+        @test length(p) >= 1
+        @test all(c -> length(c) >= _basesize, p)
+        if len >= minchunksize * maxpartitions
+            @test length(p) == maxpartitions
+        else
+            @test 1 <= length(p) <= min(len, maxpartitions)
+            @test length(p) == len ÷ _basesize
+        end
+    end
+end

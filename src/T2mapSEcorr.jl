@@ -33,22 +33,22 @@ function T2Maps(opts::T2mapOptions{T}) where {T}
         convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis)),
 
         # Default output maps
-        gdn = fill(T(NaN), opts.MatrixSize...),
-        ggm = fill(T(NaN), opts.MatrixSize...),
-        gva = fill(T(NaN), opts.MatrixSize...),
-        fnr = fill(T(NaN), opts.MatrixSize...),
-        snr = fill(T(NaN), opts.MatrixSize...),
-        alpha = fill(T(NaN), opts.MatrixSize...),
+        gdn = tfill(T(NaN), opts.MatrixSize...),
+        ggm = tfill(T(NaN), opts.MatrixSize...),
+        gva = tfill(T(NaN), opts.MatrixSize...),
+        fnr = tfill(T(NaN), opts.MatrixSize...),
+        snr = tfill(T(NaN), opts.MatrixSize...),
+        alpha = tfill(T(NaN), opts.MatrixSize...),
         is_alpha_provided = Ref(false),
 
         # Optional output maps
-        resnorm    = !opts.SaveResidualNorm ? nothing : fill(T(NaN), opts.MatrixSize...),
-        decaycurve = !opts.SaveDecayCurve ? nothing : fill(T(NaN), opts.MatrixSize..., opts.nTE),
-        mu         = !opts.SaveRegParam ? nothing : fill(T(NaN), opts.MatrixSize...),
-        chi2factor = !opts.SaveRegParam ? nothing : fill(T(NaN), opts.MatrixSize...),
+        resnorm    = !opts.SaveResidualNorm ? nothing : tfill(T(NaN), opts.MatrixSize...),
+        decaycurve = !opts.SaveDecayCurve ? nothing : tfill(T(NaN), opts.MatrixSize..., opts.nTE),
+        mu         = !opts.SaveRegParam ? nothing : tfill(T(NaN), opts.MatrixSize...),
+        chi2factor = !opts.SaveRegParam ? nothing : tfill(T(NaN), opts.MatrixSize...),
         decaybasis = !opts.SaveNNLSBasis ? nothing :
         opts.SetFlipAngle === nothing ?
-        fill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) : # unique decay basis set for each voxel
+        tfill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) : # unique decay basis set for each voxel
         convert(Array{T}, copy(thread_buffer.decay_basis)), # single decay basis set used for all voxels
     )
 end
@@ -67,7 +67,7 @@ end
 
 function T2Distributions(opts::T2mapOptions{T}) where {T}
     return T2Distributions(;
-        distributions = fill(T(NaN), opts.MatrixSize..., opts.nT2),
+        distributions = tfill(T(NaN), opts.MatrixSize..., opts.nT2),
     )
 end
 
@@ -180,7 +180,7 @@ function T2mapSEcorr!(
         return convert(Dict{String, Any}, maps), convert(Array{T, 4}, dist)
     end
     ntasks = opts.Threaded ? Threads.nthreads() : 1
-    indices_blocks = split_indices(length(indices), default_blocksize())
+    indices_blocks = split_indices(; length = length(indices), minchunksize = default_blocksize())
 
     # Run analysis in parallel
     with_singlethreaded_blas() do
