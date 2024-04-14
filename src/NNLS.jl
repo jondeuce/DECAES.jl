@@ -53,13 +53,14 @@ struct NNLSWorkspace{T}
     w::Vector{T}
     zz::Vector{T}
     idx::Vector{Int}
+    invidx::Vector{Int}
     diag::Vector{Bool}
     rnorm::Base.RefValue{T}
     mode::Base.RefValue{Int}
     nsetp::Base.RefValue{Int}
 end
 @inline solution(work::NNLSWorkspace) = work.x
-@inline dual(work::NNLSWorkspace) = work.w
+@inline dual(work::NNLSWorkspace) = @views work.w[work.invidx]
 @inline residualnorm(work::NNLSWorkspace) = work.rnorm[]
 @inline ncomponents(work::NNLSWorkspace) = work.nsetp[]
 @inline components(work::NNLSWorkspace) = @views work.idx[1:ncomponents(work)]
@@ -81,6 +82,7 @@ function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
         zeros(T, n),    # w
         zeros(T, m),    # zz
         zeros(Int, n),  # idx (Note: deliberately initialize to invalid permutation)
+        zeros(Int, n),  # invidx
         zeros(Bool, n), # diag
         Ref(zero(T)),   # rnorm
         Ref(0),         # mode
@@ -96,6 +98,7 @@ function Base.copy(w::NNLSWorkspace)
         copy(w.w),
         copy(w.zz),
         copy(w.idx),
+        copy(w.invidx),
         copy(w.diag),
         Ref(w.rnorm[]),
         Ref(w.mode[]),
@@ -118,6 +121,7 @@ function checkargs(work::NNLSWorkspace)
     @assert size(work.w) == (n,)
     @assert size(work.zz) == (m,)
     @assert size(work.idx) == (n,)
+    @assert size(work.invidx) == (n,)
     @assert 0 <= work.rnorm[]
     @assert 0 <= work.mode[]
     @assert 0 <= work.nsetp[] <= min(m, n)
@@ -536,17 +540,18 @@ end
 
 function init_nnls!(work::NNLSWorkspace{T}) where {T}
     checkargs(work)
-    (; x, idx) = work
+    (; x, idx, invidx) = work
 
     fill!(x, zero(T))
     copyto!(idx, 1:length(idx))
+    copyto!(invidx, 1:length(invidx))
 
     return work
 end
 
 function init_nnls!(work::NNLSWorkspace{T}, λ::T) where {T}
     checkargs(work)
-    (; A, b, x, idx, diag) = work
+    (; A, b, x, idx, invidx, diag) = work
 
     M, N = size(A)
     M > N || throw(DimensionMismatch("A must be of the form [A₀; λ*I], got size(A) = $(size(A))"))
@@ -562,6 +567,7 @@ function init_nnls!(work::NNLSWorkspace{T}, λ::T) where {T}
         x[i] = zero(T)
         b[m+i] = zero(T)
         idx[i] = i
+        invidx[i] = i
         diag[i] = false
     end
 
@@ -586,7 +592,7 @@ function unsafe_nnls!(
     dual_init::Bool = false,
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
-    (; A, b, x, w, zz, idx) = work
+    (; A, b, x, w, zz, idx, invidx) = work
     m, n = size(A)
 
     if !dual_init
@@ -780,8 +786,13 @@ function unsafe_nnls!(
     end
 
     # ******  END OF MAIN LOOP  ******
-    # COME TO HERE FOR TERMINATION.
-    # COMPUTE THE NORM OF THE FINAL RESIDUAL VECTOR.
+
+    # Compute inverse permutation
+    @inbounds for i in 1:n
+        invidx[idx[i]] = i
+    end
+
+    # Compute the norm of the final residual vector
     sm = zero(T)
     if nsetp < m
         @inbounds @simd for i in nsetp+1:m
@@ -804,7 +815,7 @@ function unsafe_nnls!(
     dual_init::Bool = false,
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
-    (; A, b, x, w, zz, idx, diag) = work
+    (; A, b, x, w, zz, idx, invidx, diag) = work
     M, N = size(A)
     m, n = M - N, N
 
@@ -1011,8 +1022,13 @@ function unsafe_nnls!(
     end
 
     # ******  END OF MAIN LOOP  ******
-    # COME TO HERE FOR TERMINATION.
-    # COMPUTE THE NORM OF THE FINAL RESIDUAL VECTOR.
+
+    # Compute inverse permutation
+    @inbounds for i in 1:n
+        invidx[idx[i]] = i
+    end
+
+    # Compute the norm of the final residual vector
     sm = zero(T)
     if nsetp < M
         @inbounds @simd for i in nsetp+1:M

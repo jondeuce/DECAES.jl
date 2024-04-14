@@ -54,20 +54,25 @@ function verify_NNLS(m, n, μ = 0.0)
         @test work.mode[] == 0 # success
 
         GC.@preserve work begin
-            x  = NNLS.solution(work)
-            w  = NNLS.dual(work)
+            x = NNLS.solution(work)
+            w = NNLS.dual(work)
             n₊ = NNLS.ncomponents(work)
-            U  = NNLS.choleskyfactor(work, Val(:U))
-            L  = NNLS.choleskyfactor(work, Val(:L))
+            U = NNLS.choleskyfactor(work, Val(:U))
+            L = NNLS.choleskyfactor(work, Val(:L))
 
             # Solution partitioning
-            i₊ = work.idx[1:n₊]
-            i₀ = work.idx[n₊+1:end]
+            idx = work.idx
+            invidx = work.invidx
+            @test isperm(idx)
+            @test isperm(invidx)
+            @test invperm(idx) == invidx
+
+            i₊ = idx[1:n₊]
+            i₀ = idx[n₊+1:end]
             x₊, x₀ = x[i₊], x[i₀]
             w₀, w₋ = w[i₊], w[i₀]
             A₊, A₀ = A[:, i₊], A[:, i₀]
 
-            @test isperm(work.idx)
             @test NNLS.components(work) == i₊
             @test setdiff(1:n, NNLS.components(work)) == sort(i₀)
 
@@ -84,18 +89,16 @@ function verify_NNLS(m, n, μ = 0.0)
                 # Solution is not full rank and gradient has negative components
                 @test NNLS.residualnorm(work) > 10 * eps()
 
-                #TODO gradient is permuted
                 @test count(<(0), w) == n - n₊
                 @test count(==(0), w) == n₊
-                # @test all(<(0), w₋)
-                # @test all(==(0), w₀)
+                @test all(<(0), w₋)
+                @test all(==(0), w₀)
 
-                # @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
-                # @test w ≈ -A' * (A * x - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
-                @test sort(w) ≈ sort(-A' * (A * x - b)) rtol = 1e-8 atol = 1e-12 * norm(A'b)
+                @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
+                @test w ≈ -A' * (A * x - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
 
-                # Gradient of positive components is -μ^2 * x₊
-                @test A0[:, i₊]' * (A0 * x - b0) ≈ -μ^2 * x₊ rtol = 1e-8 atol = 1e-12 * norm(A0'b0)
+                # Gradient of positive components is A0₊'(A0₊ * x₊ - b0) + μ^2 * x₊ = 0
+                @test A0[:, i₊]' * (A0[:, i₊] * x₊ - b0) ≈ -μ^2 * x₊ rtol = 1e-8 atol = 1e-12 * norm(A0'b0)
             else
                 # Solution is full rank, gradient is zero
                 @test all(==(0), w)
@@ -111,7 +114,7 @@ function verify_NNLS(m, n, μ = 0.0)
             # KKT conditions
             @test all(>=(0), x) # primal feasibility
             @test all(<=(0), w) # dual feasibility
-            # @test all(==(0), x .* w) # complementary slackness #TODO
+            @test all(==(0), x .* w) # complementary slackness
 
             # Internals
             @test U == work.A[1:n₊, 1:n₊]
@@ -119,7 +122,7 @@ function verify_NNLS(m, n, μ = 0.0)
             @test U * x₊ ≈ work.b[1:n₊]
 
             @test work.zz[1:n₊] == x₊
-            # @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋ #TODO
+            # @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋ #TODO?
             @test work.zz[n₊+1:end] == work.b[n₊+1:end]
             @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
 
@@ -205,20 +208,25 @@ function verify_NNLS_tikh(m, n, μ)
         @test work.mode[] == 0 # success
 
         GC.@preserve work begin
-            x  = NNLS.solution(work)
-            w  = NNLS.dual(work)
+            x = NNLS.solution(work)
+            w = NNLS.dual(work)
             n₊ = NNLS.ncomponents(work)
-            U  = NNLS.choleskyfactor(work, Val(:U))
-            L  = NNLS.choleskyfactor(work, Val(:L))
+            U = NNLS.choleskyfactor(work, Val(:U))
+            L = NNLS.choleskyfactor(work, Val(:L))
 
             # Solution partitioning
-            i₊ = work.idx[1:n₊]
-            i₀ = work.idx[n₊+1:end]
+            idx = work.idx
+            invidx = work.invidx
+            @test isperm(idx)
+            @test isperm(invidx)
+            @test invperm(idx) == invidx
+
+            i₊ = idx[1:n₊]
+            i₀ = idx[n₊+1:end]
             x₊, x₀ = x[i₊], x[i₀]
             w₀, w₋ = w[i₊], w[i₀]
             A₊, A₀ = A[:, i₊], A[:, i₀]
 
-            @test isperm(work.idx)
             @test NNLS.components(work) == i₊
             @test setdiff(1:n, NNLS.components(work)) == sort(i₀)
 
@@ -235,18 +243,16 @@ function verify_NNLS_tikh(m, n, μ)
                 # Solution is not full rank and gradient has negative components
                 @test NNLS.residualnorm(work) > 0
 
-                #TODO gradient is permuted
                 @test count(<(0), w) == n - n₊
                 @test count(==(0), w) == n₊
-                # @test all(<(0), w₋)
-                # @test all(==(0), w₀)
+                @test all(<(0), w₋)
+                @test all(==(0), w₀)
 
-                # @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
-                # @test w ≈ -A' * (A * x - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
-                @test sort(w) ≈ sort(-A' * (A * x - b)) rtol = 1e-8 atol = 1e-12 * norm(A'b)
+                @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
+                @test w ≈ -A' * (A * x - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
 
-                # Gradient of positive components is -μ^2 * x₊
-                @test A0[:, i₊]' * (A0 * x - b0) ≈ -μ^2 * x₊ rtol = 1e-8 atol = 1e-12 * norm(A0'b0)
+                # Gradient of positive components is A0₊'(A0₊ * x₊ - b0) + μ^2 * x₊ = 0
+                @test A0[:, i₊]' * (A0[:, i₊] * x₊ - b0) ≈ -μ^2 * x₊ rtol = 1e-8 atol = 1e-12 * norm(A0'b0)
             else
                 # Solution is full rank, gradient is zero
                 @test all(==(0), w)
@@ -262,7 +268,7 @@ function verify_NNLS_tikh(m, n, μ)
             # KKT conditions
             @test all(>=(0), x) # primal feasibility
             @test all(<=(0), w) # dual feasibility
-            # @test all(==(0), x .* w) # complementary slackness
+            @test all(==(0), x .* w) # complementary slackness
 
             # Internals
             @test U == work.A[1:n₊, 1:n₊]
@@ -270,8 +276,8 @@ function verify_NNLS_tikh(m, n, μ)
             @test U * x₊ ≈ work.b[1:n₊]
 
             @test work.zz[1:n₊] == x₊
-            # @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋ #TODO
-            @test work.zz[n₊+1:end] == work.b[n₊+1:end] #TODO
+            # @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋ #TODO?
+            @test work.zz[n₊+1:end] == work.b[n₊+1:end]
             @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
 
             if n₊ > 0
