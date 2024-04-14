@@ -247,8 +247,7 @@ function householder!(
     # 3. check if proposed new value for x = A[I,J]/b[I] > 0
     # 4. update b
     # if good tau >= 0, else tau < 0
-    tau = -one(T)
-    @inbounds aii = A[I,J]
+    @inbounds alpha = A[I,J]
 
     xnorm = zero(T)
     @inbounds @simd for i in I:m
@@ -256,55 +255,59 @@ function householder!(
     end
     xnorm = sqrt(xnorm)
 
-    if xnorm != 0
-        beta  = copysign(xnorm, aii)
-        alpha = aii + beta
-        tau   = alpha / beta
+    if xnorm == 0
+        return -one(T)
+    end
 
-        sm = b[I]
-        @inbounds @simd for i in I+1:m
-            sm += b[i] * (A[i,J] / alpha)
-        end
-        sm *= -tau
+    beta  = copysign(xnorm, alpha)
+    alpha = alpha + beta
+    tau   = alpha / beta
 
-        A1 = -beta
-        b1 = b[I] + sm
+    sm = b[I]
+    @inbounds @simd for i in I+1:m
+        sm += b[i] * (A[i,J] / alpha)
+    end
+    sm *= -tau
 
-        if b1 / A1 > 0
-            # good column, update b
-            if I == J
-                b[I] = b1
-                A[I,I] = A1
-                @inbounds @simd for i in I+1:m
-                    Aii = A[i,I] / alpha
-                    b[i] += sm * Aii
-                    A[i,I] = Aii
-                end
-            else
+    A1 = -beta
+    b1 = b[I] + sm
+
+    if b1 / A1 > 0
+        # good column, update b
+        if I < m
+            if I != J
                 # swap columns
                 @inbounds @simd for i in 1:I-1
                     A[i,I], A[i,J] = A[i,J], A[i,I]
                 end
-                b[I] = b1
-                A[I,I], A[I,J] = A1, A[I,I]
+                @inbounds b[I] = b1
+                @inbounds A[I,I], A[I,J] = A1, A[I,I]
                 @inbounds @simd for i in I+1:m
-                    Aij = A[i,I]
-                    Aii = A[i,J] / alpha
-                    b[i] += sm * Aii
+                    Aij = A[i,J] / alpha
+                    A[i,I], A[i,J] = Aij, A[i,I]
+                    b[i] += sm * Aij
+                end
+            else
+                @inbounds b[I] = b1
+                @inbounds A[I,I] = A1
+                @inbounds @simd for i in I+1:m
+                    Aii = A[i,I] / alpha
                     A[i,I] = Aii
-                    A[i,J] = Aij
+                    b[i] += sm * Aii
                 end
             end
         else
-            tau = -one(T)
+            tau = zero(T)
+            if I != J
+                @inbounds @simd for i in 1:m
+                    A[i,I], A[i,J] = A[i,J], A[i,I]
+                end
+            end
         end
+        return tau
+    else
+        return -one(T)
     end
-
-    if tau < 0
-        A[I,J] = aii
-    end
-
-    return tau
 end
 
 """
