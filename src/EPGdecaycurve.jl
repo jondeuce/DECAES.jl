@@ -695,8 +695,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     ETL = length(dc)
 
     # Unpack workspace
-    MPSV1 = work.MPSV₁
-    MPSV2 = work.MPSV₂
+    (; MPSV₁, MPSV₂) = work
 
     A  = B1correction(θ)
     α₁ = deg2rad(A * 180)
@@ -715,103 +714,75 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     sin²½αᵢ          = 1 - cos²½αᵢ
     a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
     aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z          = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    F, F̄, Z         = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     @inbounds begin
         # i = 1 iteration
         # Initialize magnetization phase state vector (MPSV)
         m₀           = sin½α₁ # since αₑₓ = ½α₁
-        M1p          = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1]        = abs(M1p[1])
-        MPSV1[1]     = M1p
-        MPSV1[2]     = V[a₁*m₀, 0, 0]
-        MPSV1, MPSV2 = MPSV2, MPSV1
+        M₀           = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1]        = abs(M₀[1])
+        MPSV₁[1]     = M₀
+        MPSV₁[2]     = V[a₁*m₀, 0, 0]
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
 
         # i = 2 iteration
-        M0, M1 = MPSV2[1], MPSV2[2] # j = 1, initialize and update `dc`
+        M₀, M₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        FM₀, F̄M₀, ZM₀ = F ⋅ M₀, F̄ ⋅ M₀, Z ⋅ M₀
+        FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
 
-        FM0 = F⋅M0
-        F̄M0 = F̄⋅M0
-        ZM0 = Z⋅M0
+        dc[2] = abs(F̄M₀)
+        MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
+        MPSV₁[2] = V[FM₀, 0, ZM₁]
+        MPSV₁[3] = V[FM₁, 0, 0]
 
-        FM1 = F⋅M1
-        F̄M1 = F̄⋅M1
-        ZM1 = Z⋅M1
-
-        dc[2] = abs(F̄M0)
-        MPSV1[1] = V[F̄M0, F̄M1, ZM0]
-        MPSV1[2] = V[FM0, 0, ZM1]
-        MPSV1[3] = V[FM1, 0, 0]
-
-        MPSV1, MPSV2 = MPSV2, MPSV1
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in 3:ETL÷2
-        M0, M1, M2 = MPSV2[1], MPSV2[2], MPSV2[3] # j = 1, initialize and update `dc`
+        M₀, M₁, M₂ = MPSV₂[1], MPSV₂[2], MPSV₂[3] # j = 1, initialize and update `dc`
+        FM₀, F̄M₀, ZM₀ = F ⋅ M₀, F̄ ⋅ M₀, Z ⋅ M₀
+        FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
+        FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
 
-        FM0 = F⋅M0
-        F̄M0 = F̄⋅M0
-        ZM0 = Z⋅M0
-
-        FM1 = F⋅M1
-        F̄M1 = F̄⋅M1
-        ZM1 = Z⋅M1
-
-        FM2 = F⋅M2
-        F̄M2 = F̄⋅M2
-        ZM2 = Z⋅M2
-
-        dc[i] = abs(F̄M0)
-        MPSV1[1] = V[F̄M0, F̄M1, ZM0]
-        MPSV1[2] = V[FM0, F̄M2, ZM1]
+        dc[i] = abs(F̄M₀)
+        MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
+        MPSV₁[2] = V[FM₀, F̄M₂, ZM₁]
 
         for j in 3:i-1
-            FM0, FM1, ZM1 = FM1, FM2, ZM2
-            M2 = MPSV2[j+1]
-            FM2 = F⋅M2
-            F̄M2 = F̄⋅M2
-            ZM2 = Z⋅M2
-            MPSV1[j] = V[FM0, F̄M2, ZM1]
+            FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+            M₂ = MPSV₂[j+1]
+            FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
+            MPSV₁[j] = V[FM₀, F̄M₂, ZM₁]
         end
 
-        MPSV1[i]   = V[FM1, 0, ZM2]
-        MPSV1[i+1] = V[FM2, 0, 0]
+        MPSV₁[i]   = V[FM₁, 0, ZM₂]
+        MPSV₁[i+1] = V[FM₂, 0, 0]
 
-        MPSV1, MPSV2 = MPSV2, MPSV1
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in ETL÷2+1:ETL-1
-        M0, M1, M2 = MPSV2[1], MPSV2[2], MPSV2[3] # j = 1, initialize and update `dc`
+        M₀, M₁, M₂ = MPSV₂[1], MPSV₂[2], MPSV₂[3] # j = 1, initialize and update `dc`
+        FM₀, F̄M₀, ZM₀ = F ⋅ M₀, F̄ ⋅ M₀, Z ⋅ M₀
+        FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
+        FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
 
-        FM0 = F⋅M0
-        F̄M0 = F̄⋅M0
-        ZM0 = Z⋅M0
-
-        FM1 = F⋅M1
-        F̄M1 = F̄⋅M1
-        ZM1 = Z⋅M1
-
-        FM2 = F⋅M2
-        F̄M2 = F̄⋅M2
-        ZM2 = Z⋅M2
-
-        dc[i] = abs(F̄M0)
-        MPSV1[1] = V[F̄M0, F̄M1, ZM0]
-        MPSV1[2] = V[FM0, F̄M2, ZM1]
+        dc[i] = abs(F̄M₀)
+        MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
+        MPSV₁[2] = V[FM₀, F̄M₂, ZM₁]
 
         for j in 3:ETL-i
-            FM0, FM1, ZM1 = FM1, FM2, ZM2
-            M2 = MPSV2[j+1]
-            FM2 = F⋅M2
-            F̄M2 = F̄⋅M2
-            ZM2 = Z⋅M2
-            MPSV1[j] = V[FM0, F̄M2, ZM1]
+            FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+            M₂ = MPSV₂[j+1]
+            FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
+            MPSV₁[j] = V[FM₀, F̄M₂, ZM₁]
         end
 
-        MPSV1, MPSV2 = MPSV2, MPSV1
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds dc[ETL] = abs(F̄ ⋅ MPSV2[1])
+    @inbounds dc[ETL] = abs(F̄ ⋅ MPSV₂[1])
 
     return dc
 end

@@ -206,7 +206,7 @@ function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps{T}, dist::T2Dist
         max_signal = zero(T)
         for i in 1:opts.nTE
             bᵢ = signal[i]
-            max_signal = bᵢ > max_signal ? bᵢ : max_signal
+            max_signal = max(bᵢ, max_signal)
             decay_data[i] = bᵢ
         end
         @simd for i in 1:opts.nTE

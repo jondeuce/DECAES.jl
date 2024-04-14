@@ -17,7 +17,9 @@ end
 
 # Solve NNLS problem
 solve!(work::NNLSProblem, args...; kwargs...) = solve!(work, work.A, work.b, args...; kwargs...)
+solve!(work::NNLSProblem, A::AbstractMatrix, b::AbstractVector, args...; kwargs...) = NNLS.nnls!(work.nnls_work, A, b, args...; kwargs...)
 
+#=
 # The nnls algorithm selects candidate `x_j`s based on the largest gradient
 # of ||Ax - b||, ie. j = max (A'(Ax - b))_j. In DECAES, the initial gradient
 # A'b is sorted and thus the last column of A will always be chosen first.
@@ -150,6 +152,7 @@ function solve!(
 
     return NNLS.unsafe_nnls!(work.nnls_work, μ; kwargs..., dual_init=true)
 end
+=#
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
