@@ -120,8 +120,6 @@ function checkargs(work::NNLSWorkspace)
     @assert size(work.w) == (n,)
     @assert size(work.zz) == (m,)
     @assert size(work.idx) == (n,)
-    @assert 0 <= work.rnorm[]
-    @assert 0 <= work.mode[]
     @assert 0 <= work.nsetp[] <= min(m, n)
 end
 
@@ -178,10 +176,10 @@ function nnls!(
     b::AbstractVector{T};
     kwargs...,
 ) where {T}
-    GC.@preserve work begin
-        load!(work, A, b)
-        unsafe_nnls!(work)
-    end
+    checkargs(work)
+    load!(work, A, b)
+    init_nnls!(work)
+    unsafe_nnls!(work)
     return solution(work)
 end
 
@@ -192,10 +190,11 @@ function nnls!(
     λ::T;
     kwargs...,
 ) where {T}
-    GC.@preserve work begin
-        load!(work, A, b)
-        unsafe_nnls!(work, λ)
-    end
+    size(A, 1) > size(A, 2) || throw(DimensionMismatch("A must be of the form [A₀; λ*I], got size(A) = $(size(A))"))
+    checkargs(work)
+    load!(work, A, b)
+    init_nnls!(work, λ)
+    unsafe_nnls!(work, λ)
     return solution(work)
 end
 
@@ -332,7 +331,7 @@ function apply_householder!(
     @inbounds u[1] = 1
 
     sm = zero(T)
-    @simd for i in 1:m
+    @inbounds @simd for i in 1:m
         sm = sm + c[i] * u[i]
     end
 
@@ -530,6 +529,42 @@ end
     return wmax, jmax
 end
 
+function init_nnls!(work::NNLSWorkspace{T}) where {T}
+    checkargs(work)
+    (; x, idx) = work
+
+    @inbounds for i in eachindex(x, idx)
+        x[i] = 0
+        idx[i] = i
+    end
+
+    return work
+end
+
+function init_nnls!(work::NNLSWorkspace{T}, λ::T) where {T}
+    checkargs(work)
+    (; A, b, x, idx, diag) = work
+
+    M, N = size(A)
+    M > N || throw(DimensionMismatch("A must be of the form [A₀; λ*I], got size(A) = $(size(A))"))
+    m = M - N
+
+    @inbounds for j in 1:N
+        for i in m+1:M
+            A[i,j] = 0
+        end
+    end
+
+    @inbounds for i in 1:N
+        x[i] = 0
+        b[m+i] = 0
+        idx[i] = i
+        diag[i] = false
+    end
+
+    return work
+end
+
 """
 Algorithm NNLS: NONNEGATIVE LEAST SQUARES
 
@@ -545,19 +580,16 @@ A * X = B SUBJECT TO X .GE. 0
 """
 function unsafe_nnls!(
     work::NNLSWorkspace{T};
+    dual_init::Bool = false,
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
-
-    checkargs(work)
     (; A, b, x, w, zz, idx) = work
     m, n = size(A)
 
-    @simd for i in 1:n
-        x[i] = 0
-        w[i] = 0
-        idx[i] = i
+    if !dual_init
+        fill!(w, 0)
+        compute_dual!(w, A, b, 1, m)
     end
-    compute_dual!(w, A, b, 1, m)
 
     nsetp = 0
     iter = 0
@@ -747,7 +779,6 @@ function unsafe_nnls!(
     # ******  END OF MAIN LOOP  ******
     # COME TO HERE FOR TERMINATION.
     # COMPUTE THE NORM OF THE FINAL RESIDUAL VECTOR.
-
     sm = zero(T)
     if nsetp < m
         @inbounds for i in nsetp+1:m
@@ -767,28 +798,17 @@ end
 function unsafe_nnls!(
     work::NNLSWorkspace{T},
     λ::T;
+    dual_init::Bool = false,
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
-
-    checkargs(work)
     (; A, b, x, w, zz, idx, diag) = work
     M, N = size(A)
     m = M - N
-    @assert M >= N "A must be of the form [A₀; λ*I], but size(A) = $(size(A))"
 
-    @inbounds for j in 1:N
-        for i in m+1:M
-            A[i, j] = 0
-        end
+    if !dual_init
+        fill!(w, 0)
+        compute_dual!(w, A, b, 1, m)
     end
-    @inbounds for i in 1:N
-        x[i] = 0
-        w[i] = 0
-        idx[i] = i
-        b[m+i] = 0
-        diag[i] = false
-    end
-    compute_dual!(w, A, b, 1, m)
 
     nsetp = 0
     iter = 0
@@ -990,15 +1010,14 @@ function unsafe_nnls!(
     # ******  END OF MAIN LOOP  ******
     # COME TO HERE FOR TERMINATION.
     # COMPUTE THE NORM OF THE FINAL RESIDUAL VECTOR.
-
     sm = zero(T)
-    @inbounds for i in nsetp+1:M
-        bi = b[i]
-        zz[i] = bi
-        sm = sm + bi * bi
-    end
-    if nsetp == N
-        # Equivalent to unconstrained problem
+    if nsetp < M
+        @inbounds for i in nsetp+1:M
+            bi = b[i]
+            zz[i] = bi
+            sm = sm + bi * bi
+        end
+    else
         fill!(w, zero(T))
     end
 
