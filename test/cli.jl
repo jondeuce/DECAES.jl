@@ -135,7 +135,7 @@ function construct_test_image(paramdict; kwargs...)
         MatrixSize = paramdict[:MatrixSize],
         nTE = paramdict[:nTE],
         nT2 = paramdict[:nT2],
-        kwargs...
+        kwargs...,
     )
     image ./= mean(@views image[:, :, :, 1]) # normalize first-echo signal intensity to unit mean
     return image

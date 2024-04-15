@@ -589,13 +589,13 @@ A * X = B SUBJECT TO X .GE. 0
 """
 function unsafe_nnls!(
     work::NNLSWorkspace{T};
-    dual_init::Bool = false,
+    init_dual::Bool = true,
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
     (; A, b, x, w, zz, idx, invidx) = work
     m, n = size(A)
 
-    if !dual_init
+    if init_dual
         fill!(w, zero(T))
         compute_dual!(w, A, b, 1, m)
     end
@@ -812,14 +812,14 @@ end
 function unsafe_nnls!(
     work::NNLSWorkspace{T},
     λ::T;
-    dual_init::Bool = false,
+    init_dual::Bool = true,
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
     (; A, b, x, w, zz, idx, invidx, diag) = work
     M, N = size(A)
     m, n = M - N, N
 
-    if !dual_init
+    if init_dual
         fill!(w, zero(T))
         compute_dual!(w, A, b, 1, m)
     end

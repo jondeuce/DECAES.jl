@@ -17,19 +17,21 @@ end
 
 # Solve NNLS problem
 solve!(work::NNLSProblem, args...; kwargs...) = solve!(work, work.A, work.b, args...; kwargs...)
-solve!(work::NNLSProblem, A::AbstractMatrix, b::AbstractVector, args...; kwargs...) = NNLS.nnls!(work.nnls_work, A, b, args...; kwargs...)
+# solve!(work::NNLSProblem, A::AbstractMatrix, b::AbstractVector, args...; kwargs...) = NNLS.nnls!(work.nnls_work, A, b, args...; kwargs...)
 
-#=
-# The nnls algorithm selects candidate `x_j`s based on the largest gradient
-# of ||Ax - b||, ie. j = max (A'(Ax - b))_j. In DECAES, the initial gradient
-# A'b is sorted and thus the last column of A will always be chosen first.
-# Since j = n, will not always result in x_j >= 0 we will bypass the first
-# iteration and initialize the gradient with x_0 = [0; x_n].
+# The nnls algorithm selects candidate x[j] based on the largest negative gradient
+# of ||Ax - b||, i.e. j = argmax_j w[j] where w = -A'(Ax - b) is the dual vector.
+# In DECAES, the initial dual vector w_0 = A'b is sorted because A[i, j], b[j] >= 0
+# and A[i, j+1] > A[i, j], and thus the last column of A will always be chosen first.
+# Thence j = n and we can bypass the first iteration and initialize the gradient with
+# x_0 = [0; x[n]], where x[n] >= 0 due to the nonnegativity of A, b.
+#   NOTE: This will not fail even for generic A and b, it just forces NNLS to start
+#         with column j = n. From there, it may remove the column if necessary.
 function solve!(
     work::NNLSProblem{T},
-    A::AbstractMatrix,
-    b::AbstractVector;
-    kwargs...
+    A::AbstractMatrix{T},
+    b::AbstractVector{T};
+    kwargs...,
 ) where {T}
     m, n = size(A)
     C = work.nnls_work.A
@@ -39,40 +41,38 @@ function solve!(
     z = work.nnls_work.zz
     idx = work.nnls_work.idx
 
-    # x = A[:,end] \ b
-    c = view(A, :, n)
+    # x = A[:, end] \ b
     den = zero(T)
-    @inbounds @simd for i in eachindex(c)
-        den += c[i]*c[i]
+    @inbounds @simd for i in 1:m
+        den += A[i, n] * A[i, n]
     end
 
-    xj = zero(eltype(c))
+    xj = zero(T)
     @inbounds @simd for i in 1:m
-        xj += (c[i] / den) * b[i]
+        xj += (A[i, n] / den) * b[i]
     end
 
     # w = -A'*(Ax - b)
     @inbounds @simd for i in 1:m
-        z[i] = b[i] - c[i]*xj
+        z[i] = b[i] - A[i, n] * xj
     end
 
     @inbounds for j in 1:n-1
         wj = zero(T)
         @simd for i in 1:m
-            Aij = A[i,j]
+            Aij = A[i, j]
             wj += Aij * z[i]
-            # initialize nnls workspace
-            C[i,j] = Aij
+            C[i, j] = Aij # initialize nnls workspace
         end
         w[j] = wj
     end
     @inbounds w[end] = 0
     @inbounds w[end] = all(<=(0), w)
 
-    # initialize nnls workspace
+    # Initialize nnls workspace
     @inbounds for i in 1:m
         f[i] = b[i]
-        C[i,n] = A[i,n]
+        C[i, n] = A[i, n]
     end
 
     @inbounds for j in 1:n
@@ -80,15 +80,15 @@ function solve!(
         idx[j] = j
     end
 
-    return NNLS.unsafe_nnls!(work.nnls_work; kwargs..., dual_init=true)
+    return NNLS.unsafe_nnls!(work.nnls_work; kwargs..., init_dual = false)
 end
 
 function solve!(
     work::NNLSProblem{T},
-    A::AbstractMatrix,
-    b::AbstractVector,
-    μ::Real;
-    kwargs...
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    μ::T;
+    kwargs...,
 ) where {T}
     A0 = parent(A)
     b0 = parent(b)
@@ -102,46 +102,44 @@ function solve!(
     idx = work.nnls_work.idx
     diag = work.nnls_work.diag
 
-    # x = A[:,end] \ b
-    c = view(A0, :, n)
+    # x = A[:, end] \ b
     den = zero(T)
-    @inbounds @simd for i in eachindex(c)
-        den += c[i]*c[i]
-    end
-    den += μ*μ
-
-    xj = zero(eltype(c))
     @inbounds @simd for i in 1:m
-        xj += (c[i] / den) * b0[i]
+        den += A0[i, n] * A0[i, n]
+    end
+    den += μ^2
+
+    xj = zero(T)
+    @inbounds @simd for i in 1:m
+        xj += (A0[i, n] / den) * b0[i]
     end
 
     # w = -A'*(Ax - b)
     @inbounds @simd for i in 1:m
-        z[i] = b0[i] - c[i]*xj
+        z[i] = b0[i] - A0[i, n] * xj
     end
 
     @inbounds for j in 1:n-1
         wj = zero(T)
         @simd for i in 1:m
-            Aij = A0[i,j]
+            Aij = A0[i, j]
             wj += Aij * z[i]
-            # initialize nnls workspace
-            C[i,j] = Aij
+            C[i, j] = Aij # initialize nnls workspace
         end
         w[j] = wj
     end
     @inbounds w[end] = 0
     @inbounds w[end] = all(<=(0), w)
 
-    # initialize nnls workspace
+    # Initialize nnls workspace
     @inbounds for i in 1:m
         f[i] = b0[i]
-        C[i,n] = A0[i,n]
+        C[i, n] = A0[i, n]
     end
 
     @inbounds for j in 1:n
         for i in m+1:size(C, 1)
-            C[i,j] = 0
+            C[i, j] = 0
         end
     end
 
@@ -152,9 +150,8 @@ function solve!(
         diag[j] = false
     end
 
-    return NNLS.unsafe_nnls!(work.nnls_work, μ; kwargs..., dual_init=true)
+    return NNLS.unsafe_nnls!(work.nnls_work, μ; kwargs..., init_dual = false)
 end
-=#
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
