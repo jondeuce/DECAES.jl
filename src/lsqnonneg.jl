@@ -67,6 +67,7 @@ function solve!(
         w[j] = wj
     end
     @inbounds w[end] = 0
+    @inbounds w[end] = all(<=(0), w)
 
     # initialize nnls workspace
     @inbounds for i in 1:m
@@ -130,6 +131,7 @@ function solve!(
         w[j] = wj
     end
     @inbounds w[end] = 0
+    @inbounds w[end] = all(<=(0), w)
 
     # initialize nnls workspace
     @inbounds for i in 1:m
