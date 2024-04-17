@@ -8,13 +8,12 @@
     @test DECAES.VERSION == VersionNumber(decaes_app_proj["version"])
 
     (; major, minor, patch, prerelease) = DECAES.VERSION
-    if prerelease == ()
-        @test DECAES.VERSION == VersionNumber(decaes_app_proj["compat"]["DECAES"])
-        @test DECAES.VERSION == VersionNumber(decaes_cli_proj["compat"]["DECAES"])
-    else
+    @test startswith(decaes_app_proj["compat"]["DECAES"], "=")
+    @test startswith(decaes_cli_proj["compat"]["DECAES"], "=")
+    @test DECAES.VERSION == VersionNumber(split(decaes_app_proj["compat"]["DECAES"], '=')[2])
+    @test DECAES.VERSION == VersionNumber(split(decaes_cli_proj["compat"]["DECAES"], '=')[2])
+    if prerelease != ()
         @test prerelease == ("DEV",)
-        @test decaes_app_proj["compat"]["DECAES"] == "=$(major).$(minor).$(patch)"
-        @test decaes_cli_proj["compat"]["DECAES"] == "=$(major).$(minor).$(patch)"
     end
 
     for file in ["decaes.m", "decaes_pyjulia.py", "decaes_pyjuliacall.py", "decaes.sh"]
