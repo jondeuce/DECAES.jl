@@ -65,6 +65,7 @@ end
 @inline ncomponents(work::NNLSWorkspace) = work.nsetp[]
 @inline components(work::NNLSWorkspace) = @views work.idx[1:ncomponents(work)]
 @inline positive_solution(work::NNLSWorkspace) = @views solution(work)[components(work)]
+@inline positive_solution!(work::NNLSWorkspace, x::AbstractVector) = copyto!(x, positive_solution(work))
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = @views UpperTriangular(work.A[1:ncomponents(work), 1:ncomponents(work)])
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = choleskyfactor(work, Val(:U))'
 
@@ -237,27 +238,27 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     return tau
 end
 
-function householder!(
+function construct_apply_householder!(
     A::AbstractMatrix{T},
     b::AbstractVector{T},
-    I::Int,
-    J::Int,
+    ip::Int,
+    jp::Int,
     m::Int,
 ) where {T}
-    if I > m
+    if ip > m
         return zero(T)
     end
 
     # 1. Construct householder
     # 2. Check if column is sufficiently independent
-    # 3. Check if proposed new value for x = A[I,J]/b[I] > 0
+    # 3. Check if proposed new value for x = A[ip, jp] / b[ip] > 0
     # 4. Update b
     # If good then tau >= 0, else tau < 0
-    @inbounds alpha = A[I, J]
+    @inbounds alpha = A[ip, jp]
 
     xnorm = zero(T)
-    @inbounds @simd for i in I:m
-        xnorm += A[i, J] * A[i, J]
+    @inbounds @simd for i in ip:m
+        xnorm = xnorm + A[i, jp] * A[i, jp]
     end
     xnorm = sqrt(xnorm)
 
@@ -269,44 +270,44 @@ function householder!(
     alpha = alpha + beta
     tau   = alpha / beta
 
-    sm = b[I]
-    @inbounds @simd for i in I+1:m
-        sm += b[i] * (A[i, J] / alpha)
+    sm = b[ip]
+    @inbounds @simd for i in ip+1:m
+        sm = sm + b[i] * (A[i, jp] / alpha)
     end
     sm *= -tau
 
     A1 = -beta
-    b1 = b[I] + sm
+    @inbounds b1 = b[ip] + sm
 
     if b1 / A1 > 0
         # Good column, update b
-        if I < m
-            if I != J
+        if ip < m
+            if ip != jp
                 # Swap columns
-                @inbounds @simd for i in 1:I-1
-                    A[i, I], A[i, J] = A[i, J], A[i, I]
+                @inbounds @simd for i in 1:ip-1
+                    A[i, ip], A[i, jp] = A[i, jp], A[i, ip]
                 end
-                @inbounds b[I] = b1
-                @inbounds A[I, I], A[I, J] = A1, A[I, I]
-                @inbounds @simd for i in I+1:m
-                    Aij = A[i, J] / alpha
-                    A[i, I], A[i, J] = Aij, A[i, I]
-                    b[i] += sm * Aij
+                @inbounds b[ip] = b1
+                @inbounds A[ip, ip], A[ip, jp] = A1, A[ip, ip]
+                @inbounds @simd for i in ip+1:m
+                    Aij = A[i, jp] / alpha
+                    A[i, ip], A[i, jp] = Aij, A[i, ip]
+                    b[i] = b[i] + sm * Aij
                 end
             else
-                @inbounds b[I] = b1
-                @inbounds A[I, I] = A1
-                @inbounds @simd for i in I+1:m
-                    Aii = A[i, I] / alpha
-                    A[i, I] = Aii
-                    b[i] += sm * Aii
+                @inbounds b[ip] = b1
+                @inbounds A[ip, ip] = A1
+                @inbounds @simd for i in ip+1:m
+                    Aii = A[i, ip] / alpha
+                    A[i, ip] = Aii
+                    b[i] = b[i] + sm * Aii
                 end
             end
         else
             tau = zero(T)
-            if I != J
+            if ip != jp
                 @inbounds @simd for i in 1:m
-                    A[i, I], A[i, J] = A[i, J], A[i, I]
+                    A[i, ip], A[i, jp] = A[i, jp], A[i, ip]
                 end
             end
         end
@@ -375,23 +376,22 @@ function apply_householder_dual!(
     n = size(A, 2)
     ntrunc = (j1 + 1) + 4 * ((n - (j1 + 1)) ÷ 4) - 1
     @inbounds for j in j1+1:4:ntrunc # unroll over columns
-        @nexprs 4 α -> j_α = j + (α - 1)
         @nexprs 4 α -> sm_α = zero(T)
         @simd for i in j1:m1
             ui = A[i, j1]
-            @nexprs 4 α -> sm_α = sm_α + A[i, j_α] * ui
+            @nexprs 4 α -> sm_α = sm_α + A[i, j+(α-1)] * ui
         end
         @nexprs 4 α -> sm_α *= -tau
         @nexprs 4 α -> w_α = zero(T)
-        @nexprs 4 α -> A[j1, j_α] = A[j1, j_α] + sm_α
+        @nexprs 4 α -> A[j1, j+(α-1)] = A[j1, j+(α-1)] + sm_α
         @simd for i in j1+1:m1
             bi = b[i]
             ui = A[i, j1]
-            @nexprs 4 α -> A_α = A[i, j_α] + sm_α * ui
+            @nexprs 4 α -> A_α = A[i, j+(α-1)] + sm_α * ui
             @nexprs 4 α -> w_α = w_α + A_α * bi
-            @nexprs 4 α -> A[i, j_α] = A_α
+            @nexprs 4 α -> A[i, j+(α-1)] = A_α
         end
-        @nexprs 4 α -> w[j_α] = w_α
+        @nexprs 4 α -> w[j+(α-1)] = w_α
     end
 
     if ntrunc != n # remainder loop
@@ -401,16 +401,14 @@ function apply_householder_dual!(
                 sm = sm + A[i, j] * A[i, j1]
             end
             sm *= -tau
-            if sm != 0
-                wj = zero(T)
-                A[j1, j] = A[j1, j] + sm
-                @simd for i in j1+1:m1
-                    Aij = A[i, j] + sm * A[i, j1]
-                    wj = wj + Aij * b[i]
-                    A[i, j] = Aij
-                end
-                w[j] = wj
+            wj = zero(T)
+            A[j1, j] = A[j1, j] + sm
+            @simd for i in j1+1:m1
+                Aij = A[i, j] + sm * A[i, j1]
+                wj = wj + Aij * b[i]
+                A[i, j] = Aij
             end
+            w[j] = wj
         end
     end
 
@@ -432,13 +430,12 @@ COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
     n = size(A, 2)
     ntrunc = j1 + 4 * ((n - j1) ÷ 4) - 1
     @inbounds for j in j1:4:ntrunc # unroll over columns
-        @nexprs 4 α -> j_α = j + (α - 1)
         @nexprs 4 α -> sm_α = zero(T)
         @simd for i in j1:m1
             bi = b[i]
-            @nexprs 4 α -> sm_α = sm_α + A[i, j_α] * bi
+            @nexprs 4 α -> sm_α = sm_α + A[i, j+(α-1)] * bi
         end
-        @nexprs 4 α -> w[j_α] = sm_α
+        @nexprs 4 α -> w[j+(α-1)] = sm_α
     end
 
     if ntrunc != n # remainder loop
@@ -630,14 +627,14 @@ function unsafe_nnls!(
             # THE SIGN OF W(J) IS OK FOR J TO BE MOVED TO SET P.
             # BEGIN THE TRANSFORMATION AND CHECK NEW DIAGONAL ELEMENT TO AVOID
             # NEAR LINEAR DEPENDENCE.
-            tau = householder!(A, b, nsetp + 1, jmax, m)
+            tau = construct_apply_householder!(A, b, nsetp + 1, jmax, m)
             if tau >= 0
                 break
             else
                 # REJECT J AS A CANDIDATE TO BE MOVED FROM SET Z TO SET P.
                 # RESTORE A(NPP1,J), SET W(J)=0., AND LOOP BACK TO TEST DUAL
                 # COEFFS AGAIN.
-                # NOTE: A(NPP1,J) restored in `householder!`
+                # NOTE: A(NPP1,J) restored in `construct_apply_householder!`
                 w[jmax] = zero(T)
             end
         end
@@ -650,7 +647,7 @@ function unsafe_nnls!(
         # SET Z TO SET P. UPDATE B, UPDATE INDICES, APPLY HOUSEHOLDER
         # TRANSFORMATIONS TO COLS IN NEW SET Z, ZERO SUBDIAGONAL ELTS IN
         # COL J, SET W(J)=0.
-        # NOTE: B updated in `householder!`
+        # NOTE: B updated in `construct_apply_householder!`
         nsetp += 1
         idx[nsetp], idx[jmax] = idx[jmax], idx[nsetp]
 
@@ -858,14 +855,14 @@ function unsafe_nnls!(
             # THE SIGN OF W(J) IS OK FOR J TO BE MOVED TO SET P.
             # BEGIN THE TRANSFORMATION AND CHECK NEW DIAGONAL ELEMENT TO AVOID
             # NEAR LINEAR DEPENDENCE.
-            tau = householder!(A, b, nsetp + 1, jmax, min(m + 1, M))
+            tau = construct_apply_householder!(A, b, nsetp + 1, jmax, min(m + 1, M))
             if tau >= 0
                 break
             else
                 # REJECT J AS A CANDIDATE TO BE MOVED FROM SET Z TO SET P.
                 # RESTORE A(NPP1,J), SET W(J)=0., AND LOOP BACK TO TEST DUAL
                 # COEFFS AGAIN.
-                # NOTE: A(NPP1,J) restored in `householder!`
+                # NOTE: A(NPP1,J) restored in `construct_apply_householder!`
                 w[jmax] = zero(T)
                 if m < M
                     A[m+1, jmax] = zero(T)
@@ -881,7 +878,7 @@ function unsafe_nnls!(
         # SET Z TO SET P. UPDATE B, UPDATE INDICES, APPLY HOUSEHOLDER
         # TRANSFORMATIONS TO COLS IN NEW SET Z, ZERO SUBDIAGONAL ELTS IN
         # COL J, SET W(J)=0.
-        # NOTE: B updated in `householder!`
+        # NOTE: B updated in `construct_apply_householder!`
         if !diag[idx[jmax]]
             m = min(m + 1, M)
             diag[idx[jmax]] = true

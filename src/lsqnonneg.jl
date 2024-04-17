@@ -90,9 +90,19 @@ function solve!(
     μ::T;
     kwargs...,
 ) where {T}
-    A0 = parent(A)
-    b0 = parent(b)
-    m, n = size(A0)
+    if A isa TikhonovPaddedMatrix
+        A0 = parent(A)
+        m, n = size(A0)
+    else
+        M, N = size(A)
+        m, n = M - N, N
+        A0 = view(A, 1:m, :)
+    end
+    if b isa PaddedVector
+        b0 = parent(b)
+    else
+        b0 = view(b, 1:m)
+    end
 
     C = work.nnls_work.A
     f = work.nnls_work.b
@@ -241,7 +251,7 @@ struct NNLSTikhonovRegProblem{
     T,
     TA <: AbstractMatrix{T},
     Tb <: AbstractVector{T},
-    W <: NNLSProblem{T, TikhonovPaddedMatrix{T, TA}, PaddedVector{T, Tb}},
+    W <: NNLSProblem{T, <:TikhonovPaddedMatrix{T}, <:PaddedVector{T}},
     B,
 }
     A::TA
@@ -317,6 +327,9 @@ curvature(::typeof(identity), work::NNLSTikhonovRegProblem, ∇ = gradient_temps
 
 # L-curve: (ξ̄(μ), η̄(μ)) = (log||Ax-b||^2, log||x||^2)
 function curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work))
+    # Analytically, we have that
+    #       d(η²)/d(ξ²) = d(η²)/dμ / d(ξ²)/dμ = -1 / μ²     (1)
+    #   =>  d(logη²)/d(logξ²) = -(ξ² / η²) / μ²             (2)
     ℓ² = loss(work) # ℓ² = ||Ax-b||^2 + μ²||x||^2 = ξ² + μ²η²
     ξ² = resnorm_sq(work)
     η² = seminorm_sq(work)
@@ -329,9 +342,8 @@ function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
     GC.@preserve work begin
         (; nnls_work) = work.nnls_prob
         B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
-        x₊ = NNLS.positive_solution(nnls_work)
-        tmp = uview(work.buffers.tmp, 1:length(x₊))
-        copyto!(tmp, x₊)
+        tmp = uview(work.buffers.tmp, 1:NNLS.ncomponents(nnls_work))
+        NNLS.positive_solution!(nnls_work, tmp)
 
         μ = regparam(work)
         NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
@@ -345,9 +357,8 @@ function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
     GC.@preserve work begin
         (; nnls_work) = work.nnls_prob
         B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
-        x₊ = NNLS.positive_solution(nnls_work)
-        tmp = uview(work.buffers.tmp, 1:length(x₊))
-        copyto!(tmp, x₊)
+        tmp = uview(work.buffers.tmp, 1:NNLS.ncomponents(nnls_work))
+        NNLS.positive_solution!(nnls_work, tmp)
 
         μ = regparam(work)
         NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
@@ -405,25 +416,28 @@ end
 
 function solve!(work::NNLSTikhonovRegProblemCache, μ::Real)
     # Find index of cached workspace with μi nearest to μ
-    T = promote_type(typeof(μ), typeof(regparam(work[])))
+    @assert μ > 0 "Regularization parameter μ must be positive, got μ = $μ"
+    T = typeof(regparam(work[]))
+    μ = T(μ)
+
     emptycache = true
-    idx, Δμmax = 0, T(Inf)
+    imax, Δlogμmax = 0, T(Inf)
     for (i, μi) in enumerate(regparam.(work.cache))
         if !isnan(μi)
             emptycache = false
-            idx, Δμ = i, μ == μi == T(Inf) ? zero(T) : T(abs(μ - μi))
-            Δμ < Δμmax && ((idx, Δμmax) = (i, Δμ))
-            Δμmax == 0 && break
+            imax, Δlogμ = i, μ == μi ? zero(T) : T(abs(log1p((μ - μi) / μi)))
+            Δlogμ < Δlogμmax && ((imax, Δlogμmax) = (i, Δlogμ))
+            Δlogμmax == 0 && break
         end
     end
 
-    if emptycache || Δμmax > 0
+    if emptycache || Δlogμmax > 0
         # No cached solves; solve from scratch
         next_cache_index!(work)
         solve!(work[], μ)
     else
         # Exact match; return cached solution
-        set_cache_index!(work, idx)
+        set_cache_index!(work, imax)
     end
 
     return solution(work[])
@@ -555,7 +569,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         end
 
         # Find bracketing interval containing root
-        a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 100)
+        a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
 
         if fa * fb < 0
             # Find root using Brent's method
@@ -712,7 +726,7 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
     end
 
     # Find bracketing interval containing root
-    a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 100)
+    a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
 
     if fa * fb < 0
         # Find root using Brent's method
@@ -789,13 +803,13 @@ Details of L-curve theory can be found in Hansen (1992)[2].
   1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
   2. Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580, https://doi.org/10.1137/1034115.
 """
-function lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector)
+function lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector; kwargs...)
     work = lsqnonneg_lcurve_work(A, b)
-    return lsqnonneg_lcurve!(work)
+    return lsqnonneg_lcurve!(work; kwargs...)
 end
 lsqnonneg_lcurve_work(A::AbstractMatrix, b::AbstractVector) = NNLSLCurveRegProblem(A, b)
 
-function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}) where {T}
+function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_prob_smooth_cache)
 
@@ -814,7 +828,7 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}) where {T}
     f = LCurveCornerCachedFunction(f_lcurve_cached, empty!.(work.lcurve_corner_caches)...)
 
     logmu_bounds = (T(-8), T(2))
-    logmu_final = lcurve_corner(f, logmu_bounds...)
+    logmu_final = lcurve_corner(f, logmu_bounds...; kwargs...)
 
     # Return the final regularized solution
     mu_final = exp(logmu_final)
@@ -874,11 +888,11 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
     # msg("Starting", state)
 
     iter = 0
-    while true
+    while !is_converged(state; xtol = T(xtol), Ptol = T(Ptol))
         iter += 1
         if backtracking
             # Find state with minimum diameter which contains the current best estimate maximum curvature point
-            (x, (P, C)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
+            (x, (_, _)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
             for (_, s) in f.state_cache
                 if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
                     state = s
@@ -897,7 +911,6 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
             # msg("C₃ ≥ C₂; moved right", state)
         end
         backtracking && push!(f.state_cache, (iter, state))
-        is_converged(state; xtol = T(xtol), Ptol = T(Ptol)) && break
     end
 
     x = f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
@@ -1028,94 +1041,6 @@ function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uni
     η′′ = 2 * (h₋ * η₊ - (h₊ + h₋) * η₀ + h₊ * η₋) / (h₊ * h₋ * (h₊ + h₋))
 
     return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
-end
-
-function maximize_curvature(state::LCurveCornerState{T}) where {T}
-    # Maximize curvature and transform back from t-space to x-space
-    (; x⃗, P⃗) = state
-    t₁, t₂, t₃, t₄ = T(0), 1 / T(3), 2 / T(3), T(1)
-    t_opt, P_opt, C_opt = maximize_curvature(P⃗...)
-    x_opt =
-        t₁ <= t_opt < t₂ ? lin_interp(t_opt, t₁, t₂, x⃗[1], x⃗[2]) :
-        t₂ <= t_opt < t₃ ? lin_interp(t_opt, t₂, t₃, x⃗[2], x⃗[3]) :
-        lin_interp(t_opt, t₃, t₄, x⃗[3], x⃗[4])
-    return x_opt
-end
-
-function maximize_curvature(P₁::V, P₂::V, P₃::V, P₄::V; bezier = true) where {T, V <: SVector{2, T}}
-    # Analytically maximize curvature of parametric cubic spline fit to data.
-    #   see: https://cs.stackexchange.com/a/131032
-    a, e = P₁[1], P₁[2]
-    b, f = P₂[1], P₂[2]
-    c, g = P₃[1], P₃[2]
-    d, h = P₄[1], P₄[2]
-
-    if bezier
-        ξ = t -> a * (1 - t)^3 + 3 * b * (1 - t)^2 * t + 3 * c * (1 - t) * t^2 + d * t^3
-        η = t -> e * (1 - t)^3 + 3 * f * (1 - t)^2 * t + 3 * g * (1 - t) * t^2 + h * t^3
-        P = t -> SA{T}[ξ(t), η(t)]
-
-        # In order to keep the equations in a more compact form, introduce the following substitutions:
-        m = d - 3 * c + 3 * b - a
-        n = c - 2 * b + a
-        o = b - a
-        p = h - 3 * g + 3 * f - e
-        q = g - 2 * f + e
-        r = f - e
-    else
-        ξ = t -> a * (t - 1 / 3) * (t - 2 / 3) * (t - 1 / 1) / T((0 / 1 - 1 / 3) * (0 / 1 - 2 / 3) * (0 / 1 - 1 / 1)) + # (-9  * a * t^3)/2  + (+18 * a * t^2)/2 + (-11 * a * t)/2 + a
-                 b * (t - 0 / 1) * (t - 2 / 3) * (t - 1 / 1) / T((1 / 3 - 0 / 1) * (1 / 3 - 2 / 3) * (1 / 3 - 1 / 1)) + # (+27 * b * t^3)/2  + (-45 * b * t^2)/2 + (+18 * b * t)/2 +
-                 c * (t - 0 / 1) * (t - 1 / 3) * (t - 1 / 1) / T((2 / 3 - 0 / 1) * (2 / 3 - 1 / 3) * (2 / 3 - 1 / 1)) + # (-27 * c * t^3)/2  + (+36 * c * t^2)/2 + ( -9 * c * t)/2 +
-                 d * (t - 0 / 1) * (t - 1 / 3) * (t - 2 / 3) / T((1 / 1 - 0 / 1) * (1 / 1 - 1 / 3) * (1 / 1 - 2 / 3))   # (+9  * d * t^3)/2  + ( -9 * d * t^2)/2 + ( +2 * d * t)/2
-        η = t -> e * (t - 1 / 3) * (t - 2 / 3) * (t - 1 / 1) / T((0 / 1 - 1 / 3) * (0 / 1 - 2 / 3) * (0 / 1 - 1 / 1)) + # (-9  * e * t^3)/2  + (+18 * e * t^2)/2 + (-11 * e * t)/2 + e
-                 f * (t - 0 / 1) * (t - 2 / 3) * (t - 1 / 1) / T((1 / 3 - 0 / 1) * (1 / 3 - 2 / 3) * (1 / 3 - 1 / 1)) + # (+27 * f * t^3)/2  + (-45 * f * t^2)/2 + (+18 * f * t)/2 +
-                 g * (t - 0 / 1) * (t - 1 / 3) * (t - 1 / 1) / T((2 / 3 - 0 / 1) * (2 / 3 - 1 / 3) * (2 / 3 - 1 / 1)) + # (-27 * g * t^3)/2  + (+36 * g * t^2)/2 + ( -9 * g * t)/2 +
-                 h * (t - 0 / 1) * (t - 1 / 3) * (t - 2 / 3) / T((1 / 1 - 0 / 1) * (1 / 1 - 1 / 3) * (1 / 1 - 2 / 3))   # (+9  * h * t^3)/2  + ( -9 * h * t^2)/2 + ( +2 * h * t)/2
-        P = t -> SA{T}[ξ(t), η(t)]
-
-        # In order to keep the equations in a more compact form, introduce the following substitutions:
-        m = (-9 * a + 27 * b - 27 * c + 9 * d) / 2
-        n = (+18 * a - 45 * b + 36 * c - 9 * d) / 6
-        o = (-11 * a + 18 * b - 9 * c + 2 * d) / 6
-        p = (-9 * e + 27 * f - 27 * g + 9 * h) / 2
-        q = (+18 * e - 45 * f + 36 * g - 9 * h) / 6
-        r = (-11 * e + 18 * f - 9 * g + 2 * h) / 6
-    end
-
-    # This leads to the following simplified derivatives:
-    ξ′  = t -> 3 * (m * t^2 + 2 * n * t + o)
-    ξ′′ = t -> 6 * (m * t + n)
-    η′  = t -> 3 * (p * t^2 + 2 * q * t + r)
-    η′′ = t -> 6 * (p * t + q)
-
-    # Curvature and its derivative:
-    k  = t -> ((3 * (m * t^2 + 2 * n * t + o)) * (6 * (p * t + q)) - (3 * (p * t^2 + 2 * q * t + r)) * (6 * (m * t + n))) / ((3 * (m * t^2 + 2 * n * t + o))^2 + (3 * (p * t^2 + 2 * q * t + r))^2)^(3 / 2)
-    k′ = t -> (-18 * m * (p * t^2 + 2 * q * t + r) + 18 * p * (m * t^2 + 2 * n * t + o) - 18 * (m * t + n) * (2 * p * t + 2 * q) + 18 * (2 * m * t + 2 * n) * (p * t + q)) / (9 * (p * t^2 + 2 * q * t + r)^2 + 9 * (m * t^2 + 2 * n * t + o)^2)^(3 / 2) - (3 * (18 * (p * t + q) * (m * t^2 + 2 * n * t + o) - 18 * (m * t + n) * (p * t^2 + 2 * q * t + r)) * (18 * (2 * p * t + 2 * q) * (p * t^2 + 2 * q * t + r) + 18 * (2 * m * t + 2 * n) * (m * t^2 + 2 * n * t + o))) / (2 * (9 * (p * t^2 + 2 * q * t + r)^2 + 9 * (m * t^2 + 2 * n * t + o)^2)^(5 / 2))
-
-    # Solve analytically
-    coeffs = MVector{6, Complex{T}}(
-        (1296 * m * p^2 + 1296 * m^3) * q - 1296 * n * p^3 - 1296 * m^2 * n * p,
-        (1620 * m * p^2 + 1620 * m^3) * r + 3240 * m * p * q^2 + (3240 * m^2 * n - 3240 * n * p^2) * q - 1620 * o * p^3 + ((-1620 * m^2 * o) - 3240 * m * n^2) * p,
-        (5184 * m * p * q + 1296 * n * p^2 + 6480 * m^2 * n) * r + 1296 * m * q^3 - 1296 * n * p * q^2 + ((-6480 * o * p^2) - 1296 * m^2 * o + 1296 * m * n^2) * q + ((-5184 * m * n * o) - 1296 * n^3) * p,
-        1296 * m * p * r^2 + (1944 * m * q^2 + 6480 * n * p * q - 1296 * o * p^2 + 1296 * m^2 * o + 8424 * m * n^2) * r - 8424 * o * p * q^2 - 6480 * m * n * o * q + ((-1296 * m * o^2) - 1944 * n^2 * o) * p,
-        2592 * n * p * r^2 + (3888 * n * q^2 - 2592 * o * p * q + 2592 * m * n * o + 3888 * n^3) * r - 3888 * o * q^3 + ((-2592 * m * o^2) - 3888 * n^2 * o) * q,
-        -324 * m * r^3 + (1944 * n * q + 324 * o * p) * r^2 + ((-1944 * o * q^2) - 324 * m * o^2 + 1944 * n^2 * o) * r - 1944 * n * o^2 * q + 324 * o^3 * p,
-    )
-    roots = MVector{6, Complex{T}}(undef)
-    PolynomialRoots.roots5!(roots, coeffs, eps(T), true)
-
-    # Check roots and return maximum
-    t₁, t₄ = zero(T), one(T)
-    k₁, k₄ = k(t₁), k(t₄)
-    tmax, Pmax, kmax = k₁ > k₄ ? (t₁, P₁, k₁) : (t₄, P₄, k₄)
-    for rᵢ in roots
-        _t, _s = real(rᵢ), imag(rᵢ)
-        !(_s ≈ 0) && continue # real roots only
-        !(t₁ <= _t <= t₄) && continue # filter roots within range
-        ((_k = k(_t)) > kmax) && ((tmax, Pmax, kmax) = (_t, P(_t), _k))
-    end
-
-    return tmax, Pmax, kmax
 end
 
 function directed_angle(v₁::V, v₂::V) where {T, V <: SVector{2, T}}

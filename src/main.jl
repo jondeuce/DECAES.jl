@@ -6,7 +6,8 @@ const ALLOWED_FILE_SUFFIXES = (".mat", ".nii", ".nii.gz", ".par", ".xml", ".rec"
 const ALLOWED_FILE_SUFFIXES_STRING = join(ALLOWED_FILE_SUFFIXES, ", ", ", and ")
 
 const CLI_SETTINGS = ArgParseSettings(;
-    prog = "",
+    prog = "decaes",
+    # description = "DECAES v" * string(VERSION),
     fromfile_prefix_chars = "@",
     error_on_conflict = false,
     exit_after_help = false,

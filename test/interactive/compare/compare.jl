@@ -23,9 +23,7 @@ for (julia_version, decaes_versions) in versions
         output_dir = joinpath(@__DIR__, "output", splitext(settings)[1], "julia-v" * julia_version * "_" * decaes_version)
         cmd = `julia +$(julia_version) --startup-file=no --project=$(project_dir) --threads=auto -e "using DECAES; main()" -- @$(joinpath(@__DIR__, "settings", settings)) --output $(output_dir) $(cli_extra_args)`
 
-        @info "----------------"
         @info "Running DECAES with Julia $(julia_version) and DECAES $(decaes_version)" cmd
-        @info "----------------"
         println()
         @time run(cmd)
         println()
@@ -96,8 +94,11 @@ for settings in settings_files
                 end
 
                 # err = maximum(abs, @. (x1 - x2) / ifelse(iszero(x1) || iszero(x2), one(x1), max(abs(x1), abs(x2)))) # maximum relative error
-                err = mean(abs, x1 .- x2) / mean(abs, x1 .- mean(x1)) # RAE: relative absolute error
                 # err = √(mean(abs2, x1 .- x2) / mean(abs2, x1 .- mean(x1))) # RRSE: root relative squared error
+                # err = mean(abs, x1 .- x2) / mean(abs, x1 .- mean(x1)) # RAE: relative absolute error
+                # err = mean(abs, x1 .- x2) / max(mean(abs, x1), mean(abs, x1 .- mean(x1))) # RAE: relative absolute error
+                # err = norm((x1 .- mean(x1)) - (x2 .- mean(x2))) ./ norm(x1 .- mean(x1)) # RAE, de-trended
+                err = mean(abs, x1 .- x2) / mean(abs, x1) # mean relative error
 
                 if err <= √eps()
                     println("$(key => err)") # error is negligible
@@ -107,8 +108,11 @@ for settings in settings_files
                     continue
                 else
                     @error "$(key => err): relative error is large"
-                    global dx = abs.(x1 .- x2) ./ mean(abs, x1 .- mean(x1))
-                    dx_low = 0.0
+                    # global dx = x1 .- x2
+                    # global dx = abs.(x1 .- x2) ./ mean(abs, x1 .- mean(x1))
+                    # global dx = abs.(x1 .- x2) ./ max(mean(abs, x1), mean(abs, x1 .- mean(x1)))
+                    global dx = abs.(x1 .- x2) ./ mean(abs, x1)
+                    dx_low = 0.0 #quantile(dx, 0.01)
                     dx_high = quantile(dx, 0.99)
                     nz = count(iszero, dx)
                     n99 = count(>(dx_high), dx)
