@@ -1,6 +1,6 @@
 module DECAES
 
-const VERSION = v"0.5.2"
+const VERSION = v"0.6.0"
 
 # Standard libraries
 using Dates: Dates
