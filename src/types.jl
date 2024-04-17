@@ -48,7 +48,7 @@ See also:
     @assert T1 > 0.0 "T1 must be positive, but T1 = $T1."
 
     "First echo intensity cutoff for empty voxels."
-    Threshold::T = !legacy ? 0.0 : 200.0
+    Threshold::T = 0.0
     @assert Threshold >= 0.0 "First echo signal threshold must be non-negative, but Threshold = $Threshold."
 
     "Minimum refocusing angle for flip angle optimization (Units: degrees)."
@@ -56,7 +56,7 @@ See also:
     @assert 0.0 <= MinRefAngle <= 180.0 "Minimum refocusing angle must be in the range [0, 180], but MinRefAngle = $MinRefAngle."
 
     "During flip angle optimization, goodness of fit is checked for up to `nRefAngles` angles in the range `[MinRefAngle, 180]`. The optimal angle is then determined through interpolation from these samples."
-    nRefAngles::Int = !legacy ? 32 : 8
+    nRefAngles::Int = !legacy ? 64 : 8
     @assert nRefAngles >= 2 "Maximum number of angles to check during flip angle optimization must be at least 2, but nRefAngles = $nRefAngles."
 
     "Initial number of angles to check during flip angle optimization before refinement near likely optima. Setting `nRefAnglesMin` equal to `nRefAngles` forces all angles to be checked."

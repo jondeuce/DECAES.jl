@@ -371,19 +371,19 @@ function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
     end
 end
 
-function chi2_relerr!(work::NNLSTikhonovRegProblem, χ²target, logμ, ∇logμ = nothing)
+function chi2_relerr!(work::NNLSTikhonovRegProblem, res²_target, logμ, ∇logμ = nothing)
     # NOTE: assumes `solve!(work, μ)` has been called and that the solution is ready
     μ = exp(logμ)
     res² = resnorm_sq(work)
-    relerr = log(res² / χ²target) # better behaved than res² / χ²target - 1 for large res²?
+    relerr = (res² - res²_target) / res²_target
     if ∇logμ !== nothing && length(∇logμ) > 0
         ∂res²_∂μ = ∇resnorm_sq(work)
-        ∂relerr_∂logμ = μ * ∂res²_∂μ / res²
+        ∂relerr_∂logμ = μ * ∂res²_∂μ / res²_target
         @inbounds ∇logμ[1] = ∂relerr_∂logμ
     end
     return relerr
 end
-chi2_relerr⁻¹(χ²target, relerr) = χ²target * exp(relerr)
+chi2_relerr⁻¹(res²_target, relerr) = res²_target * (1 + relerr)
 
 # Helper struct which wraps `N` caches of `NNLSTikhonovRegProblem` workspaces.
 # Useful for optimization problems where the last function call may not be
@@ -501,7 +501,7 @@ function lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real,
 end
 lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector) = NNLSChi2RegProblem(A, b)
 
-function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :bisect) where {T}
+function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :brent) where {T}
     # Non-regularized solution
     solve!(work.nnls_prob)
     x_unreg = solution(work.nnls_prob)
@@ -542,7 +542,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
 
         if fa * fb < 0
             # Bracketing interval found
-            a, fa, c, fc, b, fb = bisect_root(f, a, b, fa, fb; xatol = T(0.05), xrtol = T(0.0), ftol = T(1e-2) * (chi2_target - 1), maxiters = 100)
+            a, fa, c, fc, b, fb = bisect_root(f, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = T(1e-3) * (chi2_target - 1), maxiters = 100)
 
             # Root of secant line through `(a, fa), (b, fb)` or `(c, fc), (b, fb)` to improve bisection accuracy
             tmp = fa * fc < 0 ? root_real_linear(a, c, fa, fc) : fc * fb < 0 ? root_real_linear(c, b, fc, fb) : T(NaN)
@@ -869,15 +869,14 @@ Find the corner of the L-curve via curvature maximization using a modified versi
 
   1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
 """
-function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 0.05, Ptol = 0.05, Ctol = 0.01, backtracking = true) where {T}
+function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 1e-4, Ptol = 1e-4, Ctol = 1e-4, backtracking = true) where {T}
     # Initialize state
     state = initial_state(f, T(xlow), T(xhigh))
 
-    # Tolerances are relative to initial curve size
+    # Note: tolerances are absolute because typically the L-curve is on a log-log scale, and atol on log-log is equivalent to rtol on linear-linear
     Ptopleft, Pbottomright = state.P⃗[1], state.P⃗[4]
-    Pdiam = norm(Ptopleft - Pbottomright)
-    Ptol = Pdiam * T(Ptol) # convergence occurs when diameter of L-curve state is less than Ptol
-    Ctol = Pdiam * T(Ctol) # note: *not* a tolerance on curvature, but on the minimum diameter of the L-curve state used to estimate curvature (see `Pfilter` below)
+    Ptol = T(Ptol) # convergence occurs when diameter of L-curve state is less than Ptol
+    Ctol = T(Ctol) # note: *not* a tolerance on curvature, but on the minimum diameter of the L-curve state used to estimate curvature (see `Pfilter` below)
 
     # For very small regularization points on the L-curve may be extremely close, leading to
     # numerically unstable curvature estimates. Assign these points -Inf curvature.
@@ -913,7 +912,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         backtracking && push!(f.state_cache, (iter, state))
     end
 
-    x = f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C ? state.x⃗[2] : state.x⃗[3]
+    (x, (_, _)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
     # msg("Converged", state)
 
     return x
@@ -1135,7 +1134,7 @@ function lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector; kwargs...)
 end
 lsqnonneg_gcv_work(A::AbstractMatrix, b::AbstractVector) = NNLSGCVRegProblem(A, b)
 
-function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0, bounds = (-8.0, 2.0), rtol = 0.05, atol = 1e-4, maxiters = 10) where {T}
+function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0, bounds = (-8.0, 2.0), rtol = 0.0, atol = 1e-4, maxiters = 20) where {T}
     # Find μ by minimizing the function G(μ) (GCV method)
     @assert bounds[1] < init < bounds[2] "Initial value must be within bounds"
     logμ₋, logμ₊ = T.(bounds)
