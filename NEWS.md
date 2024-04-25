@@ -4,9 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.2] - Feb 19, 2024
-- Deprecated `--Chi2Factor` in favour of `--RegParams`
-- Deprecated experimental `--compile` CLI flag. DECAES app can instead by built by setting the environment variable `DECAES_COMPILE_APP=true` and running `]build DECAES`.
+## [0.6.0] - Apr 17, 2024
+
+### Changed
+- This version, released concurrently with v0.5.2, brings no new features but includes significant internal algorithmic improvements. If you're new to DECAES, this is the version to use. For existing users, please note that after upgrading to v0.6.0, it is important to rerun DECAES on all subjects used in a study. While any changes represent improved estimates, one should nevertheless exercise caution and avoid mixing pre-v0.6.0 DECAES results with v0.6.0 results, as doing so could potentially conflate changes due to algorithmic improvements with changes in tissue properties. If for some reason you are unable to rerun all results, you can still use v0.5.2, which provides the new `decaes` launcher, faster computation, and negligible changes in results.
+- Flip angle estimation has been made faster and more robust: stricter tolerances are used in the minimization problem, and cubic Hermite splines are used as surrogate functions (faster to evaluate and can be minimized analytically)
+- The [chi-squared regularization method](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_chi2) now uses Brent's method for rootfinding instead of binary search. This results in both more accurate and faster rootfinding, i.e. setting `--Reg chi2 --Chi2Factor 1.02` will result in `Chi2Factor` maps much closer to the requested `1.02`.
+- The [generalized cross-validation (GCV) regularization method](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_gcv) is solved with stricter tolerances, trading off a small speed regression for more accurate minimization of the GCV objective
+- The [L-curve regularization method](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_lcurve) is solved with stricter tolerances, trading off a small speed regression for more accurate location of the point of maximum curvature on the L-curve
+
+## [0.5.2] - Apr 17, 2024
+
+### Added
+- More convenient command line interface: upon installation, DECAES will create a launcher script `decaes.sh` (`decaes.bat` on Windows) located in `~/.julia/bin`. Ensure this folder is added to your `PATH`, then run DECAES via `decaes <command line args>`.
+- New experimental regularization method: use [Morozov's Discrepancy Principle (MDP)](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_mdp) by passing the CLI flags `--Reg mdp --RegParams <noise level>`, where `<noise level>` is an estimate of the voxelwise noise level. For Gaussian noise, this corresponds to the standard deviation.
+
+### Changed
+- Deprecated the `--Chi2Factor` flag in favour of `--RegParams` to unify the interface for passing parameters to regularization methods
+- The bottleneck of DECAES - solving nonnegative least-squares (NNLS) problems - has been largely rewritten and received major performance and robustness improvements (credit @kamesy)
+- The [generalized cross-validation (GCV) regularization method](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_gcv) now requires the number of T2 components, `--nT2`, to be less than or equal to the number of echoes, in accordance with [the literature](https://epubs.siam.org/doi/10.1137/1034115)
+- The [generalized cross-validation (GCV) regularization method](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_gcv) is now *much* faster to compute (~5-10X), with speed now comparable to the L-curve and chi-squared methods
+- Deprecated the experimental `--compile` CLI flag in favour of the `decaes` launcher script
 
 ## [0.5.0] - May 16, 2023
 

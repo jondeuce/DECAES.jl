@@ -1,7 +1,7 @@
 name = "DECAESApp"
 uuid = "d8797698-3039-405c-b3a8-98519dba00aa"
 authors = ["Jonathan Doucette <jdoucette@physics.ubc.ca>"]
-version = "0.6.0"
+version = "0.6.1-DEV"
 
 [deps]
 DECAES = "d84fb938-a666-558e-89d9-d531edc6724f"
@@ -10,7 +10,7 @@ Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-DECAES = "=0.6.0"
+DECAES = "=0.6.1"
 PackageCompiler = "2"
 Pkg = "1"
 Test = "1"

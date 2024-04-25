@@ -10,8 +10,8 @@
     (; major, minor, patch, prerelease) = DECAES.VERSION
     @test startswith(decaes_app_proj["compat"]["DECAES"], "=")
     @test startswith(decaes_cli_proj["compat"]["DECAES"], "=")
-    @test DECAES.VERSION == VersionNumber(split(decaes_app_proj["compat"]["DECAES"], '=')[2])
-    @test DECAES.VERSION == VersionNumber(split(decaes_cli_proj["compat"]["DECAES"], '=')[2])
+    @test VersionNumber(major, minor, patch) == VersionNumber(split(decaes_app_proj["compat"]["DECAES"], '=')[2])
+    @test VersionNumber(major, minor, patch) == VersionNumber(split(decaes_cli_proj["compat"]["DECAES"], '=')[2])
     if prerelease != ()
         @test prerelease == ("DEV",)
     end

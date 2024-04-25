@@ -305,7 +305,8 @@ function main(command_line_args::Vector{String} = ARGS)
             map(filter(s -> startswith(s, "@"), command_line_args)) do settingsfile
                 src = settingsfile[2:end] # drop "@" character
                 dst = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * "." * basename(src))
-                return cp(src, dst; force = true)
+                cp(src, dst; force = true)
+                return nothing
             end
         end
 
