@@ -721,9 +721,10 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         # Initialize magnetization phase state vector (MPSV)
         m₀           = sin½α₁ # since αₑₓ = ½α₁
         M₀           = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1]        = abs(M₀[1])
         MPSV₁[1]     = M₀
         MPSV₁[2]     = V[a₁*m₀, 0, 0]
+
+        dc[1]        = abs(M₀[1])
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
 
         # i = 2 iteration
@@ -731,11 +732,11 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         FM₀, F̄M₀, ZM₀ = F ⋅ M₀, F̄ ⋅ M₀, Z ⋅ M₀
         FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
 
-        dc[2] = abs(F̄M₀)
         MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
         MPSV₁[2] = V[FM₀, 0, ZM₁]
         MPSV₁[3] = V[FM₁, 0, 0]
 
+        dc[2] = abs(F̄M₀)
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
@@ -745,7 +746,6 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
         FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
 
-        dc[i] = abs(F̄M₀)
         MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
         MPSV₁[2] = V[FM₀, F̄M₂, ZM₁]
 
@@ -759,6 +759,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         MPSV₁[i]   = V[FM₁, 0, ZM₂]
         MPSV₁[i+1] = V[FM₂, 0, 0]
 
+        dc[i] = abs(F̄M₀)
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
@@ -768,7 +769,6 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
         FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
 
-        dc[i] = abs(F̄M₀)
         MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
         MPSV₁[2] = V[FM₀, F̄M₂, ZM₁]
 
@@ -779,6 +779,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
             MPSV₁[j] = V[FM₀, F̄M₂, ZM₁]
         end
 
+        dc[i] = abs(F̄M₀)
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
