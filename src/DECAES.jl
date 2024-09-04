@@ -2,6 +2,8 @@ module DECAES
 
 const VERSION = v"0.6.1-DEV"
 
+const LEGACY = false
+
 # Standard libraries
 using Dates: Dates
 using LinearAlgebra: LinearAlgebra, BLAS, LAPACK, axpy!, cholesky!, dot, mul!, norm, svdvals, svdvals!, ×, ⋅

@@ -399,7 +399,11 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{
         ∇epg_decay_basis!(decay_basis_set_ensemble, θ)
         α_surrogate = o.legacy ?
                       CubicSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob; legacy = true) :
-                      CubicHermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
+                      @static if LEGACY
+            NormalHermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
+        else
+            CubicHermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
+        end
     end
 
     return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate)

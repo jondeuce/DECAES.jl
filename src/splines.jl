@@ -576,7 +576,7 @@ struct NormalHermiteSplineSurrogate{D, T, F, RK} <: AbstractSurrogate{D, T}
     spl::NormalHermiteSplines.ElasticNormalSpline{D, T, RK}
 end
 
-function NormalHermiteSplineSurrogate(fg, grid::Array{SVector{D, T}, D}, kernel = RK_H2(one(T))) where {D, T}
+function NormalHermiteSplineSurrogate(fg, grid::Array{SVector{D, T}, D}, kernel = @static(if LEGACY; RK_H1(one(T)); else; RK_H2(one(T)); end)) where {D, T}
     return NormalHermiteSplineSurrogate(
         fg,
         grid,
@@ -1010,13 +1010,21 @@ load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T
 function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; As, b, nnls_work) = prob
     @views solve!(nnls_work, As[:, :, I], b)
-    u = resnorm_sq(nnls_work)
+    ℓ = resnorm_sq(nnls_work)
+    u = @static if LEGACY
+        prob.legacy ? ℓ : log(max(ℓ, eps(T))) # loss capped at eps(T) from below to avoid log(0) error
+    else
+        ℓ
+    end
     return u
 end
 
 function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; As, ∇As, b, ∂Ax⁺, Ax⁺b, nnls_work) = prob
     ℓ = resnorm_sq(nnls_work)
+    @static if LEGACY
+        ℓ <= eps(T) && return zero(SVector{D, T}) # loss capped at eps(T) from below; return zero gradient
+    end
     x = solution(nnls_work)
     @inbounds Ax⁺b .= zero(T)
     @inbounds for j in 1:size(As, 2)
@@ -1028,7 +1036,12 @@ function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D})
         @inbounds for j in 1:size(∇As, 2)
             (x[j] > 0) && @views(axpy!(x[j], ∇As[:, j, d, I], ∂Ax⁺))
         end
-        ∂u = 2 * dot(∂Ax⁺, Ax⁺b)
+        ∂ℓ = 2 * dot(∂Ax⁺, Ax⁺b)
+        ∂u = @static if LEGACY
+            prob.legacy ? ∂ℓ : ∂ℓ / ℓ
+        else
+            ∂ℓ
+        end
         return ∂u
     end
     return SVector{D, T}(∇u)
@@ -1052,7 +1065,7 @@ end
 
 function NormalHermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{D, T}) where {D, T}
     fg = Base.Fix1(loss_with_grad!, prob)
-    return NormalHermiteSplineSurrogate(fg, prob.αs, RK_H2(one(T)))
+    return NormalHermiteSplineSurrogate(fg, prob.αs, @static(if LEGACY; RK_H1(one(T)); else; RK_H2(one(T)); end))
 end
 
 function surrogate_spline_opt(
