@@ -262,7 +262,7 @@ struct LSTikhonovRegProblem{
 end
 function LSTikhonovRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
-    ls_work = NNLS.LSWorkspace__v5(A, b)
+    ls_work = NNLS.LSWorkspace(A, b)
     return LSTikhonovRegProblem(A, b, m, n, ls_work)
 end
 =#

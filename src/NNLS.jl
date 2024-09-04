@@ -281,7 +281,7 @@ function test_ls_from_nnls(m = 10, n = 6, λ = 1e-2)
     # display(wnnls)
     # (Main.@be nnls!(wnnls, A, b, λ) seconds = 1) |> display
 
-    wls = LSWorkspace__v5(A0, b0)
+    wls = LSWorkspace(A0, b0)
     ls!(wls, A0, b0, λ, wnnls.idx, wnnls.nsetp[])
     ls!(wls, A0, b0, λ, wnnls.idx, wnnls.nsetp[]; reload = false)
     # (Main.@be ls!(wls, A0, b0, λ, wnnls.idx, wnnls.nsetp[]) seconds = 1) |> display
@@ -302,7 +302,7 @@ end
 # J must have at least max(m, n) rows.
 # Computes the least squares solution for a singular system.
 # Translated from minpack.
-struct LSWorkspace__v5{T}
+struct LSWorkspace{T}
     x::Vector{T}
     w::Vector{T}
     r::Vector{T}
@@ -315,14 +315,14 @@ struct LSWorkspace__v5{T}
     nsetp::Base.RefValue{Int}
 end
 
-function LSWorkspace__v5(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+function LSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
     @assert size(b) == (m,)
-    return LSWorkspace__v5(T, m, n)
+    return LSWorkspace(T, m, n)
 end
 
-function LSWorkspace__v5(::Type{T}, m::Int, n::Int) where {T}
-    return LSWorkspace__v5(
+function LSWorkspace(::Type{T}, m::Int, n::Int) where {T}
+    return LSWorkspace(
         zeros(T, n),            # x
         zeros(T, n),            # w
         zeros(T, m),            # r
@@ -337,7 +337,7 @@ function LSWorkspace__v5(::Type{T}, m::Int, n::Int) where {T}
 end
 
 function load!(
-    work::LSWorkspace__v5{T},
+    work::LSWorkspace{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T},
     idx::AbstractVector{Int},
@@ -378,7 +378,7 @@ function showall(; kwargs...)
     end
 end
 
-function check_kkt!(work::LSWorkspace__v5{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, λ::T) where {T}
+function check_kkt!(work::LSWorkspace{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, λ::T) where {T}
     m, n = size(A)
     (; x, w, r, idx) = work
     nsetp = work.nsetp[]
@@ -424,12 +424,12 @@ function check_kkt!(work::LSWorkspace__v5{T}, A::AbstractMatrix{T}, b::AbstractV
 end
 
 function ls(A::AbstractMatrix{T}, b::AbstractVector{T}, λ::T, args...; kwargs...) where {T}
-    work = LSWorkspace__v5(A, b)
+    work = LSWorkspace(A, b)
     return ls!(work, A, b, λ, args...; kwargs...)
 end
 
 function ls!(
-    work::LSWorkspace__v5{T},
+    work::LSWorkspace{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T},
     λ::T,
@@ -445,7 +445,7 @@ function ls!(
     end
 end
 
-function unsafe_ls!(work::LSWorkspace__v5{T}, λ::T) where {T}
+function unsafe_ls!(work::LSWorkspace{T}, λ::T) where {T}
     (; x, J, f, z, D, idx) = work
     nsetp = work.nsetp[]
 
