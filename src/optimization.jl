@@ -291,6 +291,23 @@ function bracket_local_minimum(f, ∂f_∂²f, a::T, b::T, ∂ua::T, ∂ub::T, �
         succ2 && return bracket2, succ2
 
         return bracket, succ
+
+        # if succ1 && succ2
+        #     ua, ux, ub = f(a), f(x), f(b)
+        #     spl1 = CubicHermiteInterpolator(a, x, ua, ux, ∂ua, ∂ux)
+        #     spl2 = CubicHermiteInterpolator(x, b, ux, ub, ∂ux, ∂ub)
+        #     if minimize(spl1) < minimize(spl2)
+        #         return bracket1, succ1
+        #     else
+        #         return bracket2, succ2
+        #     end
+        # elseif succ1
+        #     return bracket1, succ1
+        # elseif succ2
+        #     return bracket2, succ2
+        # else
+        #     return bracket, succ
+        # end
     end
 end
 
@@ -513,6 +530,39 @@ function brent_newton_minimize(f_∂f, a::T, b::T, x0::T, f0::T = f_∂f(x0)[1],
     return (x_new, f_new)
 end
 
+#=
+function test_brent_newton_minimize(f, a, b; kwargs...)
+    x0 = let
+        t = range(a, b, 256)
+        y = f.(t)
+        I = findall(y .< min(y[begin], y[end]))
+        rand(t[I])
+    end
+    a, b = promote(float(a), float(b))
+    count = Ref(0)
+    function f_∂f(x)
+        count[] += 1
+        return f(x), ForwardDiff.derivative(f, x)
+    end
+    for i in 1:2
+        count[] = 0
+        x, ux = i == 1 ?
+                brent_newton_minimize(f_∂f, a, b, x0, f_∂f(x0)...; kwargs...) :
+                brent_minimize(first ∘ f_∂f, a, b; kwargs...)
+        let
+            t = range(a, b; length = 256)
+            y = f.(t)
+            p = Main.lineplot(t, y; xlim = (a, b), ylim = extrema(y), width = 80, ylabel = "f(x)", title = "ncalls = $(count[]), x = $x, f(u) = $ux")
+            Main.scatterplot!(p, [x], [ux]; marker = :diamond, color = :red)
+            p |> display
+        end
+    end
+    @info "initial state"
+    (; a, x0, b) |> display
+    (; fa = f(a), f0 = f(x0), fb = f(b)) |> display
+end
+=#
+
 function newton_bisect_minimize(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxdepth::Int = 5, kwargs...) where {T <: AbstractFloat}
     (x⁻, x⁺, ∂ux⁻, ∂ux⁺, ∂²ux⁻, ∂²ux⁺), succ = bracket_local_minimum(f, ∂f_∂²f, x1, x2; xrtol, xatol, maxdepth)
     if !succ
@@ -522,3 +572,166 @@ function newton_bisect_minimize(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(
         return (x, f(x))
     end
 end
+
+#=
+function test_newton_bisect_minimize(f, a, b; kwargs...)
+    ∂f_∂²f(x) = ForwardDiff.derivative(f, x), only(ForwardDiff.hessian(f ∘ only, SA[x]))
+    a, b = promote(float(a), float(b))
+    return newton_bisect_minimize(f, ∂f_∂²f, a, b; kwargs...)
+end
+=#
+
+#### WIP
+
+#=
+function bracketing_parabolic_triple(f_∂f, a::T, b::T, ua::T = f_∂f(a)[1], ub::T = f_∂f(b)[1], ∂ua::T = f_∂f(a)[2], ∂ub::T = f_∂f(b)[2]; maxiters::Int = 100) where {T <: AbstractFloat}
+    # Use bisection to find triplet of points (a, c, b) such that:
+    #   1. a < c < b
+    #   2. f(c) < min(f(a), f(b))
+    @assert (∂ua < 0 || ∂ub > 0) "Minimum must be bracketed, but f'(x = $a) = $∂ua and f'(x = $b) = $∂ub"
+    c = (a + b) / 2
+    uc, ∂uc = f_∂f(c)
+    for iter in 1:maxiters
+        if uc < min(ua, ub)
+            # Found midpoint
+            # @info "Found midpoint"
+            break
+        else
+            if ∂ua < 0 && ∂ub > 0
+                # Both gradients point downhill; contract midpoint toward endpoint with smaller function value
+                if ua < ub
+                    # @info "Both gradients point downhill: contracting midpoint towards the left"
+                    c = (a + c) / 2
+                else
+                    # @info "Both gradients point downhill: contracting midpoint towards the right"
+                    c = (c + b) / 2
+                end
+            elseif ∂ua < 0
+                # Left gradient points downhill; contract midpoint towards the left
+                # @info "Left gradient points downhill: contracting midpoint towards the left"
+                c = (a + c) / 2
+            else
+                # Right gradient points downhill; contract midpoint towards the right
+                # @info "Right gradient points downhill: contracting midpoint towards the right"
+                c = (c + b) / 2
+            end
+            uc, ∂uc = f_∂f(c)
+        end
+    end
+    return (c, uc, ∂uc)
+end
+
+function bracket_merge(((a, ua, ∂ua), (x, ux, ∂ux), (b, ub, ∂ub)), ((c, uc, ∂uc), (y, uy, ∂uy), (d, ud, ∂ud)))
+    @assert isnan(x) || a < x < b "x must be between a and b; got a=$a, x=$x, b=$b"
+    @assert c < y < d "y must be between c and d; got c=$c, y=$y, d=$d"
+    @assert !isnan(y) "y must not be NaN; got y=$y"
+    # @info "merging brackets" bracket1=((a, ua, ∂ua), (x, ux, ∂ux), (b, ub, ∂ub)) bracket2=((c, uc, ∂uc), (y, uy, ∂uy), (d, ud, ∂ud))
+    if isnan(x)
+        if c < a < y && uy < ua < uc
+            c, uc, ∂uc = a, ua, ∂ua # LHS: `a` is tighter bracket than `c`
+        end
+        if y < b < d && uy < ub < ud
+            d, ud, ∂ud = b, ub, ∂ub # RHS: `b` is tighter bracket than `d`
+        end
+        # @info "merged bracket" bracket=((c, uc, ∂uc), (y, uy, ∂uy), (d, ud, ∂ud))
+        return ((c, uc, ∂uc), (y, uy, ∂uy), (d, ud, ∂ud))
+    elseif uy < ux
+        if x < y && ux < uc
+            c, uc, ∂uc = x, ux, ∂ux # LHS: `x` is tighter bracket than `c`
+        end
+        if y < x && ux < ud
+            d, ud, ∂ud = x, ux, ∂ux # RHS: `x` is tighter bracket than `d`
+        end
+        if c < a < y && uy < ua < uc
+            c, uc, ∂uc = a, ua, ∂ua # LHS: `a` is tighter bracket than `c`
+        end
+        if y < b < d && uy < ub < ud
+            d, ud, ∂ud = b, ub, ∂ub # RHS: `b` is tighter bracket than `d`
+        end
+        # @info "merged bracket" bracket=((c, uc, ∂uc), (y, uy, ∂uy), (d, ud, ∂ud))
+        return ((c, uc, ∂uc), (y, uy, ∂uy), (d, ud, ∂ud))
+    else # ux <= uy
+        if y < x && uy < ua
+            a, ua, ∂ua = y, uy, ∂uy # LHS: `y` is tighter bracket than `a`
+        end
+        if x < y && uy < ub
+            b, ub, ∂ub = y, uy, ∂uy # RHS: `y` is tighter bracket than `b`
+        end
+        if a < c < x && ux < uc < ua
+            a, ua, ∂ua = c, uc, ∂uc # LHS: `c` is tighter bracket than `a`
+        end
+        if x < d < b && ux < ud < ub
+            b, ub, ∂ub = d, ud, ∂ud # RHS: `d` is tighter bracket than `b`
+        end
+        # @info "merged bracket" bracket=((a, ua, ∂ua), (x, ux, ∂ux), (b, ub, ∂ub))
+        return ((a, ua, ∂ua), (x, ux, ∂ux), (b, ub, ∂ub))
+    end
+end
+
+function bracket_minimum_bisect_cubic(f_∂f, a::T, b::T, ua::T, ub::T, ∂ua::T, ∂ub::T, depth::Int = 0; xrtol::T = √eps(T), xatol::T = √eps(T), gtol::T = 100 * eps(T), maxdepth::Int = 5) where {T <: AbstractFloat}
+    bracket = ((a, ua, ∂ua), (T(NaN), T(NaN), T(NaN)), (b, ub, ∂ub))
+    succ = false
+
+    # Evaluate midpoint
+    x_mid = (a + b) / 2
+    ux_mid, ∂ux_mid = f_∂f(x_mid)
+    if ux_mid < min(ua, ub)
+        bracket = ((a, ua, ∂ua), (x_mid, ux_mid, ∂ux_mid), (b, ub, ∂ub))
+        succ = true
+    end
+
+    # Check if interval is sufficiently small
+    tol = xatol + xrtol * abs(x_mid)
+    if abs((b - a) / 2) <= tol
+        return bracket, succ
+    end
+
+    if depth < maxdepth
+        # If we are less than maximum depth, recursively subdivide interval
+        bracket⁻, succ⁻ = bracket_minimum_bisect_cubic(f_∂f, a, x_mid, ua, ux_mid, ∂ua, ∂ux_mid, depth + 1; maxdepth)
+        if succ⁻
+            bracket = bracket_merge(bracket, bracket⁻)
+        end
+
+        bracket⁺, succ⁺ = bracket_minimum_bisect_cubic(f_∂f, x_mid, b, ux_mid, ub, ∂ux_mid, ∂ub, depth + 1; maxdepth)
+        if succ⁺
+            bracket = bracket_merge(bracket, bracket⁺)
+        end
+    else
+        # At bottom level, try improving guess with cubic spline interpolant
+        spl = CubicHermiteInterpolator(a, b, ua, ub, ∂ua, ∂ub)
+        x_spl, _ = minimize(spl)
+        if a + tol < x_spl < b - tol
+            @info "Evaluating spline at bottom: a = $a < x_spl = $x_spl < b = $b"
+            ux_spl, ∂ux_spl = f_∂f(x_spl)
+            bracket_spl = ((a, ua, ∂ua), (x_spl, ux_spl, ∂ux_spl), (b, ub, ∂ub))
+            if succ
+                bracket = bracket_merge(bracket, bracket_spl)
+            else
+                bracket = bracket_spl
+            end
+        end
+    end
+
+    return bracket, !isnan(bracket[2][1]) # succ = !isnan(x)
+end
+
+function bracket_minimum_bisect_cubic(f_∂f, a::T, b::T; kwargs...) where {T <: AbstractFloat}
+    ua, ∂ua = f_∂f(a)
+    ub, ∂ub = f_∂f(b)
+    return bracket_minimum_bisect_cubic(f_∂f, a, b, ua, ub, ∂ua, ∂ub; kwargs...)
+end
+
+function test_bracket_minimum_bisect_cubic(f, x1, x2; kwargs...)
+    x1, x2 = promote(float(x1), float(x2))
+    f_∂f = x -> (f(x), ForwardDiff.derivative(f, x))
+    x, ux, ∂ux, succ = bracket_minimum_bisect_cubic(f_∂f, x1, x2; kwargs...)
+    let
+        t = range(x1, x2; length = 256)
+        y = f.(t)
+        p = Main.lineplot(t, y; xlim = (x1, x2), ylim = extrema(y), width = 80, ylabel = "f(x)", title = "x = $x, f(u) = $ux, f'(u) = $∂ux, success = $succ")
+        Main.scatterplot!(p, [x], [ux]; marker = :diamond, color = :red)
+        p
+    end
+end
+=#

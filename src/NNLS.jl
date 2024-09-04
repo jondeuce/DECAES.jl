@@ -38,8 +38,10 @@
 module NNLS
 
 using Base.Cartesian: @nexprs
-using LinearAlgebra: LinearAlgebra, Factorization, UpperTriangular, ldiv!, norm
+using LinearAlgebra: LinearAlgebra, Factorization, UpperTriangular, axpy!, dot, ldiv!, norm
+
 using MuladdMacro: MuladdMacro, @muladd
+using UnsafeArrays: UnsafeArrays, UnsafeArray, uview
 
 export nnls, nnls!, load!
 export NNLSWorkspace, NormalEquation, NormalEquationCholesky
@@ -75,6 +77,47 @@ function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     return NNLSWorkspace(T, m, n)
 end
 
+#=
+function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
+    mem = zeros(T,
+        m * n +   # A
+        m +   # b
+        n +   # x
+        n +   # w
+        m,       # zz
+    )
+
+    off = 0
+    A = Base.unsafe_wrap(Array, pointer(mem, off + 1), (m, n))
+    off += length(A)
+
+    b = Base.unsafe_wrap(Array, pointer(mem, off + 1), m)
+    off += length(b)
+
+    w = Base.unsafe_wrap(Array, pointer(mem, off + 1), n)
+    off += length(w)
+
+    x = Base.unsafe_wrap(Array, pointer(mem, off + 1), n)
+    off += length(x)
+
+    z = Base.unsafe_wrap(Array, pointer(mem, off + 1), m)
+
+    return NNLSWorkspace(
+        mem,            # storage
+        A,              # A
+        b,              # b
+        x,              # x
+        w,              # w
+        z,              # zz
+        zeros(Int, n),  # idx (Note: deliberately initialize to invalid permutation)
+        zeros(Int, n),  # invidx
+        zeros(Bool, n), # diag
+        Ref(zero(T)),   # rnorm
+        Ref(0),         # mode
+        Ref(0),         # nsetp
+    )
+end
+=#
 function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
     return NNLSWorkspace(
         zeros(T, m, n), # A
@@ -156,6 +199,337 @@ Base.:\(F::NormalEquationCholesky, x::AbstractVector) = ldiv!(F, copy(x))
 struct NormalEquation end
 
 LinearAlgebra.cholesky!(::NormalEquation, work::NNLSWorkspace) = NormalEquationCholesky(work)
+
+#### In-place compact QR factorization, Ax = b -> Rx = Q'b
+
+qr_compact(A::AbstractMatrix) = qr_compact!(copy(A))
+qr_compact(A::AbstractMatrix, b::AbstractVector) = qr_compact!(copy(A), copy(b))
+
+function qr_compact!(A::AbstractMatrix{T}) where {T}
+    m, n = size(A)
+    GC.@preserve A for j in 1:min(m, n)
+        u = uview(A, j:m, j)
+        tau = construct_householder!(u)
+        apply_householder!(A, tau, j, m)
+    end
+    return A
+end
+
+function qr_compact!(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    m, n = size(A)
+    @assert length(b) == m "Matrix dimensions mismatch: size(A) = $(size(A)) and length(b) = $(length(b))"
+    GC.@preserve A b for j in 1:min(m, n)
+        u = uview(A, j:m, j)
+        c = uview(b, j:m)
+        tau = construct_householder!(u)
+        apply_householder!(c, u, tau)
+        apply_householder!(A, tau, j, m)
+    end
+    return A, b
+end
+
+function test_qr_compact(m = 5, n = 3)
+    A = randn(m, n)
+    b = randn(m)
+    F = LinearAlgebra.qr(A)
+
+    R = qr_compact(A)
+    @assert isapprox(R, F.factors; rtol = 1e-14, atol = 1e-14)
+
+    R, Qᵀb = qr_compact(A, b)
+    @assert isapprox(R, F.factors; rtol = 1e-14, atol = 1e-14)
+    @assert isapprox(F.Q' * b, Qᵀb; rtol = 1e-14, atol = 1e-14)
+
+    # @test @allocations(qr_compact!(A)) == 0
+    # @test @allocations(qr_compact!(A, b)) == 0
+
+    return nothing
+end
+testall_qr_compact() = foreach(splat(test_qr_compact), Iterators.product(1:10, 1:10))
+
+using ..Random: randperm
+function ls_brute(A, b, λ, idx, nsetp)
+    Amu = [A[:, idx[1:nsetp]]; λ * LinearAlgebra.I]
+    bmu = [b; zeros(eltype(A), nsetp)]
+    p = zeros(eltype(A), size(A, 2))
+    p[idx[1:nsetp]] = Amu \ bmu
+    return p
+end
+
+function test_ls(m = 10, n = 6, λ = 1e-2)
+    A = randn(m, n)
+    b = randn(m)
+    idx = randperm(n)
+    nsetp = rand(0:n)
+    p0 = ls_brute(A, b, λ, idx, nsetp)
+    p1 = ls(A, b, λ, idx, nsetp)
+    display(p0')
+    display(p1')
+
+    @assert isapprox(p0, p1; rtol = 1e-14, atol = 1e-14)
+    return nothing
+end
+testall_ls() = foreach(splat(test_ls), Iterators.product(1:10, 1:10))
+
+function test_ls_from_nnls(m = 10, n = 6, λ = 1e-2)
+    A0 = rand(m, n)
+    b0 = rand(m)
+    A, b = [A0; λ * LinearAlgebra.I], [b0; zeros(n)]
+
+    wnnls = NNLSWorkspace(A, b)
+    nnls!(wnnls, A, b, λ)
+    # display(wnnls)
+    # (Main.@be nnls!(wnnls, A, b, λ) seconds = 1) |> display
+
+    wls = LSWorkspace__v5(A0, b0)
+    ls!(wls, A0, b0, λ, wnnls.idx, wnnls.nsetp[])
+    ls!(wls, A0, b0, λ, wnnls.idx, wnnls.nsetp[]; reload = false)
+    # (Main.@be ls!(wls, A0, b0, λ, wnnls.idx, wnnls.nsetp[]) seconds = 1) |> display
+    # (Main.@be ls!(wls, A0, b0, λ, wnnls.idx, wnnls.nsetp[]; reload = false) seconds = 1) |> display
+
+    # display(wnnls.x)
+    # display(wls.x)
+    @assert wnnls.x ≈ wls.x
+
+    return nothing
+end
+
+# Solve, in the least-squares sense,
+#   J*x = f, λ*x = 0.
+# QR factorization is assumed precomputed.
+# R is assumed stored in the first min(m, n) rows of J.
+# Q'f is assumed stored in f.
+# J must have at least max(m, n) rows.
+# Computes the least squares solution for a singular system.
+# Translated from minpack.
+struct LSWorkspace__v5{T}
+    x::Vector{T}
+    w::Vector{T}
+    r::Vector{T}
+    J::Matrix{T}
+    f::Vector{T}
+    z::Vector{T}
+    D::Vector{T}
+    idx::Vector{Int}
+    rnorm::Base.RefValue{T}
+    nsetp::Base.RefValue{Int}
+end
+
+function LSWorkspace__v5(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    m, n = size(A)
+    @assert size(b) == (m,)
+    return LSWorkspace__v5(T, m, n)
+end
+
+function LSWorkspace__v5(::Type{T}, m::Int, n::Int) where {T}
+    return LSWorkspace__v5(
+        zeros(T, n),            # x
+        zeros(T, n),            # w
+        zeros(T, m),            # r
+        zeros(T, max(m, n), n), # J
+        zeros(T, max(m, n)),    # f
+        zeros(T, n),            # z
+        ones(T, n),             # D
+        zeros(Int, n),          # idx (Note: deliberately initialize to invalid permutation)
+        Ref(zero(T)),           # rnorm
+        Ref(0),                 # nsetp
+    )
+end
+
+function load!(
+    work::LSWorkspace__v5{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    idx::AbstractVector{Int},
+    nsetp::Int,
+) where {T}
+    m, n = size(A)
+    @assert size(b) == (m,) "Dimensions mismatch: size(b) = $(size(b)) but n = $(n)"
+    @assert size(work.J, 1) >= max(m, n) "Dimensions mismatch: size(work.J, 1) = $(size(work.J, 1)) but max(m, n) = $(max(m, n))"
+    @assert size(work.J, 2) >= n "Dimensions mismatch: size(work.J, 2) = $(size(work.J, 2)) but n = $(n)"
+    @assert size(idx) == (n,) "Dimensions mismatch: size(idx) = $(size(idx)) but n = $(n)"
+    @assert 0 <= nsetp <= n "Invalid number of components: nsetp = $(nsetp) but n = $(n)"
+
+    GC.@preserve work begin
+        @inbounds for j in 1:nsetp
+            jp = idx[j]
+            @simd for i in 1:m
+                work.J[i, j] = A[i, jp]
+            end
+        end
+
+        @inbounds @simd for i in 1:m
+            work.f[i] = b[i]
+        end
+
+        copyto!(work.idx, idx)
+        work.nsetp[] = nsetp
+
+        J0, f0 = uview(work.J, 1:m, 1:nsetp), uview(work.f, 1:m)
+        qr_compact!(J0, f0)
+    end
+
+    return work
+end
+
+function showall(; kwargs...)
+    for (k, v) in kwargs
+        @info string(k) * " => " * sprint(show, MIME"text/plain"(), v)
+    end
+end
+
+function check_kkt!(work::LSWorkspace__v5{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, λ::T) where {T}
+    m, n = size(A)
+    (; x, w, r, idx) = work
+    nsetp = work.nsetp[]
+
+    xnorm² = zero(T)
+    for ip in 1:nsetp
+        xi = x[idx[ip]]
+        xi < 0 && return false
+        xnorm² = xnorm² + xi * xi
+    end
+
+    fill!(r, zero(T))
+    for ip in 1:nsetp
+        j = idx[ip]
+        @views axpy!(x[j], A[:, j], r) # r = Ax
+    end
+
+    rnorm² = zero(T)
+    for i in 1:m
+        ri = b[i] - r[i]
+        rnorm² = rnorm² + ri * ri
+        r[i] = ri # r -> b - r = -(Ax - b)
+    end
+    work.rnorm[] = sqrt(rnorm² + λ^2 * xnorm²)
+
+    fill!(w, zero(T))
+    for ip in nsetp+1:n
+        j = idx[ip]
+        wj = zero(T)
+        for i in 1:m
+            wj = wj + r[i] * A[i, j] # w = A'r = -A'(Ax - b)
+        end
+        wj > 0 && return false
+        w[j] = wj
+    end
+
+    # satisfied = all(x[idx[1:nsetp]] .≥ 0) && all(w[idx[nsetp+1:n]] .≤ 0)
+    # @info "KKT conditions satisfied?" satisfied
+    # showall(; x, w, r)
+    # return satisfied
+
+    return true
+end
+
+function ls(A::AbstractMatrix{T}, b::AbstractVector{T}, λ::T, args...; kwargs...) where {T}
+    work = LSWorkspace__v5(A, b)
+    return ls!(work, A, b, λ, args...; kwargs...)
+end
+
+function ls!(
+    work::LSWorkspace__v5{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    λ::T,
+    idx::AbstractVector{Int} = 1:size(A, 2),
+    nsetp::Int = min(size(A)...);
+    reload = true,
+) where {T}
+    GC.@preserve work begin
+        if reload
+            load!(work, A, b, idx, nsetp)
+        end
+        unsafe_ls!(work, λ)
+    end
+end
+
+function unsafe_ls!(work::LSWorkspace__v5{T}, λ::T) where {T}
+    (; x, J, f, z, D, idx) = work
+    nsetp = work.nsetp[]
+
+    # Copy J and Q'f to preserve input and initialize z.
+    # In particular, save the diagonal elements of J in x.
+    @inbounds for j in 1:nsetp
+        z[j] = f[j]
+        x[j] = J[j, j]
+        @simd for i in j+1:nsetp
+            J[i, j] = J[j, i]
+        end
+    end
+
+    # Eliminate the diagonal matrix λD using a givens rotation.
+    @inbounds for j in 1:nsetp
+        # Prepare the row of λD to be eliminated, locating the diagonal element using jpvt from the qr factorization.
+        D[j] = λ
+
+        @simd for k in j+1:nsetp
+            D[k] = zero(T)
+        end
+
+        # The transformations to eliminate the row of λD modify only a single element of Q'f beyond the first n, which is initially zero.
+        fpj = zero(T)
+
+        for k in j:nsetp
+            if D[k] == 0
+                continue
+            end
+
+            # Determine a givens rotation which eliminates the appropriate element in the current row of λD.
+            rr = hypot(J[k, k], D[k])
+            cs = J[k, k] / rr
+            sn = D[k] / rr
+
+            # Compute the modified diagonal element of J and the modified element of [Q'f; 0].
+            J[k, k] = rr
+
+            zk   = z[k]
+            z[k] = cs * zk + sn * fpj
+            fpj  = -sn * zk + cs * fpj
+
+            # Accumulate the tranformation in the row of λD.
+            @simd for i in k+1:nsetp
+                Jik, Di = J[i, k], D[i]
+                J[i, k] = cs * Jik + sn * Di
+                D[i]    = -sn * Jik + cs * Di
+            end
+        end
+
+        # Store the diagonal element of λD and restore the corresponding diagonal element of J.
+        D[j]    = J[j, j]
+        J[j, j] = x[j]
+    end
+
+    # Solve the triangular system for z.
+    # If the system is singular, then obtain a least squares solution.
+    nsing = nsetp
+    @inbounds for i in 1:nsetp
+        if D[i] == 0
+            @simd for j in i:nsetp
+                z[j] = zero(T)
+            end
+            nsing = i - 1
+            break
+        end
+    end
+
+    @inbounds for j in nsing:-1:1
+        fj = z[j]
+        @simd for i in j+1:nsing
+            fj = fj - z[i] * J[i, j]
+        end
+        z[j] = fj / D[j]
+    end
+
+    # Copy the solution z into x.
+    fill!(x, zero(T))
+    @inbounds @simd for j in 1:nsing
+        x[idx[j]] = z[j]
+    end
+
+    return x
+end
 
 """
 x = nnls(A, b; ...)
@@ -354,6 +728,55 @@ function apply_householder!(
     end
 
     @inbounds u[1] = u1
+
+    return nothing
+end
+
+function apply_householder!(
+    A::AbstractMatrix{T},
+    tau::T,
+    j1::Int,
+    m1::Int,
+) where {T}
+    if j1 > m1
+        return nothing
+    end
+
+    @inbounds aii = A[j1, j1]
+    @inbounds A[j1, j1] = 1
+
+    n = size(A, 2)
+    ntrunc = (j1 + 1) + 4 * ((n - (j1 + 1)) ÷ 4) - 1
+    @inbounds for j in j1+1:4:ntrunc # unroll over columns
+        @nexprs 4 α -> sm_α = zero(T)
+        @simd for i in j1:m1
+            ui = A[i, j1]
+            @nexprs 4 α -> sm_α = sm_α + A[i, j+(α-1)] * ui
+        end
+        @nexprs 4 α -> sm_α *= -tau
+        @simd for i in j1:m1
+            ui = A[i, j1]
+            @nexprs 4 α -> A_α = A[i, j+(α-1)] + sm_α * ui
+            @nexprs 4 α -> A[i, j+(α-1)] = A_α
+        end
+    end
+
+    if ntrunc != n # remainder loop
+        @inbounds for j in ntrunc+1:n
+            sm = zero(T)
+            @simd for i in j1:m1
+                sm = sm + A[i, j] * A[i, j1]
+            end
+            sm *= -tau
+            # if sm != 0
+            @simd for i in j1:m1
+                A[i, j] = A[i, j] + sm * A[i, j1]
+            end
+            # end
+        end
+    end
+
+    @inbounds A[j1, j1] = aii
 
     return nothing
 end
@@ -588,10 +1011,22 @@ function unsafe_nnls!(
     work::NNLSWorkspace{T};
     init_dual::Bool = true,
     max_iter::Int = 3 * size(work.A, 2),
+    # warm_start::Bool = false,
 ) where {T}
     (; A, b, x, w, zz, idx, invidx) = work
     m, n = size(A)
 
+    # if warm_start
+    #     unsafe_init_nnls!(work)
+    #     nsetp = work.nsetp[]
+    # else
+    #     @inbounds @simd for i in 1:n
+    #         x[i] = zero(T)
+    #         w[i] = zero(T)
+    #         idx[i] = i
+    #     end
+    #     compute_dual!(w, A, b, 1, m)
+    # end
     if init_dual
         fill!(w, zero(T))
         compute_dual!(w, A, b, 1, m)
@@ -811,11 +1246,30 @@ function unsafe_nnls!(
     λ::T;
     init_dual::Bool = true,
     max_iter::Int = 3 * size(work.A, 2),
+    # warm_start::Bool = false,
 ) where {T}
     (; A, b, x, w, zz, idx, invidx, diag) = work
     M, N = size(A)
     m, n = M - N, N
 
+    # if warm_start
+    #     unsafe_init_nnls!(work)
+    #     nsetp = work.nsetp[]
+    # else
+    #     @inbounds for j in 1:n
+    #         for i in m+1:M
+    #             A[i, j] = zero(T)
+    #         end
+    #     end
+    #     @inbounds @simd for i in 1:n
+    #         x[i] = zero(T)
+    #         w[i] = zero(T)
+    #         idx[i] = i
+    #         b[m+i] = zero(T)
+    #         diag[i] = false
+    #     end
+    #     compute_dual!(w, A, b, 1, m)
+    # end
     if init_dual
         fill!(w, zero(T))
         compute_dual!(w, A, b, 1, m)
@@ -1041,6 +1495,250 @@ function unsafe_nnls!(
     work.nsetp[] = nsetp
     return work.x
 end
+
+#=
+function nnls!(
+    work::NNLSWorkspace{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    idx::AbstractVector{Int},
+    nsetp::Int;
+    kwargs...,
+) where {T}
+    copyto!(work.idx, idx)
+    work.nsetp[] = nsetp
+    return nnls!(work, A, b; warm_start = true, kwargs...)
+end
+
+function unsafe_init_nnls!(work::NNLSWorkspace{T}) where {T}
+    checkargs(work)
+    (; A, b, x, w, zz, idx) = work
+    nsetp = work.nsetp[]
+    m, n = size(A)
+
+    if !issorted(idx)
+        idx2 = collect(1:n)
+        @inbounds for j1 in 1:n-1
+            k  = idx[j1]
+            j2 = findfirst(==(k), idx2)
+            if j1 != j2
+                @simd for i in 1:m
+                    A[i, j1], A[i, j2] = A[i, j2], A[i, j1]
+                end
+                idx2[j1], idx2[j2] = idx2[j2], idx2[j1]
+            end
+        end
+    end
+
+    # Apply Householder transformations
+    @inbounds for j in 1:nsetp
+        u = uview(A, j:m, j)
+        c = uview(b, j:m)
+
+        tau = construct_householder!(u)
+        apply_householder!(c, u, tau)
+        apply_householder!(A, tau, j, m)
+
+        @simd for i in j+1:m
+            A[i, j] = zero(T)
+        end
+    end
+
+    copyto!(zz, b)
+    solve_triangular_system!(zz, A, nsetp)
+
+    # Remove columns until solution satisfies non-negativity constraints
+    @inbounds while true
+        # SEE IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE.
+        # IF NOT COMPUTE ALPHA.
+        imv = nsetp
+        remove_cols = false
+        for i in 1:nsetp
+            if zz[i] <= 0
+                imv = i
+                remove_cols = true
+                break
+            end
+        end
+
+        # IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE THEN ALPHA WILL
+        # STILL = 2. IF SO EXIT FROM SECONDARY LOOP TO MAIN LOOP.
+        if !remove_cols
+            break
+        end
+
+        # MODIFY A AND B AND THE INDEX ARRAYS TO MOVE COEFFICIENT I
+        # FROM SET P TO SET Z.
+        if imv != nsetp
+            for i in imv+1:nsetp
+                cc, ss, rr = orthogonal_rotmat(A[i-1, i], A[i, i])
+                A[i-1, i] = rr
+                A[i, i] = zero(T)
+
+                # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
+                @simd for j in 1:i-1
+                    A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
+                end
+                @simd for j in i+1:n
+                    A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
+                end
+
+                # Apply procedure G2 (CC,SS,B(J-1),B(J))
+                b[i-1], b[i] = orthogonal_rotmatvec(cc, ss, b[i-1], b[i])
+            end
+
+            # Swap columns
+            for j in imv:nsetp-1
+                @simd for i in 1:m
+                    A[i, j+1], A[i, j] = A[i, j], A[i, j+1]
+                end
+                idx[j], idx[j+1] = idx[j+1], idx[j]
+            end
+        end
+
+        nsetp -= 1
+
+        # COPY B( ) INTO ZZ( ). THEN SOLVE AGAIN AND LOOP BACK.
+        copyto!(zz, b)
+        solve_triangular_system!(zz, A, nsetp)
+    end
+
+    fill!(x, zero(T))
+    @inbounds for i in 1:nsetp
+        x[idx[i]] = zz[i]
+    end
+
+    fill!(w, zero(T))
+    compute_dual!(w, A, b, nsetp + 1, m)
+
+    work.nsetp[] = nsetp
+
+    return nothing
+end
+
+function unsafe_init_nnls!(work::NNLSWorkspace{T}, λ::T) where {T}
+    checkargs(work)
+    (; A, b, x, w, zz, idx, diag) = work
+    nsetp = work.nsetp[]
+
+    M, N = size(A)
+    m, n = M - N, N
+
+    if !issorted(idx)
+        idx2 = collect(1:n)
+        @inbounds for j1 in 1:n-1
+            k  = idx[j1]
+            j2 = findfirst(==(k), idx2)
+            if j1 != j2
+                @simd for i in 1:m
+                    A[i, j1], A[i, j2] = A[i, j2], A[i, j1]
+                end
+                idx2[j1], idx2[j2] = idx2[j2], idx2[j1]
+            end
+        end
+    end
+
+    @inbounds for j in 1:n
+        @simd for i in m+1:M
+            A[i, j] = zero(T)
+        end
+    end
+    @inbounds @simd for i in 1:n
+        diag[i] = false
+        b[m+i] = zero(T)
+    end
+
+    # Apply Householder transformations
+    @inbounds for j in 1:nsetp
+        diag[idx[j]] = true
+
+        m += 1
+        A[m, j] = λ
+
+        u = uview(A, j:m, j)
+        c = uview(b, j:m)
+
+        tau = construct_householder!(u)
+        apply_householder!(c, u, tau)
+        apply_householder!(A, tau, j, m)
+
+        @simd for i in j+1:m
+            A[i, j] = zero(T)
+        end
+    end
+
+    copyto!(zz, b)
+    solve_triangular_system!(zz, A, nsetp)
+
+    # Remove columns until solution satisfies non-negativity constraints
+    @inbounds while true
+        # SEE IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE.
+        # IF NOT COMPUTE ALPHA.
+        imv = nsetp
+        remove_cols = false
+        @inbounds for i in 1:nsetp
+            if zz[i] <= 0
+                imv = i
+                remove_cols = true
+                break
+            end
+        end
+
+        # IF ALL NEW CONSTRAINED COEFFS ARE FEASIBLE THEN ALPHA WILL
+        # STILL = 2. IF SO EXIT FROM SECONDARY LOOP TO MAIN LOOP.
+        if !remove_cols
+            break
+        end
+
+        # MODIFY A AND B AND THE INDEX ARRAYS TO MOVE COEFFICIENT I
+        # FROM SET P TO SET Z.
+        if imv != nsetp
+            @inbounds for i in imv+1:nsetp
+                cc, ss, rr = orthogonal_rotmat(A[i-1, i], A[i, i])
+                A[i-1, i] = rr
+                A[i, i] = zero(T)
+
+                # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L))
+                @simd for j in 1:i-1
+                    A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
+                end
+                @simd for j in i+1:n
+                    A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
+                end
+
+                # Apply procedure G2 (CC,SS,B(J-1),B(J))
+                b[i-1], b[i] = orthogonal_rotmatvec(cc, ss, b[i-1], b[i])
+            end
+
+            # Swap columns
+            @inbounds for j in imv:nsetp-1
+                @simd for i in 1:m
+                    A[i, j+1], A[i, j] = A[i, j], A[i, j+1]
+                end
+                idx[j], idx[j+1] = idx[j+1], idx[j]
+            end
+        end
+
+        nsetp -= 1
+
+        # COPY B( ) INTO ZZ( ). THEN SOLVE AGAIN AND LOOP BACK.
+        copyto!(zz, b)
+        solve_triangular_system!(zz, A, nsetp)
+    end
+
+    fill!(x, zero(T))
+    @inbounds for ip in 1:nsetp
+        x[idx[ip]] = zz[ip]
+    end
+
+    fill!(w, zero(T))
+    compute_dual!(w, A, b, nsetp + 1, m)
+
+    work.nsetp[] = nsetp
+
+    return nothing
+end
+=#
 
 end # @muladd
 

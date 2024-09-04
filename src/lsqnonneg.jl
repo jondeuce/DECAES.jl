@@ -247,6 +247,26 @@ end
 #### Tikhonov regularized NNLS problem
 ####
 
+#=
+struct LSTikhonovRegProblem{
+    T,
+    TA <: AbstractMatrix{T},
+    Tb <: AbstractVector{T},
+    W,
+}
+    A::TA
+    b::Tb
+    m::Int
+    n::Int
+    ls_work::W
+end
+function LSTikhonovRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    m, n = size(A)
+    ls_work = NNLS.LSWorkspace__v5(A, b)
+    return LSTikhonovRegProblem(A, b, m, n, ls_work)
+end
+=#
+
 struct NNLSTikhonovRegProblem{
     T,
     TA <: AbstractMatrix{T},
@@ -389,6 +409,19 @@ chi2_relerr⁻¹(res²_target, relerr) = res²_target * (1 + relerr)
 # Useful for optimization problems where the last function call may not be
 # the optimium, but perhaps it was one or two calls previous and is still in the
 # `NNLSTikhonovRegProblemCache` and a recomputation can be avoided.
+#=
+struct NNLSTikhonovRegProblemCache{N, W0, W <: NTuple{N}}
+    ls_prob::W0
+    cache::W
+    idx::Base.RefValue{Int}
+end
+function NNLSTikhonovRegProblemCache(A::AbstractMatrix{T}, b::AbstractVector{T}, ::Val{N} = Val(8)) where {T, N}
+    ls_prob = LSTikhonovRegProblem(A, b)
+    cache = ntuple(_ -> NNLSTikhonovRegProblem(A, b), N)
+    idx = Ref(1)
+    return NNLSTikhonovRegProblemCache(ls_prob, cache, idx)
+end
+=#
 struct NNLSTikhonovRegProblemCache{N, W <: NTuple{N}}
     cache::W
     idx::Base.RefValue{Int}
@@ -441,7 +474,83 @@ function solve!(work::NNLSTikhonovRegProblemCache, μ::Real)
     end
 
     return solution(work[])
+    #=
+    # Δlogμmax_thresh = zero(T)
+    Δlogμmax_thresh = T(Inf) #T(Inf) #T(1e-6)
+    if emptycache || Δlogμmax > Δlogμmax_thresh
+        # @info "No cached solves; solve from scratch"
+        next_cache_index!(work)
+        solve!(work[], μ)
+    elseif Δlogμmax == zero(T)
+        # Exact match; return cached solution
+        set_cache_index!(work, imax)
+    else # Δlogμmax <= Δlogμmax_thresh
+        # println(); @info "Nearby match; warm start with nearest cached solution"
+        set_cache_index!(work, imax)
+        (; A, b, nnls_prob) = work[]
+        (; nnls_work) = nnls_prob
+        (; ls_work) = work.ls_prob
+        reload = nnls_work.nsetp[] != ls_work.nsetp[] || nnls_work.idx != ls_work.idx
+        # NNLS.showall(; reload, μ, idx_nnls = nnls_work.idx', idx_ls = ls_work.idx')
+        NNLS.ls!(ls_work, A, b, μ, nnls_work.idx, nnls_work.nsetp[]; reload)
+        if NNLS.check_kkt!(ls_work, A, b, μ)
+            # @info "Warm start successful"
+            regparam!(work[], μ)
+            copyto!(nnls_work.x, ls_work.x)
+            nnls_work.rnorm[] = ls_work.rnorm[]
+            # @show lsqnonneg_tikh(A, b, μ)'
+            # @show solution(work[])'
+            @show norm(lsqnonneg_tikh(A, b, μ)' - solution(work[])')
+            # NNLS.showall(; x = ls_work.x', w = ls_work.w', rnorm = resnorm(work[]), rnorm′ = norm(A * solution(work[]) - b), Δrnorm = resnorm(work[]) - norm(A * solution(work[]) - b), idx = nnls_work.idx', nsetp = nnls_work.nsetp[])
+            #=
+            let
+                # @info "Comparing with NNLS soln"
+                next_cache_index!(work)
+                solve!(work[], μ)
+                # NNLS.showall(; x = solution(work[])', rnorm = resnorm(work[]), rnorm′ = norm(A * solution(work[]) - b), Δrnorm = resnorm(work[]) - norm(A * solution(work[]) - b), idx = nnls_work.idx', nsetp = nnls_work.nsetp[])
+            end
+            =#
+        else
+            # @info "Warm start failed; solve from scratch"
+            next_cache_index!(work)
+            solve!(work[], μ)
+        end
+    end
+    =#
+
+    #=
+    if emptycache
+        # No cached solves; solve from scratch
+        next_cache_index!(work)
+        solve!(work[], μ)
+    elseif Δlogμmax == 0
+        # Exact match; return cached solution
+        set_cache_index!(work, imax)
+    else # Δlogμmax > 0
+        # Warm start with nearest cached solution
+        set_cache_index!(work, imax)
+        solve!(work[], μ; warm_start = true)
+    end
+    =#
 end
+
+#=
+function test_NNLSTikhonovRegProblemCache(m = 8, n = 6, μ = 0.01, ::Val{N} = Val(5)) where {N}
+    A, b = rand(m, n), rand(m)
+    work0 = NNLSTikhonovRegProblem(A, b)
+    work = NNLSTikhonovRegProblemCache(A, b, Val(N))
+    @assert isapprox(solve!(work0, μ), solve!(work, μ); rtol = 1e-14, atol = 1e-14)
+    @assert isapprox(solve!(work0, μ), solve!(work, μ); rtol = 1e-14, atol = 1e-14)
+    @assert isapprox(solve!(work0, μ), solve!(work, μ); rtol = 1e-14, atol = 1e-14)
+    for _ in 1:1, scale in exp10.(randn(100))
+        # @assert isapprox(solve!(work0, scale * μ), solve!(work, scale * μ); rtol = 1e-14, atol = 1e-14)
+        @assert isapprox(lsqnonneg_tikh(A, b, scale * μ), solve!(work, scale * μ); rtol = 1e-14, atol = 1e-14)
+    end
+    solve!(work, μ * exp(randn())) #(1 + randn() * 0.1))
+
+    return nothing
+end
+=#
 
 ####
 #### Chi2 method for choosing the Tikhonov regularization parameter
@@ -836,6 +945,228 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
     x_unreg = solve!(work.nnls_prob)
     chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
 
+    #=
+    @info "chi2" logmu_final mu_final
+    @info "ratio" chi2_final
+    x_final = copy(x_final) # these are views into buffers, need to copy
+    x_unreg = copy(x_unreg) # these are views into buffers, need to copy
+    let
+        (; A, b) = work.nnls_prob
+        A, b = copy(A), copy(b)
+
+        ∇finitediff(f, t, h = √eps(one(t))) = (f(t .+ h) .- f(t .- h)) ./ 2h
+        ∇²finitediff(f, t, h = ∛eps(one(t))) = (f(t .+ h) .- 2 .* f(t) .+ f(t .- h)) ./ h^2
+
+        ∇logfinitediff(f, logt, h = √eps(one(logt))) = ∇finitediff(f, logt, h) ./ exp(logt)
+        ∇²logfinitediff(f, logt, h = ∛eps(one(logt))) = (∇²finitediff(f, logt, h) - ∇finitediff(f, logt, h)) ./ exp(2 * logt)
+
+        function finitediff_unequal_grid(y₋, y₊, h₋, h₊)
+            # Finite difference approximation of the first derivative of f(x) using unequal grid spacing
+            #   f'(x) = (f(x + h₊) - f(x - h₋)) / (h₋ + h₊) = (y₊ - y₋) / (h₋ + h₊)
+            return (y₊ - y₋) / (h₋ + h₊)
+        end
+
+        function f_curvature(logμ)
+            solve!(work.nnls_prob_smooth_cache, exp(logμ))
+            return curvature(log, work.nnls_prob_smooth_cache[])
+            # return curvature(identity, work.nnls_prob_smooth_cache[])
+        end
+
+        fired = Ref(false)
+        function f_quasi_opt(logμ)
+            # α = μ² --> α * ||dx/dα|| = μ² * ||dx/dμ / dα/dμ|| = μ² * ||dx/dμ / 2μ|| = μ/2 * ||dx/dμ||
+            μ = exp(logμ)
+
+            solve!(work.nnls_prob_smooth_cache, μ)
+            cache = work.nnls_prob_smooth_cache[]
+            ξ², η² = resnorm_sq(cache), seminorm_sq(cache)
+            dlogξ²_dlogη² = -μ^2 * (η² / ξ²) # dx / dy
+            solve!(work.nnls_prob_smooth_cache, exp(logμ - 0.3))
+            cache = work.nnls_prob_smooth_cache[]
+            ξ²₋, η²₋ = resnorm_sq(cache), seminorm_sq(cache)
+            dlogξ²_dlogη²₋ = -exp(2 * (logμ - 0.3)) * (η²₋ / ξ²₋)
+            solve!(work.nnls_prob_smooth_cache, exp(logμ + 0.3))
+            cache = work.nnls_prob_smooth_cache[]
+            ξ²₊, η²₊ = resnorm_sq(cache), seminorm_sq(cache)
+            dlogξ²_dlogη²₊ = -exp(2 * (logμ + 0.3)) * (η²₊ / ξ²₊)
+
+            return dlogξ²_dlogη²
+            # return log(-inv(dlogξ²_dlogη²))
+
+            if logμ < -5 || abs(dlogξ²_dlogη²) < 1e-2 || ξ²₋ >= ξ² || ξ² >= ξ²₊ || η²₋ <= η² || η² <= η²₊
+                return zero(T)
+            end
+
+            d²logξ²_d²logη² = finitediff_unequal_grid(dlogξ²_dlogη²₋, dlogξ²_dlogη²₊, log(η²) - log(η²₋), log(η²₊) - log(η²))
+            # return d²logξ²_d²logη²
+
+            if !fired[] #&& -3 < logμ < -2 #&& !isfinite(d²logξ²_d²logη²)
+                fired[] = true
+                # @show μ logμ ξ² η² dlogξ²_dlogη² ξ²₋ η²₊ dlogξ²_dlogη²₋ ξ²₊ η²₊ dlogξ²_dlogη²₊ d²logξ²_d²logη²
+                # for logμ in -8.0:-4.0
+                #     μ = exp(logμ)
+                #     x = solve!(work.nnls_prob_smooth_cache, μ)
+                #     cache = work.nnls_prob_smooth_cache[]
+                #     @show logμ μ log(gradient_temps(cache).xᵀB⁻¹x)
+                #     NNLS.choleskyfactor(cache.nnls_prob.nnls_work, Val(:U)) |> copy |> display
+                # end
+            end
+            # !isfinite(d²logξ²_d²logη²) && (d²logξ²_d²logη² = zero(T))
+
+            return d²logξ²_d²logη² #/ sqrt(1 + (dlogξ²_dlogη²)^2)^3 # note: κ = y''/(1+y'^2)^(3/2) = -x''/(1+x'^2)^(3/2)
+
+            # x = solve!(work.nnls_prob_smooth_cache, μ)
+            # cache = work.nnls_prob_smooth_cache[]
+            # (; A, b) = cache
+            # B = A'A + μ^2 * I
+            # return log(gradient_temps(cache).xᵀB⁻¹x)
+            # return log(x' * (B \ x))
+            # return x' * (B \ x)
+            # return log(x' * (B \ x)) - log(gradient_temps(cache).xᵀB⁻¹x)
+            # return log(gradient_temps(cache).xᵀB⁻¹x)
+            # dx_dμ = -2 * μ * (B \ x)
+            # dx_dμ = -2 * μ * (B \ (B \ A'b))
+            # return log(μ * norm(dx_dμ))
+
+            # solve!(work.nnls_prob_smooth_cache, exp(logμ))
+            # dxdμ_norm = solution_gradnorm(work.nnls_prob_smooth_cache[])
+            # return exp(logμ) * dxdμ_norm
+        end
+
+        function f_heuristic(logμ)
+            work = NNLSGCVRegProblem(A, b)
+            svdvals!(work)
+            return log(gcv!(work, logμ))
+            # return log(gcv_and_∇gcv!(work, logμ)[1])
+
+            # solve!(work.nnls_prob_smooth_cache, exp(logμ))
+            # cache = work.nnls_prob_smooth_cache[]
+            # return cache.nnls_prob.nnls_work.nsetp[]
+
+            # if logμ > -4
+            #     x = solution(cache)
+            #     fig = Main.Figure()
+            #     ax = Main.Axis(fig[1, 1]; ylabel = "x", title = "logμ = $logμ")
+            #     Main.scatterlines!(ax, x)
+            #     display(fig)
+            # end
+
+            # solve!(work.nnls_prob_smooth_cache, exp(logμ))
+            # cache = work.nnls_prob_smooth_cache[]
+            # return log(resnorm(cache) * seminorm(cache))
+            # return log(gcv!(NNLSGCVRegProblem(A, b), logμ))
+            # return gcv_dof(A, exp(logμ))
+            # solve!(work.nnls_prob_smooth_cache, exp(logμ))
+            # return resnorm_sq(work.nnls_prob_smooth_cache[]) / gcv_dof(A, exp(logμ))^2
+            # gcv, ∇gcv = gcv_and_∇gcv!(NNLSGCVRegProblem(A, b), logμ)
+            # return log(gcv)
+            # return exp(logμ) * ∇gcv / gcv # d/dlogμ log(gcv) = μ d/dμ log(gcv) = μ * ∇gcv / gcv
+            # return ∇gcv_dof(A, exp(logμ))
+            # return ∇resnorm_sq(cache)
+            # return ∇logfinitediff(logμ, 1e-3) do _logμ
+            #     solve!(work.nnls_prob_smooth_cache, exp(_logμ))
+            #     return resnorm_sq(work.nnls_prob_smooth_cache[])
+            # end
+        end
+
+        second = x -> x[2]
+        third = x -> x[3]
+        fourth = x -> x[4]
+        logμ = range(logmu_bounds...; length = 128)#length = 2048)
+        # logμ = range(-10, 2; length = 128)#length = 2048)
+
+        logξη = f_lcurve.(logμ)
+        logξ, logη = first.(logξη), second.(logξη)
+        ξ, η = exp.(logξ), exp.(logη)
+
+        sort!(pairs(f.point_cache); by = ((x, (P, C)),) -> x) #|> display
+        unsplat = ((x, (P, C)),) -> (x, P[1], P[2], C)
+        dropinf = tups -> filter(((logμ, logξ, logη, C),) -> !isinf(C), tups)
+        unzip = tups -> (first.(tups), second.(tups), third.(tups), fourth.(tups))
+        logμs, logξs, logηs, Cs = unzip(dropinf(unsplat.(pairs(f.point_cache))))
+        ξs, ηs = exp.(logξs), exp.(logηs)
+
+        # C = f_curvature.(logμ)
+        # Cmax, iC = findmax(C)
+        # _, iC = findmin(i -> abs(logμ[i] - logmu_final), 1:length(logμ))
+        # Cmax = f_curvature(logmu_final)
+        # logμC, logξC, logηC = logμ[iC], logξ[iC], logη[iC]
+        _, iC = findmax(Cs)
+        logμC, logξC, logηC, Cmax = logμs[iC], logξs[iC], logηs[iC], Cs[iC]
+
+        qnorm = f_quasi_opt.(logμ)
+        qmin, iQ = findmin(qnorm)
+        logμQ, logξQ, logηQ = logμ[iQ], logξ[iQ], logη[iQ]
+        CQmax = f_curvature(logμQ)
+
+        REnorm = f_heuristic.(logμ)
+        REmin, iQ = findmin(REnorm)
+        logμRE, logξRE, logηRE = logμ[iQ], logξ[iQ], logη[iQ]
+        CREmax = f_curvature(logμRE)
+
+        fig = Main.Figure(; size = (1000, 750))
+
+        ax = Main.Axis(fig[1, 1]; xlabel = "log||Ax-b||²", ylabel = "log||x||²", title = "L-curve (log-log)")
+        Main.lines!(ax, logξ, logη)
+        Main.scatter!(ax, logξs, logηs)
+        Main.scatter!(ax, logξC, logηC; color = :red, markersize = 15)
+        # Main.scatter!(ax, logξQ, logηQ; color = :green, marker = :diamond, markersize = 15)
+        Main.scatter!(ax, logξRE, logηRE; color = :cyan, marker = :rect, markersize = 15)
+
+        ax = Main.Axis(fig[1, 2]; xlabel = "||Ax-b||²", ylabel = "||x||²", title = "L-curve")
+        Main.lines!(ax, ξ, η)
+        Main.scatter!(ax, ξs, ηs)
+        Main.scatter!(ax, exp(logξC), exp(logηC); color = :red, markersize = 15)
+        # Main.scatter!(ax, exp(logξQ), exp(logηQ); color = :green, marker = :diamond, markersize = 15)
+        # Main.scatter!(ax, exp(logξRE), exp(logηRE); color = :cyan, marker = :rect, markersize = 15)
+
+        ax = Main.Axis(fig[1, 3]; xlabel = "logμ", ylabel = "μ * ||dx/dμ||", title = "Quasi-optimality")
+        Main.lines!(ax, logμ, qnorm)
+        Main.scatter!(ax, logμQ, qmin; color = :green, marker = :diamond, markersize = 15)
+
+        ax = Main.Axis(fig[1, 4]; xlabel = "logμ", ylabel = "GCV", title = "Heuristic")
+        Main.lines!(ax, logμ, REnorm)
+        Main.scatter!(ax, logμRE, REmin; color = :cyan, marker = :rect, markersize = 15)
+
+        ax = Main.Axis(fig[2, 1]; xlabel = "logμ", ylabel = "curvature")
+        Main.scatterlines!(ax, logμs, Cs)
+        # Main.scatter!(ax, logμC, Cmax; color = :red, markersize = 15)
+        # Main.scatter!(ax, logμQ, CQmax; color = :green, marker = :diamond, markersize = 15)
+        # Main.scatter!(ax, logμRE, CREmax; color = :cyan, marker = :rect, markersize = 15)
+
+        ax = Main.Axis(fig[2, 2]; xlabel = "log||Ax-b||²", ylabel = "curvature")
+        Main.scatterlines!(ax, logξs, Cs)
+        # Main.scatter!(ax, logξC, Cmax; color = :red, markersize = 15)
+        # Main.scatter!(ax, logξQ, CQmax; color = :green, marker = :diamond, markersize = 15)
+        # Main.scatter!(ax, logξRE, CREmax; color = :cyan, marker = :rect, markersize = 15)
+
+        ax = Main.Axis(fig[2, 3]; xlabel = "log||x||²", ylabel = "curvature")
+        Main.scatterlines!(ax, logηs, Cs)
+        # Main.scatter!(ax, logηC, Cmax; color = :red, markersize = 15)
+        # Main.scatter!(ax, logηQ, CQmax; color = :green, marker = :diamond, markersize = 15)
+        # Main.scatter!(ax, logηRE, CREmax; color = :cyan, marker = :rect, markersize = 15)
+
+        ax = Main.Axis(fig[2, 4]; xlabel = "T2 bin", ylabel = "x")
+        unitmax = x -> x ./ maximum(x)
+        _cache = work.nnls_prob_smooth_cache[]
+        Main.scatterlines!(ax, 1:length(x_unreg), unitmax(x_unreg); label = "unregularized")
+        Main.scatterlines!(ax, 1:length(x_final), unitmax(x_final); label = "l-curve")
+        Main.scatterlines!(ax, 1:length(x_final), unitmax(lsqnonneg_gcv(_cache.A, _cache.b).x); label = "gcv")
+
+        ax = Main.Axis(fig[3, 1]; xlabel = "logμ", ylabel = "log||Ax-b||²")
+        Main.lines!(ax, logμ, logξ)
+        Main.scatter!(ax, logμs, logξs)
+        Main.scatter!(ax, logμC, logξC; color = :red, markersize = 15)
+
+        ax = Main.Axis(fig[3, 2]; xlabel = "logμ", ylabel = "log||x||²")
+        Main.lines!(ax, logμ, logη)
+        Main.scatter!(ax, logμs, logηs)
+        Main.scatter!(ax, logμC, logηC; color = :red, markersize = 15)
+
+        fig |> display
+    end
+    =#
+
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
 end
 
@@ -963,6 +1294,31 @@ function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCorner
     end
     return state
 end
+#=
+function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing) where {T}
+    # Insert points into point cache
+    (; x⃗, P⃗) = state
+    @inbounds for i in 1:4
+        x, P = x⃗[i], P⃗[i]
+        C = Pfilter === nothing || Pfilter(P) ? T(NaN) : T(-Inf) # NaN => curvature needs to be computed, -Inf => point is excluded from search
+        f.point_cache[x] = LCurveCornerPoint(P, C)
+    end
+
+    # Compute curvature for each point from nearest neighbours
+    cache = pairs(f.point_cache) # AbstractVector view of (x, (P, C)) triples
+    sort!(cache; by = ((x, (P, C)),) -> x)
+    @inbounds for i in 2:length(cache)-1
+        x, (P, C) = cache[i]
+        isinf(C) && continue # point is excluded from search
+        _, (P₋, _) = cache[i-1]
+        _, (P₊, _) = cache[i+1]
+        C = menger(P₋, P, P₊) # compute new curvature estimate (note: only neighbours to newly added point(s) actually need to be recomputed, but it's fast)
+        cache[i] = (x, LCurveCornerPoint(P, C))
+    end
+
+    return nothing
+end
+=#
 
 function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}
     Δⱼₖ, Δₖₗ, Δₗⱼ = Pⱼ - Pₖ, Pₖ - Pₗ, Pₗ - Pⱼ
@@ -1179,6 +1535,18 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         log𝒢_final        = T(minf)
     elseif method === :brent
         logmu_final, log𝒢_final = brent_minimize(log𝒢, logμ₋, logμ₊; xrtol = T(rtol), xatol = T(atol), maxiters)
+        #TODO
+        # log𝒢₋, ∇log𝒢₋ = log𝒢_and_∇log𝒢(logμ₋)
+        # log𝒢₊, ∇log𝒢₊ = log𝒢_and_∇log𝒢(logμ₊)
+        # logμ_bdry, log𝒢_bdry = log𝒢₋ < log𝒢₊ ? (logμ₋, log𝒢₋) : (logμ₊, log𝒢₊)
+        # if ∇log𝒢₋ < 0 && ∇log𝒢₊ > 0
+        #     logmu_final, log𝒢_final = brent_minimize(log𝒢, logμ₋, logμ₊; xrtol = T(rtol), xatol = T(atol), maxiters)
+        # else
+        #     logmu_final, log𝒢_final = logμ_bdry, log𝒢_bdry
+        # end
+        # if log𝒢_bdry < log𝒢_final
+        #     logmu_final, log𝒢_final = logμ_bdry, log𝒢_bdry
+        # end
     elseif method === :brent_newton
         log𝒢₋, ∇log𝒢₋ = log𝒢_and_∇log𝒢(logμ₋)
         log𝒢₊, ∇log𝒢₊ = log𝒢_and_∇log𝒢(logμ₊)

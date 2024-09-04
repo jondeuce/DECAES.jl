@@ -85,6 +85,17 @@ end
     return x
 end
 
+#=
+function extremize(spl::CubicHermiteInterpolator{T}) where {T}
+    # Find the minimum of the cubic polynomial
+    (; u0, u1, dom, coeffs) = spl
+    (tlo, ulo), (thi, uhi) = extremize_cubic(coeffs, -one(T), one(T), u0, u1)
+    return (todomain(tlo, dom), ulo), (todomain(thi, dom), uhi)
+end
+minimize(spl::CubicHermiteInterpolator) = extremize(spl)[1]
+maximize(spl::CubicHermiteInterpolator) = extremize(spl)[2]
+=#
+
 function minimize(spl::CubicHermiteInterpolator{T}) where {T}
     (; u0, u1, m0, m1, dom, coeffs) = spl
     xend, uend = u0 < u1 ? (dom[1], u0) : (dom[2], u1)
@@ -653,6 +664,23 @@ function suggest_point(surr::NormalHermiteSplineSurrogate{1, T}) where {T}
     if u₀ < u
         p, u = p₀, u₀
     end
+
+    #=
+    f = Base.Fix1(NormalHermiteSplines.evaluate, surr.spl)
+    ∂f = Base.Fix1(NormalHermiteSplines.evaluate_derivative, surr.spl)
+    cache = ForwardDiff.DiffResults.ImmutableDiffResult(one(T), (one(T),))
+    function ∂f_and_∂²f(x)
+        res = ForwardDiff.derivative!(cache, ∂f, x)
+        return ForwardDiff.DiffResults.value(res), ForwardDiff.DiffResults.derivative(res)
+    end
+
+    x, u = newton_bisect_minimize(f, ∂f_and_∂²f, p₁[1], p₂[1]; xrtol = √eps(T), xatol = √eps(T), maxiters = 10)
+    if !isfinite(u) || u₀ < u
+        p, u = p₀, u₀
+    else
+        p = SA{T}[x]
+    end
+    =#
 
     return p, u
 end

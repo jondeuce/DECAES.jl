@@ -48,6 +48,101 @@ function insertsorted!(x, val, len = length(x))
     return x
 end
 
+#=
+function uniquesorted(x::AbstractArray{T}; minchunksize = 8192) where {T}
+    ntasks = Threads.nthreads()
+    indices = split_indices(; length = length(x), minchunksize = minchunksize, maxpartitions = ntasks))
+    bufs = Vector{Vector{T}}(undef, length(indices))
+    # bufs = Vector{Set{T}}(undef, length(indices))
+    @sync for (i, inds) in enumerate(indices)
+        Threads.@spawn begin
+            bufs[i] = unique(@views x[inds])
+            # bufs[i] = unique_set(@views x[inds])
+        end
+    end
+    return length(bufs) == 1 ? sort!(only(bufs)) : unique!(sort!(reduce(vcat, bufs)))
+    # nunique = mapreduce(length, +, bufs)
+    # if nunique == length(x)
+    #     # return nothing
+    #     return unique!(sort!(reduce(vcat, bufs)))
+    #     # return unique!(sort!(mapreduce(collect, vcat, bufs)))
+    # else
+    #     return collect(reduce(union, bufs))
+    # end
+end
+
+function unique_set(x::AbstractArray{T}) where {T}
+    y = Set{T}()
+    for xi in x
+        if xi ∉ y
+            push!(y, xi)
+        end
+    end
+    return y
+end
+
+function estimate_resolution(x::AbstractArray{T}; ispositive = true, tol = (∛eps(T))^2) where {T}
+    isempty(x) && return T(NaN)
+    y = uniquesorted(x)
+    if length(y) == length(x)
+        # All elements are unique
+        return T(NaN)
+    elseif length(y) == 1
+        # All elements are the same
+        _dy = only(y)
+        return iszero(_dy) ? T(NaN) : abs(_dy)
+    end
+    if !ispositive
+        y = uniquesorted(abs.(y))
+    end
+    dy = uniquesorted(diff(y))
+
+    Σy = sum(y)
+    ymax = maximum(y)
+    delta = delta_last = first(dy) #median(dy)
+    for iter in 1:10
+        # minimize ∑ 1/2 * (yᵢ - δ * nᵢ)²
+        Σn = sum(yi -> round(Int, yi / delta), y)
+        delta = Σy / Σn
+        if abs(delta - delta_last) < tol
+            @info "[iter=$iter] converged" delta err = mean(@. abs(y - round(Int, y / delta) * delta)) / ymax
+            break
+        end
+        delta_last = delta
+    end
+    return delta
+
+    #=
+    delta = T(NaN)
+    best_discreteness = T(Inf)
+    for d in dy
+        discreteness = maximum(y) do yi
+            ni = round(Int, yi / d)
+            return abs(yi - ni * d)
+        end
+        if discreteness < best_discreteness
+            delta = d
+            best_discreteness = discreteness
+        end
+    end
+    !isfinite(delta) && return T(NaN)
+    # return delta
+    @show best_discreteness / maximum(abs, y)
+    delta = sum(y) / sum(@. round(Int, y / delta))
+    discreteness = maximum(y) do yi
+        ni = round(Int, yi / delta)
+        return abs(yi - ni * delta)
+    end
+    @show discreteness / maximum(abs, y)
+    return delta
+    =#
+
+    # ymax = max(abs(first(y)), abs(last(y)))
+    # iszero(ymax) && return T(NaN)
+    # minimum(abs, diff(y))
+end
+=#
+
 ####
 #### Linear algebra utils
 ####
@@ -702,3 +797,75 @@ function mock_load_image()
         end
     end
 end
+
+#=
+function mock_nnls()
+    image, t2maps, t2dist, t2part = mock_T2_pipeline(; MatrixSize = (1, 1, 1), Reg = "lcurve", SaveRegParam = true, SaveNNLSBasis = true, Silent = true)
+
+    A = t2maps["decaybasis"][1, 1, 1, :, :]
+    b = image[1, 1, 1, :]
+    x = t2dist[1, 1, 1, :]
+    μ = t2maps["mu"][1, 1, 1, 1]
+
+    # Main.heatmap(A) |> display
+    # Main.lineplot(x) |> display
+    # Main.lineplot(b) |> display
+
+    x2 = lsqnonneg_tikh(A, b, μ)
+    @assert maximum(abs, x - x2) == 0
+
+    r = zero(b)
+    function fg!(x, dx)
+        copyto!(r, b)
+        mul!(r, A, x, 1.0, -1.0) # r = A * x - b
+        if length(dx) > 0
+            copyto!(dx, x)
+            mul!(dx, A', r, 1.0, μ^2) # dx = A' * r + μ^2 * x
+        end
+        return (sum(abs2, r) + μ^2 * sum(abs2, x)) / 2
+    end
+
+    alg                 = :LD_LBFGS # local, first-order (rough ranking: [:LD_MMA, :LD_SLSQP, :LD_LBFGS, :LD_CCSAQ, :LD_AUGLAG])
+    opt                 = NLopt.Opt(alg, length(x))
+    opt.lower_bounds    = zeros(length(x))
+    opt.upper_bounds    = fill(Inf, length(x))
+    opt.xtol_abs        = 1e-12
+    opt.xtol_rel        = 1e-12
+    opt.ftol_abs        = 0.0
+    opt.ftol_rel        = 0.0
+    opt.min_objective   = fg!
+    minf, minx, ret   = NLopt.optimize(opt, zero(x))
+
+    # Main.lineplot(x) |> display
+    # Main.lineplot(minx) |> display
+
+    work = lsqnonneg_tikh_work(A, b)
+    Main.@be(lsqnonneg_tikh!(work, μ)) |> display
+    Main.@be((zero(x), zero(x)), fg!(_...)) |> display
+    Main.@be(zero(x), NLopt.optimize!(opt, _)) |> display
+
+    @show maximum(abs, x - minx)
+end
+
+function test_nlopt()
+    function fg!(x, grad)
+        if length(grad) > 0
+            grad .= sin.(x) .* cos.(x)
+            loss = sum(abs2 ∘ sin, x) / 2
+        end
+        @info "NLopt status:" x=(x...,) grad=(grad...,) loss
+        return loss
+    end
+    x = [-2.0, 1.0]
+    alg               = :LD_LBFGS # local, first-order (rough ranking: [:LD_MMA, :LD_SLSQP, :LD_LBFGS, :LD_CCSAQ, :LD_AUGLAG])
+    opt               = NLopt.Opt(alg, length(x))
+    opt.lower_bounds  = fill(-Inf, length(x))
+    opt.upper_bounds  = fill(Inf, length(x))
+    opt.xtol_abs      = 1e-12
+    opt.xtol_rel      = 1e-12
+    opt.ftol_abs      = 0.0
+    opt.ftol_rel      = 0.0
+    opt.min_objective = fg!
+    return minf, minx, ret = NLopt.optimize(opt, x)
+end
+=#
