@@ -11,3 +11,8 @@
 Manifest.toml
 results
 *.log
+/bench/cli/results
+/bench/cli/settings
+/test/interactive/compare/envs
+/test/interactive/compare/output
+/test/interactive/compare/settings
