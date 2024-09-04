@@ -69,6 +69,24 @@ end
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = @views UpperTriangular(work.A[1:ncomponents(work), 1:ncomponents(work)])
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = choleskyfactor(work, Val(:U))'
 
+function Base.show(io::IO, ::MIME"text/plain", work::NNLSWorkspace)
+    (; A, b, x, w, zz, idx, invidx, diag, rnorm, mode, nsetp) = work
+    m, n = size(A)
+    println(io, "NNLSWorkspace(m = $m, n = $n)")
+    println(io, "  A        :: $(typeof(A)) size $(size(A))")
+    println(io, "  b        :: $(typeof(b)) size $(size(b))")
+    println(io, "  x        :: $(typeof(x)) size $(size(x))")
+    println(io, "  w        :: $(typeof(w)) size $(size(w))")
+    println(io, "  zz       :: $(typeof(zz)) size $(size(zz))")
+    println(io, "  idx      :: $(typeof(idx)) size $(size(idx))")
+    println(io, "  invidx   :: $(typeof(invidx)) size $(size(invidx))")
+    println(io, "  diag     :: $(typeof(diag)) size $(size(diag))")
+    println(io, "  rnorm[]  :: $(typeof(rnorm[])) = $(rnorm[])")
+    println(io, "  mode[]   :: $(typeof(mode[])) = $(mode[])")
+    println(io, "  nsetp[]  :: $(typeof(nsetp[])) = $(nsetp[])")
+    return nothing
+end
+
 function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
     @assert size(b) == (m,)

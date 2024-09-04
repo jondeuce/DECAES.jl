@@ -24,12 +24,8 @@ using NIfTI: NIfTI
 using NLopt: NLopt
 using ParXRec: ParXRec
 using Parameters: Parameters, @with_kw, @with_kw_noshow
-# using PolynomialRoots: PolynomialRoots
 using PrecompileTools: PrecompileTools, @compile_workload, @setup_workload
 using ProgressMeter: ProgressMeter, Progress, BarGlyphs
-# using Roots: Roots
-# using SLEEFPirates: SLEEFPirates
-# using SIMD: SIMD, FloatingTypes, Vec, shufflevector
 using Scratch: Scratch, @get_scratch!, get_scratch!
 using SpecialFunctions: SpecialFunctions, erfc, erfinv
 using StaticArrays: StaticArrays, MVector, SA, SArray, SMatrix, SVector
