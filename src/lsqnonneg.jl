@@ -1078,7 +1078,6 @@ struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0
 end
 function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
-    @assert m >= n "Generalized Cross-Validation (GCV) regularization requires at least as many rows as columns, but got m = $m < n = $n"
     svd_work = SVDValsWorkspace(A) # workspace for computing singular values
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)

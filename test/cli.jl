@@ -123,9 +123,6 @@ function image_params!(paramdict)
     get!(paramdict, :MatrixSize, (2, 2, 2))
     get!(paramdict, :nTE, rand(4:64))
     get!(paramdict, :nT2, rand(4:64))
-    if get(paramdict, :Reg, "") == "gcv"
-        paramdict[:nT2] = min(paramdict[:nT2], paramdict[:nTE]) # GCV requires nT2 <= nTE
-    end
     return paramdict
 end
 

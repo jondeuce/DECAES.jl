@@ -404,14 +404,14 @@ function workerpool(work!, allocate, inputs::Channel; ninputs::Int, ntasks::Int 
         if ntasks == 1
             consumer()
         else
-            @sync for _ in 1:ntasks
+            @sync for i in 1:ntasks
                 Threads.@spawn consumer()
             end
         end
     else
         @sync begin
             counter = Threads.Atomic{Int}(0)
-            for _ in 1:ntasks-1
+            for i in 2:ntasks
                 Threads.@spawn consumer() do
                     return counter[] += 1
                 end
@@ -430,6 +430,8 @@ function workerpool(work!, allocate, inputs::Channel; ninputs::Int, ntasks::Int 
             ProgressMeter.finish!(progmeter)
         end
     end
+
+    return nothing
 end
 
 function workerpool(work!, allocate, inputs, args...; kwargs...)

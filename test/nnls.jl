@@ -428,9 +428,6 @@ end
 end
 
 function test_lsqnonneg_gcv(m, n)
-    # GCV requires m >= n
-    m < n && return
-
     A, b = rand_NNLS_data(m, n)
     work = DECAES.NNLSGCVRegProblem(A, b)
     logμ = randn()
@@ -453,7 +450,7 @@ function test_lsqnonneg_gcv(m, n)
     # Test GCV gradient function
     _gcv, ∇gcv = DECAES.gcv_and_∇gcv!(work, logμ) # gcv_and_∇gcv! calls `DECAES.solve!` internally
     @test _gcv == gcv # primals should match exactly
-    @test ∇gcv ≈ ∇logfinitediff(_logμ -> DECAES.gcv!(work, _logμ), logμ, 1e-6) atol = 1e-2 rtol = 1e-2
+    @test ∇gcv ≈ ∇logfinitediff(_logμ -> DECAES.gcv!(work, _logμ), logμ, 1e-6) atol = 1e-3 rtol = 1e-3
 
     # GCV minimization methods shouldn't fail for any m, n
     @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :brent).mu)
