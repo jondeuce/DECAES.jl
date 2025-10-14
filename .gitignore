@@ -8,7 +8,7 @@
 /docs/site/
 /bench/main/results*
 /bench/main/settings*
-Manifest.toml
+Manifest*.toml
 results
 *.log
 /bench/cli/results

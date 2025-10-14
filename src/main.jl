@@ -277,7 +277,7 @@ add_arg_table!(CLI_SETTINGS,
 )
 
 """
-    main(command_line_args = ARGS)
+    main(command_line_args::Vector{String} = ARGS)
 
 Entry point function for command line interface, parsing the command line arguments `ARGS` and subsequently calling one or both of `T2mapSEcorr` and `T2partSEcorr` with the parsed settings.
 See the [Arguments](@ref) section for available options.
@@ -287,7 +287,9 @@ See also:
   - [`T2mapSEcorr`](@ref)
   - [`T2partSEcorr`](@ref)
 """
-function main(command_line_args::Vector{String} = ARGS)
+main(args::Vector{String} = ARGS) = run_main(args)
+
+function run_main(command_line_args::Vector{String})
 
     # Parse command line arguments
     opts = parse_cli(command_line_args)
@@ -317,7 +319,7 @@ function main(command_line_args::Vector{String} = ARGS)
             suppress_logfile = opts[:dry],
         ) do
             try
-                main(file_info, opts)
+                run_main(file_info, opts)
             catch e
                 @warn "Error during processing of file: $(file_info[:inputfile])"
                 @warn sprint(showerror, e, catch_backtrace())
@@ -328,7 +330,7 @@ function main(command_line_args::Vector{String} = ARGS)
     return nothing
 end
 
-function main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
+function run_main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
 
     # Starting message/starting time
     t_start = tic()
