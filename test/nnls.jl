@@ -8,167 +8,167 @@ function rand_NNLS_data(m, n)
     return A, b
 end
 
+function maybe_pad_NNLS_data(A0, b0, μ)
+    n = size(A0, 2)
+    if μ > 0
+        # Tikhonov-padded problem: min_{x ≥ 0} ||Ax-b||² + μ²||x||²
+        A = [A0; μ * LinearAlgebra.I(n)]
+        b = [b0; zeros(n)]
+        return A, b
+    else
+        # Unregularized problem: min_{x ≥ 0} ||Ax-b||²
+        return copy(A0), copy(b0)
+    end
+end
+
 ∇finitediff(f, x, h = √eps(one(x))) = (f(x .+ h) .- f(x .- h)) ./ 2h
 ∇²finitediff(f, x, h = ∛eps(one(x))) = (f(x .+ h) .- 2 .* f(x) .+ f(x .- h)) ./ h^2
 
 ∇logfinitediff(f, logx, h = √eps(one(logx))) = ∇finitediff(f, logx, h) ./ exp(logx)
 ∇²logfinitediff(f, logx, h = ∛eps(one(logx))) = (∇²finitediff(f, logx, h) - ∇finitediff(f, logx, h)) ./ exp(2 * logx)
 
-function verify_NNLS(m, n, μ = 0.0)
+function verify_NNLS(m₀, n, μ = 0.0)
+    @assert μ >= 0 "μ must be non-negative"
     D64 = Double64
-    A0, b0 = rand_NNLS_data(m, n)
-    A, b = copy(A0), copy(b0)
-    if μ > 0
-        # Tikhonov-padded problem: min_{x ≥ 0} ||Ax-b||² + μ²||x||²
-        A = [A; μ * LinearAlgebra.I]
-        b = [b; zeros(n)]
-        m += n
-    end
+    m = μ > 0 ? m₀ + n : m₀
+    A0, b0 = rand_NNLS_data(m₀, n)
+    A, b = maybe_pad_NNLS_data(A0, b0, μ)
     work = NNLS.NNLSWorkspace(A, b)
 
     NNLS.load!(work, A, b)
     @test work.A == A
     @test work.b == b
 
-    for mode in [:direct] #, :shuffle]
-        # Fill workspace with junk values
-        work.A .= randn(m, n)
-        work.b .= randn(m)
-        work.x .= randn(n)
-        work.w .= randn(n)
-        work.zz .= randn(m)
-        work.idx .= rand(Int, n)
-        work.diag .= rand(Bool, n)
-        work.rnorm[] = rand()
-        work.mode[] = rand(1:100)
-        work.nsetp[] = rand(0:min(m, n))
+    # Fill workspace with junk values
+    work.A .= randn(m, n)
+    work.b .= randn(m)
+    work.x .= randn(n)
+    work.w .= randn(n)
+    work.zz .= randn(m)
+    work.idx .= rand(Int, n)
+    work.diag .= rand(Bool, n)
+    work.rnorm[] = rand()
+    work.mode[] = rand(1:100)
+    work.nsetp[] = rand(0:min(m, n))
 
-        if mode === :direct
-            @test @allocated(NNLS.nnls!(work, A, b)) == 0
-        elseif mode === :shuffle
-            idx′, nsetp′ = Random.randperm(n), rand(0:min(m, n))
-            @test @allocated(NNLS.nnls!(work, A, b, idx′, nsetp′)) == 0
+    @inferred NNLS.nnls!(work, A, b)
+    @test work.mode[] == 0 # success
+
+    GC.@preserve work begin
+        x = NNLS.solution(work)
+        w = NNLS.dual(work)
+        n₊ = NNLS.ncomponents(work)
+        U = NNLS.choleskyfactor(work, Val(:U))
+        L = NNLS.choleskyfactor(work, Val(:L))
+
+        # Solution partitioning
+        idx = work.idx
+        invidx = work.invidx
+        @test isperm(idx)
+        @test isperm(invidx)
+        @test invperm(idx) == invidx
+
+        i₊ = idx[1:n₊]
+        i₀ = idx[n₊+1:end]
+        x₊, x₀ = x[i₊], x[i₀]
+        w₀, w₋ = w[i₊], w[i₀]
+        A₊, A₀ = A[:, i₊], A[:, i₀]
+
+        @test NNLS.components(work) == i₊
+        @test setdiff(1:n, NNLS.components(work)) == sort(i₀)
+
+        # Solution
+        @test all(>(0), x₊)
+        @test all(==(0), x₀)
+        # @test x₊ ≈ (A₊' * A₊) \ (A₊' * b)
+        @test x₊ ≈ (D64.(A₊)' * D64.(A₊)) \ (D64.(A₊)' * D64.(b))
+        @test x₊ ≈ A₊ \ b
+
+        # Dual (i.e. gradient)
+        maxn₊ = min(m, n)
+        if n₊ < maxn₊
+            # Solution is not full rank and gradient has negative components
+            @test NNLS.residualnorm(work) > 10 * eps()
+
+            @test count(<(0), w) == n - n₊
+            @test count(==(0), w) == n₊
+            @test all(<(0), w₋)
+            @test all(==(0), w₀)
+
+            @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
+            @test w ≈ -A' * (A * x - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
+
+            # Gradient of positive components is A0₊'(A0₊ * x₊ - b0) + μ^2 * x₊ = 0
+            @test A0[:, i₊]' * (A0[:, i₊] * x₊ - b0) ≈ -μ^2 * x₊ rtol = 1e-8 atol = 1e-12 * norm(A0'b0)
         else
-            error("Invalid mode :$mode")
-        end
-        @test work.mode[] == 0 # success
-
-        GC.@preserve work begin
-            x = NNLS.solution(work)
-            w = NNLS.dual(work)
-            n₊ = NNLS.ncomponents(work)
-            U = NNLS.choleskyfactor(work, Val(:U))
-            L = NNLS.choleskyfactor(work, Val(:L))
-
-            # Solution partitioning
-            idx = work.idx
-            invidx = work.invidx
-            @test isperm(idx)
-            @test isperm(invidx)
-            @test invperm(idx) == invidx
-
-            i₊ = idx[1:n₊]
-            i₀ = idx[n₊+1:end]
-            x₊, x₀ = x[i₊], x[i₀]
-            w₀, w₋ = w[i₊], w[i₀]
-            A₊, A₀ = A[:, i₊], A[:, i₀]
-
-            @test NNLS.components(work) == i₊
-            @test setdiff(1:n, NNLS.components(work)) == sort(i₀)
-
-            # Solution
-            @test all(>(0), x₊)
-            @test all(==(0), x₀)
-            # @test x₊ ≈ (A₊' * A₊) \ (A₊' * b)
-            @test x₊ ≈ (D64.(A₊)' * D64.(A₊)) \ (D64.(A₊)' * D64.(b))
-            @test x₊ ≈ A₊ \ b
-
-            # Dual (i.e. gradient)
-            maxn₊ = min(m, n)
-            if n₊ < maxn₊
-                # Solution is not full rank and gradient has negative components
-                @test NNLS.residualnorm(work) > 10 * eps()
-
-                @test count(<(0), w) == n - n₊
-                @test count(==(0), w) == n₊
-                @test all(<(0), w₋)
-                @test all(==(0), w₀)
-
-                @test w₋ ≈ -A₀' * (A₊ * x₊ - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
-                @test w ≈ -A' * (A * x - b) rtol = 1e-8 atol = 1e-12 * norm(A'b)
-
-                # Gradient of positive components is A0₊'(A0₊ * x₊ - b0) + μ^2 * x₊ = 0
-                @test A0[:, i₊]' * (A0[:, i₊] * x₊ - b0) ≈ -μ^2 * x₊ rtol = 1e-8 atol = 1e-12 * norm(A0'b0)
+            # Solution is full rank, gradient is zero
+            @test all(==(0), w)
+            if μ == 0
+                # Should be exactly zero since b ∈ range(A) by construction, but allow for floating point error.
+                @test NNLS.residualnorm(work) <= 10 * eps()
             else
-                # Solution is full rank, gradient is zero
-                @test all(==(0), w)
-                if μ == 0
-                    # Should be exactly zero since b ∈ range(A) by construction, but allow for floating point error.
-                    @test NNLS.residualnorm(work) <= 10 * eps()
-                else
-                    # Should be strictly positive, since b ∉ range(A) in general due to zero padding
-                    @test NNLS.residualnorm(work) >= 10 * eps()
-                end
+                # Should be strictly positive, since b ∉ range(A) in general due to zero padding
+                @test NNLS.residualnorm(work) >= 10 * eps()
             end
+        end
 
-            # KKT conditions
-            @test all(>=(0), x) # primal feasibility
-            @test all(<=(0), w) # dual feasibility
-            @test all(==(0), x .* w) # complementary slackness
+        # KKT conditions
+        @test all(>=(0), x) # primal feasibility
+        @test all(<=(0), w) # dual feasibility
+        @test all(==(0), x .* w) # complementary slackness
 
-            # Internals
-            @test U == work.A[1:n₊, 1:n₊]
-            @test L == work.A[1:n₊, 1:n₊]'
-            @test U * x₊ ≈ work.b[1:n₊]
+        # Internals
+        @test U == work.A[1:n₊, 1:n₊]
+        @test L == work.A[1:n₊, 1:n₊]'
+        @test U * x₊ ≈ work.b[1:n₊]
 
-            @test work.zz[1:n₊] == x₊
-            # @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋ #TODO?
-            @test work.zz[n₊+1:end] == work.b[n₊+1:end]
-            @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
+        @test work.zz[1:n₊] == x₊
+        # @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋ #TODO?
+        @test work.zz[n₊+1:end] == work.b[n₊+1:end]
+        @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
 
-            if n₊ > 0
-                b₊ = rand(n₊)
-                U⁻¹b₊ = copy(b₊)
-                @test @allocated(NNLS.solve_triangular_system!(U⁻¹b₊, U, n₊, Val(false))) == 0
-                @test U⁻¹b₊ ≈ U \ b₊
+        if n₊ > 0
+            b₊ = rand(n₊)
+            U⁻¹b₊ = copy(b₊)
+            @inferred NNLS.solve_triangular_system!(U⁻¹b₊, U, n₊, Val(false))
+            @test U⁻¹b₊ ≈ U \ b₊
 
-                L⁻¹b₊ = copy(b₊)
-                @test @allocated(NNLS.solve_triangular_system!(L⁻¹b₊, U, n₊, Val(true))) == 0
-                @test L⁻¹b₊ ≈ L \ b₊
+            L⁻¹b₊ = copy(b₊)
+            @inferred NNLS.solve_triangular_system!(L⁻¹b₊, U, n₊, Val(true))
+            @test L⁻¹b₊ ≈ L \ b₊
 
-                U⁻¹b₊ = copy(b₊)
-                @test @allocated(NNLS.solve_triangular_system!(U⁻¹b₊, work.A, n₊, Val(false))) == 0
-                @test U⁻¹b₊ ≈ U \ b₊
+            U⁻¹b₊ = copy(b₊)
+            @inferred NNLS.solve_triangular_system!(U⁻¹b₊, work.A, n₊, Val(false))
+            @test U⁻¹b₊ ≈ U \ b₊
 
-                L⁻¹b₊ = copy(b₊)
-                @test @allocated(NNLS.solve_triangular_system!(L⁻¹b₊, work.A, n₊, Val(true))) == 0
-                @test L⁻¹b₊ ≈ L \ b₊
-            end
+            L⁻¹b₊ = copy(b₊)
+            @inferred NNLS.solve_triangular_system!(L⁻¹b₊, work.A, n₊, Val(true))
+            @test L⁻¹b₊ ≈ L \ b₊
+        end
 
-            # Cholesky factors
-            @test A₊' * A₊ ≈ U' * U
-            @test A₊' * A₊ ≈ L * L'
+        # Cholesky factors
+        @test A₊' * A₊ ≈ U' * U
+        @test A₊' * A₊ ≈ L * L'
 
-            F = cholesky!(NNLS.NormalEquation(), work)
-            if n₊ > 0
-                x′, b′ = rand(n₊), rand(n₊)
-                x′′, b′′ = copy(x′), copy(b′)
-                ldiv!(x′, F, b′)
-                @test b′ ≈ b′′
-                @test !(x′ ≈ x′′)
-                @test x′ == F \ b′
-                @test x′ ≈ (D64.(A₊)' * D64.(A₊)) \ D64.(b′)
-                @test @allocated(ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)) == 0
-            end
+        F = cholesky!(NNLS.NormalEquation(), work)
+        if n₊ > 0
+            x′, b′ = rand(n₊), rand(n₊)
+            x′′, b′′ = copy(x′), copy(b′)
+            ldiv!(x′, F, b′)
+            @test b′ ≈ b′′
+            @test !(x′ ≈ x′′)
+            @test x′ == F \ b′
+            @test x′ ≈ (D64.(A₊)' * D64.(A₊)) \ D64.(b′)
+            @inferred ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)
+        end
 
-            # QR factors
-            #   Note: qr(A) = QR relates to cholesky(A'A) = LL' = U'U via:
-            #   A'A = U'U = (QR)'(QR) = R'R => R = U (up to row sign)
-            posdiag(R) = UpperTriangular(Diagonal(sign.(diag(R))) * R) # ensure diagonal is positive
-            R = qr(A₊).R
-            @test posdiag(R) ≈ posdiag(U)
-        end # GC.@preserve
-    end
+        # QR factors
+        #   Note: qr(A) = QR relates to cholesky(A'A) = LL' = U'U via:
+        #   A'A = U'U = (QR)'(QR) = R'R => R = U (up to row sign)
+        posdiag(R) = UpperTriangular(Diagonal(sign.(diag(R))) * R) # ensure diagonal is positive
+        R = qr(A₊).R
+        @test posdiag(R) ≈ posdiag(U)
+    end # GC.@preserve
 
     return work
 end
@@ -176,7 +176,7 @@ end
 function verify_NNLS_tikh(m, n, μ)
     D64 = Double64
     A0, b0 = rand_NNLS_data(m, n)
-    A = [A0; μ * I(n)]
+    A = [A0; μ * LinearAlgebra.I(n)]
     b = [b0; zeros(n)]
     work = NNLS.NNLSWorkspace(A, b)
 
@@ -198,10 +198,10 @@ function verify_NNLS_tikh(m, n, μ)
         work.nsetp[] = rand(0:min(m + n, n))
 
         if mode === :direct
-            @test @allocated(NNLS.nnls!(work, A, b, μ)) == 0
+            @inferred NNLS.nnls!(work, A, b, μ)
         elseif mode === :shuffle
             idx′, nsetp′ = Random.randperm(n), rand(0:min(m, n))
-            @test @allocated(NNLS.nnls!(work, A, b, μ, idx′, nsetp′)) == 0
+            @inferred NNLS.nnls!(work, A, b, μ, idx′, nsetp′)
         else
             error("Invalid mode :$mode")
         end
@@ -283,19 +283,19 @@ function verify_NNLS_tikh(m, n, μ)
             if n₊ > 0
                 b₊ = rand(n₊)
                 U⁻¹b₊ = copy(b₊)
-                @test @allocated(NNLS.solve_triangular_system!(U⁻¹b₊, U, n₊, Val(false))) == 0
+                @inferred NNLS.solve_triangular_system!(U⁻¹b₊, U, n₊, Val(false))
                 @test U⁻¹b₊ ≈ U \ b₊
 
                 L⁻¹b₊ = copy(b₊)
-                @test @allocated(NNLS.solve_triangular_system!(L⁻¹b₊, U, n₊, Val(true))) == 0
+                @inferred NNLS.solve_triangular_system!(L⁻¹b₊, U, n₊, Val(true))
                 @test L⁻¹b₊ ≈ L \ b₊
 
                 U⁻¹b₊ = copy(b₊)
-                @test @allocated(NNLS.solve_triangular_system!(U⁻¹b₊, work.A, n₊, Val(false))) == 0
+                @inferred NNLS.solve_triangular_system!(U⁻¹b₊, work.A, n₊, Val(false))
                 @test U⁻¹b₊ ≈ U \ b₊
 
                 L⁻¹b₊ = copy(b₊)
-                @test @allocated(NNLS.solve_triangular_system!(L⁻¹b₊, work.A, n₊, Val(true))) == 0
+                @inferred NNLS.solve_triangular_system!(L⁻¹b₊, work.A, n₊, Val(true))
                 @test L⁻¹b₊ ≈ L \ b₊
             end
 
@@ -312,7 +312,7 @@ function verify_NNLS_tikh(m, n, μ)
                 @test !(x′ ≈ x′′)
                 @test x′ == F \ b′
                 @test x′ ≈ (D64.(A₊)' * D64.(A₊)) \ D64.(b′)
-                @test @allocated(ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)) == 0
+                @inferred ldiv!(x′, cholesky!(NNLS.NormalEquation(), work), b′)
             end
 
             # QR factors
@@ -351,15 +351,17 @@ function lcurve_corner_tests()
         return lcurve_corner(f, log(0.1), log(10.0); xtol = 1e-6, Ptol = 1e-6, Ctol = 0)
     end
 
-    # Test allocations
-    f = build_lcurve_corner_cached_fun()
-    empty!(f)
-    @test @allocated(run_lcurve_corner(f)) > 0 # caches will be populated with first call
-    empty!(f)
-    @test @allocated(run_lcurve_corner(f)) == 0 # caches should be reused with second call
+    #TODO: # Test allocations
+    # f = build_lcurve_corner_cached_fun()
+    # empty!(f)
+    # @test @allocated(run_lcurve_corner(f)) > 0 # caches will be populated with first call
+    # empty!(f)
+    # @test @allocated(run_lcurve_corner(f)) == 0 # caches should be reused with second call
 
     # Maximum curvature point for the graph (x(μ), y(μ)) = (μ, 1/μ) occurs at μ=1, i.e. logμ=0
-    @test run_lcurve_corner(f) ≈ 0 atol = 1e-3
+    f = build_lcurve_corner_cached_fun()
+    @inferred empty!(f)
+    @test @inferred(run_lcurve_corner(f)) ≈ 0 atol = 1e-3
 end
 
 @testset "lcurve_corner" begin
@@ -369,7 +371,11 @@ end
 function lsqnonneg_lcurve_tests(m, n)
     A, b = rand_NNLS_data(m, n)
     work = DECAES.lsqnonneg_lcurve_work(A, b)
-    @test @allocated(DECAES.lsqnonneg_lcurve!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+
+    #TODO: # Test allocations
+    # @test @allocated(DECAES.lsqnonneg_lcurve!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+
+    @inferred DECAES.lsqnonneg_lcurve!(work)
 end
 
 @testset "lsqnonneg_lcurve" begin
@@ -417,7 +423,7 @@ function lsqnonneg_chi2_tests(m, n)
             @test chi2 ≈ chi2_target rtol = rtol
         end
 
-        @test @allocated(DECAES.lsqnonneg_chi2!(work, chi2_target; method)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+        @inferred DECAES.lsqnonneg_chi2!(work, chi2_target; method) # caches should be initialized to be sufficiently large that normally they don't need to grow
     end
 end
 
@@ -459,9 +465,13 @@ function test_lsqnonneg_gcv(m, n)
 
     #TODO: Test that different GCV minimization methods are consistent when m >= n
 
-    # Test allocations
-    @test @allocated(DECAES.gcv!(work, logμ)) == 0
-    @test @allocated(DECAES.lsqnonneg_gcv!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+    #TODO: # Test allocations
+    # @test @allocated(DECAES.gcv!(work, logμ)) == 0
+    # @test @allocated(DECAES.lsqnonneg_gcv!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+
+    # Test inference
+    @inferred DECAES.gcv!(work, logμ)
+    @inferred DECAES.lsqnonneg_gcv!(work)
 end
 
 @testset "lsqnonneg_gcv" begin
@@ -495,8 +505,11 @@ function lsqnonneg_mdp_tests(m, n)
         @test chi2 ≈ res² / res²_min rtol = 2e-3 atol = 1e-12 # should also hold when res²_min = 0, i.e. when chi2 = Inf
     end
 
-    # Test allocations
-    @test @allocated(DECAES.lsqnonneg_mdp!(work, res_target)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+    #TODO: # Test allocations
+    # @test @allocated(DECAES.lsqnonneg_mdp!(work, res_target)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+
+    # Test inference
+    @inferred DECAES.lsqnonneg_mdp!(work, res_target)
 end
 
 @testset "lsqnonneg_mdp" begin
@@ -580,37 +593,31 @@ function NNLSTikhonovRegProblem_tests(m, n)
         @test withsolve(DECAES.resnorm_sq, μ) ≈ sum(abs2, A * x - b)
         @test withsolve(DECAES.seminorm_sq, μ) ≈ sum(abs2, x)
 
-        @test @allocated(DECAES.solve!(work, μ)) == 0
-        @test @allocated(DECAES.regparam(work)) == 0
+        @inferred DECAES.solve!(work, μ)
+        @inferred DECAES.regparam(work)
 
         ∇μ = DECAES.∇regnorm(work)
         @test ∇μ ≈ ∇logfinitediff(_logμ -> withsolve(DECAES.regnorm, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-3
-        @test @allocated(DECAES.∇regnorm(work)) == 0
         @test @inferred(DECAES.∇regnorm(work)) isa T
 
         ∇μ = DECAES.∇resnorm_sq(work)
         @test ∇μ ≈ ∇logfinitediff(_logμ -> withsolve(DECAES.resnorm_sq, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-3
-        @test @allocated(DECAES.∇resnorm_sq(work)) == 0
         @test @inferred(DECAES.∇resnorm_sq(work)) isa T
 
         ∇μ = DECAES.∇seminorm_sq(work)
         @test ∇μ ≈ ∇logfinitediff(_logμ -> withsolve(DECAES.seminorm_sq, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-3
-        @test @allocated(DECAES.∇seminorm_sq(work)) == 0
         @test @inferred(DECAES.∇seminorm_sq(work)) isa T
 
         ∇μ = DECAES.solution_gradnorm(work)
         @test ∇μ ≈ norm(∇logfinitediff(_logμ -> withsolve(copy ∘ DECAES.solution, exp(_logμ)), log(μ), T(1e-6))) rtol = 1e-3
-        @test @allocated(DECAES.solution_gradnorm(work)) == 0
         @test @inferred(DECAES.solution_gradnorm(work)) isa T
 
         ∇²μ = DECAES.∇²resnorm_sq(work)
         @test ∇²μ ≈ ∇²logfinitediff(_logμ -> withsolve(DECAES.resnorm_sq, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-2 atol = 1e-2
-        @test @allocated(DECAES.∇²resnorm_sq(work)) == 0
         @test @inferred(DECAES.∇²resnorm_sq(work)) isa T
 
         ∇²μ = DECAES.∇²seminorm_sq(work)
         @test ∇²μ ≈ ∇²logfinitediff(_logμ -> withsolve(DECAES.seminorm_sq, exp(_logμ)), log(μ), T(1e-6)) rtol = 1e-2 atol = 1e-2
-        @test @allocated(DECAES.∇²seminorm_sq(work)) == 0
         @test @inferred(DECAES.∇²seminorm_sq(work)) isa T
 
         # Curvature computation

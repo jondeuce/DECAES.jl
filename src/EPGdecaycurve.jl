@@ -161,12 +161,11 @@ EPGWorkCacheDict(ETL) = EPGWorkCacheDict(ETL, Dict{DataType, Any}())
 @inline Base.iterate(caches::EPGWorkCacheDict, state...) = Base.iterate(caches.dict, state...)
 
 @inline function Base.getindex(caches::EPGWorkCacheDict{ETL}, ::Type{T}) where {ETL, T}
-    R = cachetype(caches, T)
+    R = EPGWork_ReIm_DualVector_Split_Dynamic{T, ETL, Vector{SVector{3, T}}, Vector{T}}
     get!(caches.dict, T) do
         return EPGWork_ReIm_DualVector_Split_Dynamic(T, caches.ETL)::R
     end::R
 end
-@generated cachetype(::EPGWorkCacheDict{ETL}, ::Type{T}) where {T, ETL} = :($EPGWork_ReIm_DualVector_Split_Dynamic{$T, $ETL, Vector{$SVector{3, $T}}, Vector{$T}})
 
 struct EPGFunctor{T, ETL, Fs, TC <: EPGWorkCacheDict{ETL}, Tθ <: EPGParameterization{T, ETL}}
     θ::Tθ

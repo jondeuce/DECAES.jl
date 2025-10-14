@@ -209,9 +209,10 @@ function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps{T}, dist::T2Dist
             max_signal = bᵢ > max_signal ? bᵢ : max_signal
             decay_data[i] = bᵢ
         end
-        @simd for i in 1:opts.nTE
-            # Note: all processed voxels have `signal[1] > opts.Threshold >= 0`, therefore `max_signal > 0`
-            decay_data[i] /= max_signal
+        if max_signal > 0
+            @simd for i in 1:opts.nTE
+                decay_data[i] /= max_signal
+            end
         end
         decay_scale[] = max_signal
     end

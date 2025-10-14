@@ -233,7 +233,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@inline function construct_householder!(x::AbstractVector{T}) where {T}
+function construct_householder!(x::AbstractVector{T}) where {T}
     if length(x) <= 1
         return zero(T)
     end
@@ -438,7 +438,7 @@ end
 """
 COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W().
 """
-@inline function compute_dual!(
+function compute_dual!(
     w::AbstractVector{T},
     A::AbstractMatrix{T},
     b::AbstractVector{T},
@@ -503,7 +503,7 @@ Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
 "SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
 Revised FEB 1995 to accompany reprinting of the book by SIAM.
 """
-@inline function solve_triangular_system!(
+function solve_triangular_system!(
     z::AbstractVector{T},
     A::AbstractMatrix{T},
     n::Int = size(A, 2),
@@ -538,7 +538,7 @@ Revised FEB 1995 to accompany reprinting of the book by SIAM.
     return z
 end
 
-@inline function largest_positive_dual(
+function largest_positive_dual(
     w::AbstractVector{T},
     j1::Int,
 ) where {T}

@@ -49,7 +49,7 @@ See also:
 
     "First echo intensity cutoff for empty voxels."
     Threshold::T = 0.0
-    @assert Threshold >= 0.0 "First echo signal threshold must be non-negative, but Threshold = $Threshold."
+    @assert Threshold >= 0.0 || Threshold == -Inf "First echo signal threshold must be non-negative or -Inf to force processing of every voxel, but Threshold = $Threshold."
 
     "Minimum refocusing angle for flip angle optimization (Units: degrees)."
     MinRefAngle::T = 50.0 # degrees

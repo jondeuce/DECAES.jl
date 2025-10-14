@@ -88,15 +88,15 @@ end
         @test work.A !== A # should make a copy
 
         γ0 = svdvals(A)
-        γ1 = svdvals!(work)
+        γ1 = @inferred(svdvals!(work))
         @test γ0 == γ1 # should match exactly, calling same LAPACK routine
 
-        γ2 = svdvals!(work, A)
+        γ2 = @inferred(svdvals!(work, A))
         @test γ1 === γ2 # returns same internal buffer
         @test γ0 == γ2 # should match exactly, calling same LAPACK routine
 
-        @test @allocated(svdvals!(work)) == 0
-        @test @allocated(svdvals!(work, A)) == 0
+        @test @allocations(svdvals!(work)) == 0
+        @test @allocations(svdvals!(work, A)) == 0
     end
 end
 

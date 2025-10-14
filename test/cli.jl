@@ -273,7 +273,7 @@ function run_cli_tests()
         (:T2Range .=> [(16e-3, 1.8)],),
         (:TE .=> [11e-3],),
         (:Threaded .=> [true],),
-        (:Threshold .=> [1.0, Inf],), # Include non-zero and infinite (i.e. either some or all voxels skipped)
+        (:Threshold .=> [1.0, Inf, -Inf],), # Include non-zero and infinite (i.e. either some, all, or no voxels skipped)
         (:nRefAngles .=> [9, 10],), # Include even/odd
         (:nRefAnglesMin .=> [4, 7],), # Include even/odd
         (:nTE .=> [4, 5, 8, 47],), # Include even/odd, and minimum number (4)

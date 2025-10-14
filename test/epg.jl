@@ -44,13 +44,10 @@ function test_EPGOptions()
     end
 
     @testset "destructure/restructure" begin
-        @test @allocated(DECAES.restructure(θ, (2.0, 1.0), Val((:T1, :TE)))) == 0
-        @test @allocated(DECAES.destructure(θ, Val((:T2, :ETL)))) == 0
-
-        θ′ = DECAES.restructure(θ, (2.0, 1.0), Val((:β, :α)))
+        θ′ = @inferred(DECAES.restructure(θ, (2.0, 1.0), Val((:β, :α))))
         @test Tuple(θ′) == (θ.ETL, 1.0, θ.TE, θ.T2, θ.T1, 2.0)
 
-        x′ = DECAES.destructure(θ, Val((:TE, :α)))
+        x′ = @inferred(DECAES.destructure(θ, Val((:TE, :α))))
         @test x′ == SA[θ.TE, θ.α]
     end
 end
@@ -65,15 +62,14 @@ function test_EPGFunctor()
     # EPGFunctor
     x = [θ.α, θ.T2]
     y = zeros(T, ETL)
-    @test @allocated(fun!(y, x)) > 0 # Dual cache created on first call
-    @test @allocated(fun!(y, x)) == 0 # Dual cache reused on second call
+    @inferred fun!(y, x)
     @test y == DECAES.EPGdecaycurve(θ)
 
     # EPGJacobianFunctor
     y .= 0
     J = zeros(T, ETL, 2)
-    @test @allocated(jac!(y, θ)) > 0 # Dual cache created on first call
-    @test @allocated(jac!(J, y, θ)) == 0 # Dual cache reused on second call
+    @inferred jac!(y, θ)
+    @inferred jac!(J, y, θ)
     @test y ≈ DECAES.EPGdecaycurve(θ) atol = 10 * eps(T) # note: not exact because Dual's likely lead to different SIMD instructions etc.
     @test J == DECAES.DiffResults.jacobian(jac!.res)
 

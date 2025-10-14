@@ -516,6 +516,7 @@ end
 #### Optimizers
 ####
 
+#=
 struct ADAM{N, T}
     η::T
     β::SVector{2, T}
@@ -543,7 +544,6 @@ function update(∇::SVector{N, T}, o::ADAM{N, T}) where {N, T}
     return Δ, ADAM{N, T}(η, β, mt, vt, βp)
 end
 
-#=
 function optimize(∇f, x0::SVector{N, T}, lb::SVector{N, T}, ub::SVector{N, T}, o::ADAM{N, T}; maxiters::Int = 1, xtol_rel = T(1e-3)) where {N, T}
     x = x0
     t = inv_xform_periodic(x, lb, ub)
