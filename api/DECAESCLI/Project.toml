@@ -4,6 +4,6 @@ Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Scratch = "6c6a2e73-6563-6170-7368-637461726353"
 
 [compat]
-DECAES = "=0.6.1"
+DECAES = "0.6"
 Pkg = "1"
 Scratch = "1"

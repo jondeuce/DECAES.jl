@@ -16,7 +16,7 @@ Quick usage:
     # Call methods from the DECAES module as usual, e.g.
     DECAES.T2mapSEcorr(image, kwargs...)
 
-This version of decaes.py was written for DECAES v0.6.1-DEV.
+This version of decaes.py was written for DECAES v0.6.1.
 """
 
 import julia

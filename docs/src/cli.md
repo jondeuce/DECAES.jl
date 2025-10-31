@@ -211,7 +211,8 @@ Equivalently, add `--mask`, `/path/to/mask1.mat`, `/path/to/mask2.mat`, ...  as 
 
 !!! note
     If input images have been manually masked such that they are zero outside regions of interest, a mask need not be passed.
-    The `--Threshold` parameter of [`T2mapSEcorr`](@ref) controls a first echo intensity cutoff threshold (default value 0.0), below which voxels are automatically skipped during processing
+    The `--Threshold` parameter of [`T2mapSEcorr`](@ref) controls a first echo intensity cutoff threshold (default value 0.0), below which voxels are automatically skipped during processing.
+    The threshold must be non-negative, unless it is set to `-Inf` which forces processing of every voxel.
 
 ### [Automatic brain masking with BET](@id bet)
 
