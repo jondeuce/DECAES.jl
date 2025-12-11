@@ -606,6 +606,9 @@ function load_image(filename, ::Val{N}) where {N}
         error("Currently, only $ALLOWED_FILE_SUFFIXES_STRING files are supported")
     end
 
+    # Ensure `data` has exactly N dimensions, dropping or selecting trailing dimensions as needed
+    data = ensure_ndims(filename, data, Val(N))
+
     # Currently, the pipeline is ~twice as fast on Float64 arrays than Float32 arrays (unclear why).
     # However, the MATLAB toolbox converts images to double as well, so here we simply do the same
     sz = ntuple(i -> size(data, i), N)
@@ -614,6 +617,19 @@ function load_image(filename, ::Val{N}) where {N}
     return image
 end
 load_image(filename; ndims::Int = 4) = load_image(filename, Val(ndims))
+
+function ensure_ndims(filename, data::AbstractArray{T, D}, ::Val{N}) where {T, D, N}
+    if D < N
+        return reshape(data, ntuple(i -> (i <= D ? size(data, i) : 1), N)) # add trailing singleton dims
+    elseif D == N
+        return data # has the expected number of dimensions
+    else # D > N
+        if any(i -> size(data, i) > 1, (N+1):D)
+            @warn "Input file $filename has $D dimensions, expected $N; selecting the first $N-D volume along $(D - N == 1 ? "dimension" : "dimensions") $(join((N+1):D, ","))."
+        end
+        return view(data, ntuple(i -> (i <= N ? Colon() : 1), D)...) # select first volume along trailing dims
+    end
+end
 
 function try_load_B1mapfile!(maps::T2Maps, B1mapfile::String)
     try
