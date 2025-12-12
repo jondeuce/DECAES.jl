@@ -4,9 +4,9 @@
 
 # Element matrix for refocusing pulse with angle α (in degrees); acts on the magnetization state vector (MPSV)
 @inline element_flipmat(α::T) where {T} = SA{Complex{T}}[
-        cosd(α / 2)^2  sind(α / 2)^2 -im*sind(α);
-        sind(α / 2)^2  cosd(α / 2)^2 im*sind(α);
-    -im*sind(α)/2   im*sind(α)/2       cosd(α)]
+    cosd(α / 2)^2 sind(α / 2)^2 -im*sind(α);
+    sind(α / 2)^2 cosd(α / 2)^2 im*sind(α);
+    -im*sind(α)/2 im*sind(α)/2 cosd(α)]
 
 ####
 ####
@@ -37,6 +37,30 @@ end
 @inline T2time(θ::EPGOptions) = θ.T2
 @inline T1time(θ::EPGOptions) = θ.T1
 
+struct EPGConstantFlipAngleOptions{T, ETL}
+    ETL::ETL
+    α::T
+    TE::T
+    T2::T
+    T1::T
+    EPGConstantFlipAngleOptions{T, ETL}(etl, α, TE, T2, T1) where {T, ETL} = new{T, ETL}(ETL(etl), T(α), T(TE), T(T2), T(T1))
+    function EPGConstantFlipAngleOptions(etl, α, TE, T2, T1)
+        α, TE, T2, T1 = promote(float(α), float(TE), float(T2), float(T1))
+        return new{typeof(α), typeof(etl)}(etl, α, TE, T2, T1)
+    end
+end
+@inline Base.Tuple(θ::EPGConstantFlipAngleOptions) = (θ.ETL, θ.α, θ.TE, θ.T2, θ.T1)
+@inline Base.NamedTuple(θ::EPGConstantFlipAngleOptions) = NamedTuple{(:ETL, :α, :TE, :T2, :T1)}(Tuple(θ))
+@inline EPGConstantFlipAngleOptions(θ::NamedTuple{(:ETL, :α, :TE, :T2, :T1)}) = EPGConstantFlipAngleOptions(Tuple(θ)...)
+
+@inline Base.eltype(::EPGConstantFlipAngleOptions{T}) where {T} = T
+@inline echotrainlength(θ::EPGConstantFlipAngleOptions) = θ.ETL
+@inline B1correction(θ::EPGConstantFlipAngleOptions{T}) where {T} = T(θ.α / 180) # Multiplicative FA correction: A = α/180
+@inline flipangle(θ::EPGConstantFlipAngleOptions{T}, i::Int) where {T} = ifelse(i == 0, T(90), T(180)) # Pulse sequence: 90, 180, 180, 180, ...
+@inline echotime(θ::EPGConstantFlipAngleOptions) = θ.TE
+@inline T2time(θ::EPGConstantFlipAngleOptions) = θ.T2
+@inline T1time(θ::EPGConstantFlipAngleOptions) = θ.T1
+
 struct EPGIncreasingFlipAnglesOptions{T, ETL}
     ETL::ETL
     α::T
@@ -65,6 +89,7 @@ end
 
 const EPGParameterization{T, ETL} = Union{
     EPGOptions{T, ETL},
+    EPGConstantFlipAngleOptions{T, ETL},
     EPGIncreasingFlipAnglesOptions{T, ETL},
 }
 
@@ -222,7 +247,7 @@ struct EPGWork_Basic_Cplx{T, ETL, MPSVType <: AbstractVector{SVector{3, Complex{
 end
 function EPGWork_Basic_Cplx(::Type{T}, ETL::Int) where {T}
     MSPV = zeros(SVector{3, Complex{T}}, ETL)
-    dc   = zeros(T, ETL)
+    dc = zeros(T, ETL)
     return EPGWork_Basic_Cplx(ETL, MSPV, dc)
 end
 
@@ -248,9 +273,9 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
 
     # Precompute compute element flip matrices and other intermediate variables
     E1, E2 = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
-    E      = SA{T}[E2, E2, E1]
-    R₁     = element_flipmat(α₁)
-    Rᵢ     = element_flipmat(αᵢ)
+    E = SA{T}[E2, E2, E1]
+    R₁ = element_flipmat(α₁)
+    Rᵢ = element_flipmat(αᵢ)
 
     # Initialize magnetization phase state vector (MPSV)
     @inbounds for j in 1:ETL
@@ -267,12 +292,12 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
 
         # Transition between phase states
         Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
-        MPSV[1]  = V[Mᵢ[2], Mᵢ₊₁[2], Mᵢ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
+        MPSV[1] = V[Mᵢ[2], Mᵢ₊₁[2], Mᵢ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
         for j in 2:ETL-1
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
-            MPSV[j]        = V[Mᵢ₋₁[1], Mᵢ₊₁[2], Mᵢ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
+            MPSV[j] = V[Mᵢ₋₁[1], Mᵢ₊₁[2], Mᵢ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
         end
-        Mᵢ₋₁, Mᵢ  = Mᵢ, Mᵢ₊₁
+        Mᵢ₋₁, Mᵢ = Mᵢ, Mᵢ₊₁
         MPSV[ETL] = V[Mᵢ₋₁[1], 0, Mᵢ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
 
         # Relaxation for TE/2
@@ -299,7 +324,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
 
     # Precompute compute element flip matrices and other intermediate variables
     E1, E2 = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
-    E      = SA{T}[E2, E2, E1]
+    E = SA{T}[E2, E2, E1]
 
     # Initialize magnetization phase state vector (MPSV)
     @inbounds for j in 1:ETL
@@ -316,12 +341,12 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
 
         # Transition between phase states
         Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
-        MPSV[1]  = V[Mᵢ[2], Mᵢ₊₁[2], Mᵢ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
+        MPSV[1] = V[Mᵢ[2], Mᵢ₊₁[2], Mᵢ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
         for j in 2:ETL-1
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
-            MPSV[j]        = V[Mᵢ₋₁[1], Mᵢ₊₁[2], Mᵢ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
+            MPSV[j] = V[Mᵢ₋₁[1], Mᵢ₊₁[2], Mᵢ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
         end
-        Mᵢ₋₁, Mᵢ  = Mᵢ, Mᵢ₊₁
+        Mᵢ₋₁, Mᵢ = Mᵢ, Mᵢ₊₁
         MPSV[ETL] = V[Mᵢ₋₁[1], 0, Mᵢ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
 
         # Relaxation for TE/2
@@ -345,7 +370,7 @@ struct EPGWork_ReIm{T, ETL, MPSVType <: AbstractVector{SVector{3, T}}, DCType <:
 end
 function EPGWork_ReIm(::Type{T}, ETL::Int) where {T}
     MSPV = zeros(SVector{3, T}, ETL)
-    dc   = zeros(T, ETL)
+    dc = zeros(T, ETL)
     return EPGWork_ReIm(ETL, MSPV, dc)
 end
 
@@ -363,22 +388,22 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T}, θ::EPGO
     V = SA{T} # alias
 
     # Precompute intermediate variables
-    E₁, E₂           = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
-    sin½α₁, cos½α₁   = sincos(α₁ / 2)
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
-    sinα₁            = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ     = sincos(αᵢ)
-    cos²½αᵢ          = (1 + cosαᵢ) / 2
-    sin²½αᵢ          = 1 - cos²½αᵢ
-    a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z         = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    sinα₁ = 2 * sin½α₁ * cos½α₁
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1 + cosαᵢ) / 2
+    sin²½αᵢ = 1 - cos²½αᵢ
+    a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀      = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺     = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1]   = abs(Mᵢ⁺[1])
+        m₀ = sin½α₁ # since αₑₓ = ½α₁
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1] = abs(Mᵢ⁺[1])
         MPSV[1] = Mᵢ⁺
         MPSV[2] = V[a₁*m₀, 0, 0]
         MPSV[3] = V[0, 0, 0]
@@ -387,20 +412,20 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T}, θ::EPGO
     @inbounds for i in 2:ETL-1
         # j = 1, initialize and update `dc`
         Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i]    = abs(Mᵢ⁺[1])
-        MPSV[1]  = Mᵢ⁺
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        dc[i] = abs(Mᵢ⁺[1])
+        MPSV[1] = Mᵢ⁺
 
         # inner loop
         jup = min(i, ETL - i)
         for j in 2:jup
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
-            MPSV[j]        = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            MPSV[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
 
         # cleanup for next iteration
         if i == jup
-            Mᵢ₋₁      = Mᵢ
+            Mᵢ₋₁ = Mᵢ
             MPSV[i+1] = V[F⋅Mᵢ₋₁, 0, 0]
             MPSV[i+2] = V[0, 0, 0]
         end
@@ -440,8 +465,6 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
         T1 = T1time(θ)
 
         # Precompute intermediate variables
-        # α                = deg2rad(α)
-        # α₁, αᵢ           = α, α*β/180
         V                = SA{$T} # alias
         E₁, E₂           = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
         sin½α₁, cos½α₁   = sincos(α₁ / 2)
@@ -517,7 +540,7 @@ end
 function EPGWork_ReIm_DualVector(::Type{T}, ETL::Int) where {T}
     MPSV₁ = zeros(SVector{3, T}, ETL)
     MPSV₂ = zeros(SVector{3, T}, ETL)
-    dc    = zeros(T, ETL)
+    dc = zeros(T, ETL)
     return EPGWork_ReIm_DualVector(ETL, MPSV₁, MPSV₂, dc)
 end
 
@@ -535,47 +558,45 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T
     V = SA{T} # alias
 
     # Precompute intermediate variables
-    # α                = deg2rad(α)
-    # α₁, αᵢ           = α, α*β/180
-    E₁, E₂           = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
-    sin½α₁, cos½α₁   = sincos(α₁ / 2)
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
-    sinα₁            = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ     = sincos(αᵢ)
-    cos²½αᵢ          = (1 + cosαᵢ) / 2
-    sin²½αᵢ          = 1 - cos²½αᵢ
-    a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z         = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    sinα₁ = 2 * sin½α₁ * cos½α₁
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1 + cosαᵢ) / 2
+    sin²½αᵢ = 1 - cos²½αᵢ
+    a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1]        = abs(Mᵢ⁺[1])
-        MPSV₁[1]     = Mᵢ⁺
-        MPSV₁[2]     = V[a₁*m₀, 0, 0]
-        MPSV₁[3]     = V[0, 0, 0]
+        m₀ = sin½α₁ # since αₑₓ = ½α₁
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        MPSV₁[2] = V[a₁*m₀, 0, 0]
+        MPSV₁[3] = V[0, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in 2:ETL-1
         # j = 1, initialize and update `dc`
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2]
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i]    = abs(Mᵢ⁺[1])
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        dc[i] = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
 
         # inner loop
         jup = min(i, ETL - i)
         @simd for j in 2:jup
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
 
         # cleanup for next iteration
         if i == jup
-            Mᵢ₋₁       = Mᵢ
+            Mᵢ₋₁ = Mᵢ
             MPSV₁[i+1] = V[F⋅Mᵢ₋₁, 0, 0]
             MPSV₁[i+2] = V[0, 0, 0]
         end
@@ -600,7 +621,7 @@ end
 function EPGWork_ReIm_DualVector_Split(::Type{T}, ETL::Int) where {T}
     MPSV₁ = zeros(SVector{3, T}, ETL)
     MPSV₂ = zeros(SVector{3, T}, ETL)
-    dc    = zeros(T, ETL)
+    dc = zeros(T, ETL)
     return EPGWork_ReIm_DualVector_Split(ETL, MPSV₁, MPSV₂, dc)
 end
 
@@ -618,51 +639,49 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_S
     V = SA{T} # alias
 
     # Precompute intermediate variables
-    # α                = deg2rad(α)
-    # α₁, αᵢ           = α, α*β/180
-    E₁, E₂           = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
-    sin½α₁, cos½α₁   = sincos(α₁ / 2)
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
-    sinα₁            = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ     = sincos(αᵢ)
-    cos²½αᵢ          = (1 + cosαᵢ) / 2
-    sin²½αᵢ          = 1 - cos²½αᵢ
-    a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z         = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    sinα₁ = 2 * sin½α₁ * cos½α₁
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1 + cosαᵢ) / 2
+    sin²½αᵢ = 1 - cos²½αᵢ
+    a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1]        = abs(Mᵢ⁺[1])
-        MPSV₁[1]     = Mᵢ⁺
-        MPSV₁[2]     = V[a₁*m₀, 0, 0]
+        m₀ = sin½α₁ # since αₑₓ = ½α₁
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        MPSV₁[2] = V[a₁*m₀, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in 2:ETL÷2
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i]    = abs(Mᵢ⁺[1])
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        dc[i] = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:i-1
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
-        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁]
-        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0]
+        MPSV₁[i] = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁]
+        MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in ETL÷2+1:ETL-1
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i]    = abs(Mᵢ⁺[1])
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        dc[i] = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:ETL-i
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
@@ -685,7 +704,7 @@ end
 function EPGWork_ReIm_DualVector_Split_Dynamic(::Type{T}, ETL::Int) where {T}
     MPSV₁ = zeros(SVector{3, T}, ETL)
     MPSV₂ = zeros(SVector{3, T}, ETL)
-    dc    = zeros(T, ETL)
+    dc = zeros(T, ETL)
     return EPGWork_ReIm_DualVector_Split_Dynamic(ETL, MPSV₁, MPSV₂, dc)
 end
 
@@ -696,7 +715,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
 
-    A  = B1correction(θ)
+    A = B1correction(θ)
     α₁ = deg2rad(A * 180)
     αᵢ = deg2rad(A * θ.β)
     TE = echotime(θ)
@@ -704,26 +723,26 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     T1 = T1time(θ)
 
     # Precompute intermediate variables
-    E₁, E₂           = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
-    sin½α₁, cos½α₁   = sincos(α₁ / 2)
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
-    sinα₁            = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ     = sincos(αᵢ)
-    cos²½αᵢ          = (1 + cosαᵢ) / 2
-    sin²½αᵢ          = 1 - cos²½αᵢ
-    a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z         = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    sinα₁ = 2 * sin½α₁ * cos½α₁
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1 + cosαᵢ) / 2
+    sin²½αᵢ = 1 - cos²½αᵢ
+    a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     @inbounds begin
         # i = 1 iteration
         # Initialize magnetization phase state vector (MPSV)
-        m₀           = sin½α₁ # since αₑₓ = ½α₁
-        M₀           = V[b₁*m₀, 0, -c₁*m₀/2]
-        MPSV₁[1]     = M₀
-        MPSV₁[2]     = V[a₁*m₀, 0, 0]
+        m₀ = sin½α₁ # since αₑₓ = ½α₁
+        M₀ = V[b₁*m₀, 0, -c₁*m₀/2]
+        MPSV₁[1] = M₀
+        MPSV₁[2] = V[a₁*m₀, 0, 0]
 
-        dc[1]        = abs(M₀[1])
+        dc[1] = abs(M₀[1])
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
 
         # i = 2 iteration
@@ -755,7 +774,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
             MPSV₁[j] = V[FM₀, F̄M₂, ZM₁]
         end
 
-        MPSV₁[i]   = V[FM₁, 0, ZM₂]
+        MPSV₁[i] = V[FM₁, 0, ZM₂]
         MPSV₁[i+1] = V[FM₂, 0, 0]
 
         dc[i] = abs(F̄M₀)
@@ -787,6 +806,329 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     return dc
 end
 
+function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}) where {T}
+    epg_impulse_response!(dc, work, θ)
+
+    # Scale impulse response by initial magnetization and take absolute value
+    m₀ = sind(θ.α / 2)
+    @simd ivdep for i in eachindex(dc)
+        dc[i] = abs(m₀ * dc[i])
+    end
+
+    return dc
+end
+
+function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}) where {T}
+    ETL = length(dc)
+    (; MPSV₁, MPSV₂) = work
+
+    α = deg2rad(θ.α)
+    TE, T2, T1 = echotime(θ), T2time(θ), T1time(θ)
+    V = SA{T} # alias
+
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sinα, cosα = sincos(α)
+    E₂²half, E₁E₂, E₁² = (E₂ * E₂) / 2, E₁ * E₂, E₁ * E₁
+    a, b, c, d = E₂²half, E₂²half * cosα, E₁E₂ * sinα, E₁² * cosα
+    c′ = -c / 2
+
+    @inbounds begin
+        M₀ = V[a-b, zero(T), c′]
+        MPSV₁[1] = M₀
+        MPSV₁[2] = V[a+b, zero(T), zero(T)]
+
+        dc[1] = M₀[1]
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+
+        for i in 2:ETL÷2
+            F, F̄, Z = MPSV₂[1]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            F̄M₁, FM₁, ZM₁ = muladd(-c, Z, C′ - S′), muladd(c, Z, C′ + S′), muladd(c′, S, d * Z)
+
+            F, F̄, Z = MPSV₂[2]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            F̄M₂, FM₂, ZM₂ = muladd(-c, Z, C′ - S′), muladd(c, Z, C′ + S′), muladd(c′, S, d * Z)
+
+            MPSV₁[1] = V[F̄M₁, F̄M₂, ZM₁]
+            dc[i] = F̄M₁
+            FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+
+            @simd ivdep for k in 2:i-1
+                F, F̄, Z = MPSV₂[k+1]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a * C, b * S
+                FM₂, F̄M₂, ZM₂ = muladd(c, Z, C′ + S′), muladd(-c, Z, C′ - S′), muladd(c′, S, d * Z)
+                MPSV₁[k] = V[FM₀, F̄M₂, ZM₁]
+                FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+            end
+
+            MPSV₁[i], MPSV₁[i+1] = V[FM₀, zero(T), ZM₁], V[FM₁, zero(T), zero(T)]
+            MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+        end
+
+        for i in ETL÷2+1:ETL-1
+            F, F̄, Z = MPSV₂[1]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            F̄M₁, FM₁, ZM₁ = muladd(-c, Z, C′ - S′), muladd(c, Z, C′ + S′), muladd(c′, S, d * Z)
+
+            F, F̄, Z = MPSV₂[2]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            F̄M₂, FM₂, ZM₂ = muladd(-c, Z, C′ - S′), muladd(c, Z, C′ + S′), muladd(c′, S, d * Z)
+
+            MPSV₁[1] = V[F̄M₁, F̄M₂, ZM₁]
+            dc[i] = F̄M₁
+            FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+
+            @simd ivdep for k in 2:ETL-i
+                F, F̄, Z = MPSV₂[k+1]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a * C, b * S
+                FM₂, F̄M₂, ZM₂ = muladd(c, Z, C′ + S′), muladd(-c, Z, C′ - S′), muladd(c′, S, d * Z)
+                MPSV₁[k] = V[FM₀, F̄M₂, ZM₁]
+                FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+            end
+
+            MPSV₁[ETL-i+1] = V[FM₀, zero(T), ZM₁]
+            MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+        end
+
+        F, F̄, Z = MPSV₂[1]
+        C, S = F + F̄, F - F̄
+        dc[ETL] = muladd(-c, Z, muladd(a, C, -b * S))
+    end
+
+    return dc
+end
+
+####
+#### EPGWork_ReIm_DualFlat_Split_Dynamic
+####
+
+struct EPGWork_ReIm_DualFlat_Split_Dynamic{T, ETL, MPSVType <: AbstractVector{T}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
+    MPSV₁::MPSVType
+    MPSV₂::MPSVType
+    dc::DCType
+end
+
+function EPGWork_ReIm_DualFlat_Split_Dynamic(::Type{T}, ETL::Int) where {T}
+    MPSV₁ = zeros(T, 3 * ETL)
+    MPSV₂ = zeros(T, 3 * ETL)
+    dc = zeros(T, ETL)
+    return EPGWork_ReIm_DualFlat_Split_Dynamic(ETL, MPSV₁, MPSV₂, dc)
+end
+
+function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualFlat_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}) where {T}
+    epg_impulse_response!(dc, work, θ)
+
+    # Scale impulse response by initial magnetization and take absolute value
+    m₀ = sind(θ.α / 2)
+    @simd ivdep for i in eachindex(dc)
+        dc[i] = abs(m₀ * dc[i])
+    end
+
+    return dc
+end
+
+function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualFlat_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}) where {T}
+    Base.require_one_based_indexing(dc)
+    ETL = length(dc)
+
+    (; MPSV₁, MPSV₂) = work
+    @assert length(MPSV₁) == length(MPSV₂) == 3 * ETL "Dimension mismatch"
+
+    α = deg2rad(θ.α)
+    TE, T2, T1 = echotime(θ), T2time(θ), T1time(θ)
+
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sinα, cosα = sincos(α)
+    E₂²half, E₁E₂, E₁² = (E₂ * E₂) / 2, E₁ * E₂, E₁ * E₁
+    a, b, c, d = E₂²half, E₂²half * cosα, E₁E₂ * sinα, E₁² * cosα
+    c′ = -c / 2
+    Δy, Δz = ETL, 2 * ETL
+
+    @inbounds begin
+        dc[1] = a - b
+        MPSV₁[1], MPSV₁[1+Δy], MPSV₁[1+Δz] = a - b, zero(T), c′
+        MPSV₁[2], MPSV₁[2+Δy], MPSV₁[2+Δz] = a + b, zero(T), zero(T)
+        MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+
+        for i in 2:ETL÷2
+            F, F̄, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            dc[i] = MPSV₁[1] = muladd(-c, Z, C′ - S′)
+            MPSV₁[2] = muladd(c, Z, C′ + S′)
+            MPSV₁[1+Δz] = muladd(c′, S, d * Z)
+
+            @simd ivdep for k in 2:i-1
+                F, F̄, Z = MPSV₂[k], MPSV₂[k+Δy], MPSV₂[k+Δz]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a * C, b * S
+                MPSV₁[k+1] = muladd(c, Z, C′ + S′)
+                MPSV₁[k-1+Δy] = muladd(-c, Z, C′ - S′)
+                MPSV₁[k+Δz] = muladd(c′, S, d * Z)
+            end
+
+            F, F̄, Z = MPSV₂[i], MPSV₂[i+Δy], MPSV₂[i+Δz]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            MPSV₁[i+1] = muladd(c, Z, C′ + S′)
+            MPSV₁[i-1+Δy] = muladd(-c, Z, C′ - S′)
+            MPSV₁[i+Δz] = muladd(c′, S, d * Z)
+
+            MPSV₁[i+Δy] = zero(T)
+            MPSV₁[i+1+Δy] = zero(T)
+            MPSV₁[i+1+Δz] = zero(T)
+
+            MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+        end
+
+        for i in ETL÷2+1:ETL-1
+            F, F̄, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            dc[i] = MPSV₁[1] = muladd(-c, Z, C′ - S′)
+            MPSV₁[2] = muladd(c, Z, C′ + S′)
+            MPSV₁[1+Δz] = muladd(c′, S, d * Z)
+
+            @simd ivdep for k in 2:ETL-i+1
+                F, F̄, Z = MPSV₂[k], MPSV₂[k+Δy], MPSV₂[k+Δz]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a * C, b * S
+                MPSV₁[k+1] = muladd(c, Z, C′ + S′)
+                MPSV₁[k-1+Δy] = muladd(-c, Z, C′ - S′)
+                MPSV₁[k+Δz] = muladd(c′, S, d * Z)
+            end
+
+            MPSV₁, MPSV₂ = MPSV₂, MPSV₁
+        end
+
+        F, F̄, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
+        C, S = F + F̄, F - F̄
+        dc[ETL] = muladd(-c, Z, muladd(a, C, -b * S))
+    end
+
+    return dc
+end
+
+####
+#### EPGWork_ReIm_DualTuple_Split_Dynamic
+####
+
+struct EPGWork_ReIm_DualTuple_Split_Dynamic{T, ETL, MPSVType <: AbstractVector{T}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL
+    MPSV₁::NTuple{3, MPSVType}
+    MPSV₂::NTuple{3, MPSVType}
+    dc::DCType
+end
+
+function EPGWork_ReIm_DualTuple_Split_Dynamic(::Type{T}, ETL::Int) where {T}
+    MPSV₁ = (zeros(T, ETL), zeros(T, ETL), zeros(T, ETL))
+    MPSV₂ = (zeros(T, ETL), zeros(T, ETL), zeros(T, ETL))
+    dc = zeros(T, ETL)
+    return EPGWork_ReIm_DualTuple_Split_Dynamic(ETL, MPSV₁, MPSV₂, dc)
+end
+
+function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualTuple_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}) where {T}
+    epg_impulse_response!(dc, work, θ)
+
+    # Scale impulse response by initial magnetization and take absolute value
+    m₀ = sind(θ.α / 2)
+    @simd ivdep for i in eachindex(dc)
+        dc[i] = abs(m₀ * dc[i])
+    end
+
+    return dc
+end
+
+function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTuple_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}) where {T}
+    Base.require_one_based_indexing(dc)
+    ETL = length(dc)
+
+    (; MPSV₁, MPSV₂) = work
+    (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = MPSV₁, MPSV₂
+    @assert length(MPSVx₁) == length(MPSVy₁) == length(MPSVz₁) == ETL "Dimension mismatch"
+    @assert length(MPSVx₂) == length(MPSVy₂) == length(MPSVz₂) == ETL "Dimension mismatch"
+
+    α = deg2rad(θ.α)
+    TE, T2, T1 = echotime(θ), T2time(θ), T1time(θ)
+
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sinα, cosα = sincos(α)
+    E₂²half, E₁E₂, E₁² = (E₂ * E₂) / 2, E₁ * E₂, E₁ * E₁
+    a, b, c, d = E₂²half, E₂²half * cosα, E₁E₂ * sinα, E₁² * cosα
+    c′ = -c / 2
+
+    @inbounds begin
+        dc[1] = a - b
+        MPSVx₁[1], MPSVy₁[1], MPSVz₁[1] = a - b, zero(T), c′
+        MPSVx₁[2], MPSVy₁[2], MPSVz₁[2] = a + b, zero(T), zero(T)
+        (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = (MPSVx₂, MPSVy₂, MPSVz₂), (MPSVx₁, MPSVy₁, MPSVz₁)
+
+        for i in 2:ETL÷2
+            F, F̄, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            dc[i] = MPSVx₁[1] = muladd(-c, Z, C′ - S′)
+            MPSVx₁[2] = muladd(c, Z, C′ + S′)
+            MPSVz₁[1] = muladd(c′, S, d * Z)
+
+            @simd ivdep for k in 2:i-1
+                F, F̄, Z = MPSVx₂[k], MPSVy₂[k], MPSVz₂[k]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a * C, b * S
+                MPSVx₁[k+1] = muladd(c, Z, C′ + S′)
+                MPSVy₁[k-1] = muladd(-c, Z, C′ - S′)
+                MPSVz₁[k] = muladd(c′, S, d * Z)
+            end
+
+            F, F̄, Z = MPSVx₂[i], MPSVy₂[i], MPSVz₂[i]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            MPSVx₁[i+1] = muladd(c, Z, C′ + S′)
+            MPSVy₁[i-1] = muladd(-c, Z, C′ - S′)
+            MPSVz₁[i] = muladd(c′, S, d * Z)
+
+            MPSVy₁[i] = zero(T)
+            MPSVy₁[i+1] = zero(T)
+            MPSVz₁[i+1] = zero(T)
+
+            (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = (MPSVx₂, MPSVy₂, MPSVz₂), (MPSVx₁, MPSVy₁, MPSVz₁)
+        end
+
+        for i in ETL÷2+1:ETL-1
+            F, F̄, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
+            C, S = F + F̄, F - F̄
+            C′, S′ = a * C, b * S
+            dc[i] = MPSVx₁[1] = muladd(-c, Z, C′ - S′)
+            MPSVx₁[2] = muladd(c, Z, C′ + S′)
+            MPSVz₁[1] = muladd(c′, S, d * Z)
+
+            @simd ivdep for k in 2:ETL-i+1
+                F, F̄, Z = MPSVx₂[k], MPSVy₂[k], MPSVz₂[k]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a * C, b * S
+                MPSVx₁[k+1] = muladd(c, Z, C′ + S′)
+                MPSVy₁[k-1] = muladd(-c, Z, C′ - S′)
+                MPSVz₁[k] = muladd(c′, S, d * Z)
+            end
+
+            (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = (MPSVx₂, MPSVy₂, MPSVz₂), (MPSVx₁, MPSVy₁, MPSVz₁)
+        end
+
+        F, F̄, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
+        C, S = F + F̄, F - F̄
+        dc[ETL] = muladd(-c, Z, muladd(a, C, -b * S))
+    end
+
+    return dc
+end
+
 ####
 #### EPGWork_ReIm_DualMVector_Split
 ####
@@ -800,7 +1142,7 @@ end
 function EPGWork_ReIm_DualMVector_Split(::Type{T}, ::Val{ETL}) where {T, ETL}
     MPSV₁ = MVector{ETL, SVector{3, T}}(undef)
     MPSV₂ = MVector{ETL, SVector{3, T}}(undef)
-    dc    = MVector{ETL, T}(undef)
+    dc = MVector{ETL, T}(undef)
     return EPGWork_ReIm_DualMVector_Split(Val(ETL), MPSV₁, MPSV₂, dc)
 end
 EPGWork_ReIm_DualMVector_Split(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualMVector_Split(T, Val(ETL))
@@ -817,51 +1159,49 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
     V = SA{T} # alias
 
     # Precompute intermediate variables
-    # α                = deg2rad(α)
-    # α₁, αᵢ           = α, α*β/180
-    E₁, E₂           = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
-    sin½α₁, cos½α₁   = sincos(α₁ / 2)
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
-    sinα₁            = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ     = sincos(αᵢ)
-    cos²½αᵢ          = (1 + cosαᵢ) / 2
-    sin²½αᵢ          = 1 - cos²½αᵢ
-    a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z         = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    sinα₁ = 2 * sin½α₁ * cos½α₁
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1 + cosαᵢ) / 2
+    sin²½αᵢ = 1 - cos²½αᵢ
+    a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1]        = abs(Mᵢ⁺[1])
-        MPSV₁[1]     = Mᵢ⁺
-        MPSV₁[2]     = V[a₁*m₀, 0, 0]
+        m₀ = sin½α₁ # since αₑₓ = ½α₁
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        MPSV₁[2] = V[a₁*m₀, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in 2:ETL÷2
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i]    = abs(Mᵢ⁺[1])
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        dc[i] = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:i-1
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
-        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁]
-        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0]
+        MPSV₁[i] = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁]
+        MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in ETL÷2+1:ETL-1
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i]    = abs(Mᵢ⁺[1])
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+        dc[i] = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:ETL-i
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
@@ -902,8 +1242,6 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMV
     V = Vec{4, T} # alias
 
     # Precompute intermediate variables
-    # α                = deg2rad(α)
-    # α₁, αᵢ           = α, α*β/180
     E₁, E₂           = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
     sin½α₁, cos½α₁   = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
@@ -970,7 +1308,7 @@ end
 function EPGWork_ReIm_DualPaddedVector_Split(::Type{T}, ETL::Int) where {T}
     MPSV₁ = zeros(SVector{4, T}, ETL)
     MPSV₂ = zeros(SVector{4, T}, ETL)
-    dc    = zeros(T, ETL)
+    dc = zeros(T, ETL)
     return EPGWork_ReIm_DualPaddedVector_Split(ETL, MPSV₁, MPSV₂, dc)
 end
 
@@ -988,51 +1326,49 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVe
     V = SA{T} # alias
 
     # Precompute intermediate variables
-    # α                = deg2rad(α)
-    # α₁, αᵢ           = α, α*β/180
-    E₁, E₂           = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
-    sin½α₁, cos½α₁   = sincos(α₁ / 2)
+    E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
+    sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
-    sinα₁            = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ     = sincos(αᵢ)
-    cos²½αᵢ          = (1 + cosαᵢ) / 2
-    sin²½αᵢ          = 1 - cos²½αᵢ
-    a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z         = V[aᵢ, bᵢ, cᵢ, 0], V[bᵢ, aᵢ, -cᵢ, 0], V[-cᵢ/2, cᵢ/2, dᵢ, 0]
+    sinα₁ = 2 * sin½α₁ * cos½α₁
+    sinαᵢ, cosαᵢ = sincos(αᵢ)
+    cos²½αᵢ = (1 + cosαᵢ) / 2
+    sin²½αᵢ = 1 - cos²½αᵢ
+    a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
+    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
+    F, F̄, Z = V[aᵢ, bᵢ, cᵢ, 0], V[bᵢ, aᵢ, -cᵢ, 0], V[-cᵢ/2, cᵢ/2, dᵢ, 0]
 
     # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
     @inbounds begin
-        m₀           = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺          = V[b₁*m₀, 0, -c₁*m₀/2, 0]
-        dc[1]        = abs(Mᵢ⁺[1])
-        MPSV₁[1]     = Mᵢ⁺
-        MPSV₁[2]     = V[a₁*m₀, 0, 0, 0]
+        m₀ = sin½α₁ # since αₑₓ = ½α₁
+        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2, 0]
+        dc[1] = abs(Mᵢ⁺[1])
+        MPSV₁[1] = Mᵢ⁺
+        MPSV₁[2] = V[a₁*m₀, 0, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in 2:ETL÷2
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
-        dc[i]    = abs(Mᵢ⁺[1])
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+        dc[i] = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:i-1
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
         end
-        MPSV₁[i]     = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁, 0]
-        MPSV₁[i+1]   = V[F⋅Mᵢ₊₁, 0, 0, 0]
+        MPSV₁[i] = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁, 0]
+        MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
     @inbounds for i in ETL÷2+1:ETL-1
         Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
-        dc[i]    = abs(Mᵢ⁺[1])
+        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+        dc[i] = abs(Mᵢ⁺[1])
         MPSV₁[1] = Mᵢ⁺
         @simd for j in 2:ETL-i
             Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
@@ -1146,20 +1482,3 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T}, θ::EPGOp
     return dc
 end
 =#
-
-####
-#### Algorithm list
-####
-
-const EPG_Algorithms = Any[
-    EPGWork_Basic_Cplx,
-    # EPGWork_Vec,
-    EPGWork_ReIm,
-    EPGWork_ReIm_DualVector,
-    EPGWork_ReIm_DualVector_Split,
-    EPGWork_ReIm_DualVector_Split_Dynamic,
-    EPGWork_ReIm_DualMVector_Split,
-    # EPGWork_ReIm_DualPaddedMVector_Vec_Split,
-    EPGWork_ReIm_DualPaddedVector_Split,
-    # EPGWork_ReIm_Generated,
-]

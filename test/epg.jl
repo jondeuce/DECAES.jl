@@ -1,36 +1,121 @@
-function compare_epg(
-    work₁::DECAES.AbstractEPGWorkspace{T},
-    work₂::DECAES.AbstractEPGWorkspace{T};
-    verbose = false,
-) where {T}
-    xs = (; α = T(11e-3), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0), β = T(163.0))
-    θ₁ = DECAES.EPGOptions((; ETL = DECAES.echotrainlength(work₁), xs...))
-    θ₂ = DECAES.EPGOptions((; ETL = DECAES.echotrainlength(work₂), xs...))
-    dc₁ = DECAES.EPGdecaycurve!(work₁, θ₁)
-    dc₂ = DECAES.EPGdecaycurve!(work₂, θ₂)
+####
+#### Algorithm list
+####
+
+const EPG_Algorithms = Any[
+    DECAES.EPGWork_Basic_Cplx,
+    # DECAES.EPGWork_Vec,
+    DECAES.EPGWork_ReIm,
+    DECAES.EPGWork_ReIm_DualVector,
+    DECAES.EPGWork_ReIm_DualVector_Split,
+    DECAES.EPGWork_ReIm_DualVector_Split_Dynamic,
+    DECAES.EPGWork_ReIm_DualFlat_Split_Dynamic,
+    DECAES.EPGWork_ReIm_DualTuple_Split_Dynamic,
+    DECAES.EPGWork_ReIm_DualMVector_Split,
+    # DECAES.EPGWork_ReIm_DualPaddedMVector_Vec_Split,
+    DECAES.EPGWork_ReIm_DualPaddedVector_Split,
+    # DECAES.EPGWork_ReIm_Generated,
+]
+
+const EPG_TestOptionTypes = (
+    DECAES.EPGOptions,
+    DECAES.EPGConstantFlipAngleOptions,
+    DECAES.EPGIncreasingFlipAnglesOptions,
+)
+
+####
+#### Test parameter constructors
+####
+
+mock_θ(::Type{DECAES.EPGOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGOptions((; ETL, α = T(165.0), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0), β = T(150.0)))
+mock_θ(::Type{DECAES.EPGConstantFlipAngleOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGConstantFlipAngleOptions((; ETL, α = T(165.0), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0)))
+mock_θ(::Type{DECAES.EPGIncreasingFlipAnglesOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGIncreasingFlipAnglesOptions((; ETL, α = T(165.0), α1 = T(165.0), α2 = T(140.0), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0)))
+
+supports(work, θ) = applicable(DECAES.epg_decay_curve!, DECAES.decaycurve(work), work, θ)
+
+function compare_epg(work₁::DECAES.AbstractEPGWorkspace{T}, work₂::DECAES.AbstractEPGWorkspace{T}, θ₁::DECAES.EPGParameterization{T}, θ₂::DECAES.EPGParameterization{T}; verbose = false) where {T}
+    dc₁ = zeros(T, DECAES.echotrainlength(work₁))
+    dc₂ = zeros(T, DECAES.echotrainlength(work₂))
+    DECAES.EPGdecaycurve!(dc₁, work₁, θ₁)
+    DECAES.EPGdecaycurve!(dc₂, work₂, θ₂)
+
     if verbose && !(dc₁ ≈ dc₂)
         @info "Comparing: $((nameof(typeof(work₁)), nameof(typeof(work₂))))"
-        @info "    max error:   $(maximum(abs, dc₁ .- dc₂))"
-        @info "    diff vector: $(abs.(dc₁ .- dc₂)')"
+        @info "  option types: $((nameof(typeof(θ₁)), nameof(typeof(θ₂))))"
+        @info "  max error:   $(maximum(abs, dc₁ .- dc₂))"
+        @info "  diff vector: $(abs.(dc₁ .- dc₂)')"
     end
+
     @test isapprox(dc₁, dc₂; rtol = √eps(T), atol = 10 * eps(T))
 end
 
-function test_EPG_algorithms()
-    # In principle ETL testing range need not be too large (only need to test four ETL values >=4 which are unique mod 4),
-    # but since this file is also used for app precompilation, we should sweep over ETL values we expect to see in practice
-    # for the default algorithm.
-    #   NOTE: Generated function approach is extremely slow to compile for large ETL (around 16)
-    epg_algs = DECAES.EPG_Algorithms
-    for T in [Float32, Float64]
-        for i in 1:length(epg_algs), ETL in [4, 5, 6, 7]
-            j = rand([1:i-1; i+1:length(epg_algs)])
-            algᵢ, algⱼ = epg_algs[i], epg_algs[j]
-            compare_epg(algᵢ(T, ETL), algⱼ(T, ETL))
+function test_EPG_algorithms(; verbose = false)
+    for T in (Float32, Float64)
+        for ETL in (4, 5, 6, 7)
+            for Opt in EPG_TestOptionTypes
+                θ_ETL = mock_θ(Opt, T, ETL)
+
+                works = DECAES.AbstractEPGWorkspace{T}[]
+                for alg in EPG_Algorithms
+                    w = alg(T, ETL)
+                    supports(w, θ_ETL) && push!(works, w)
+                end
+                @test !isempty(works)
+
+                ref = first(works)
+                θ_ref = mock_θ(Opt, T, DECAES.echotrainlength(ref))
+
+                for w in works
+                    w === ref && continue
+                    θ_w = mock_θ(Opt, T, DECAES.echotrainlength(w))
+                    compare_epg(ref, w, θ_ref, θ_w; verbose)
+                end
+            end
         end
+
+        # Default factory vs reference implementation
         for ETL in 4:64
-            alg = DECAES.EPGdecaycurve_work(T, ETL)
-            compare_epg(alg, alg)
+            θ = mock_θ(DECAES.EPGOptions, T, ETL)
+            @test supports(DECAES.EPGdecaycurve_work(T, ETL), θ)
+            @test supports(DECAES.EPGWork_Basic_Cplx(T, ETL), θ)
+            compare_epg(DECAES.EPGWork_Basic_Cplx(T, ETL), DECAES.EPGdecaycurve_work(T, ETL), θ, θ; verbose)
+        end
+    end
+end
+
+function test_EPG_algorithm_consistency(; verbose = false)
+    # Constant-only fast kernels
+    const_only_algs = (
+        DECAES.EPGWork_ReIm_DualVector_Split_Dynamic,
+        DECAES.EPGWork_ReIm_DualFlat_Split_Dynamic,
+        DECAES.EPGWork_ReIm_DualTuple_Split_Dynamic,
+    )
+
+    for T in (Float32, Float64)
+        for ETL in (4, 5, 6, 7)
+            α  = T(165.0)
+            TE = T(39e-3)
+            T2 = T(1.1)
+            T1 = T(151.0)
+
+            # EPGOptions with β=180 represents constant train
+            θ_opt = DECAES.EPGOptions((; ETL, α, TE, T2, T1, β = T(180.0)))
+            θ_cst = DECAES.EPGConstantFlipAngleOptions((; ETL, α, TE, T2, T1))
+            θ_inc = DECAES.EPGIncreasingFlipAnglesOptions((; ETL, α, α1 = T(180.0), α2 = T(180.0), TE, T2, T1))
+
+            w_ref = DECAES.EPGWork_Basic_Cplx(T, ETL)
+            @test supports(w_ref, θ_opt)
+
+            # Constant-only algs vs EPGOptions(β=180)
+            for Alg in const_only_algs
+                w_c = Alg(T, ETL)
+                @test supports(w_c, θ_cst)
+                compare_epg(w_ref, w_c, θ_opt, θ_cst; verbose)
+            end
+
+            # Increasing(α1=180,α2=180) vs EPGOptions(β=180)
+            @test supports(w_ref, θ_inc)
+            compare_epg(w_ref, w_ref, θ_opt, θ_inc; verbose)
         end
     end
 end
@@ -88,6 +173,7 @@ function test_EPGFunctor()
 end
 
 @testset "EPG algorithms" test_EPG_algorithms()
+@testset "EPG algorithm consistency" test_EPG_algorithm_consistency()
 @testset "EPGOptions" test_EPGOptions()
 @testset "EPGFunctor" test_EPGFunctor()
 
