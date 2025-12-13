@@ -336,7 +336,7 @@ struct EPGBasisSetEnsemble{
     nnls_search_prob::P
 end
 
-function EPGBasisSetEnsemble(o::T2mapOptions{T}, θ::EPGOptions{T}, opt_vars::Val, decay_data::AbstractVector{T}) where {T}
+function EPGBasisSetEnsemble(o::T2mapOptions{T}, θ::EPGParameterization{T}, opt_vars::Val, decay_data::AbstractVector{T}) where {T}
     @assert opt_vars === Val((:α,)) "Optimization variable must be the flip angle :α" #TODO: generalize?
     D = 1 # D = length(opt_vars) #TODO: generalize?
     opt_ranges = (flip_angles(o),)
@@ -386,7 +386,7 @@ end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{T}, decay_data::Vector{T}) where {T}
     α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
-    θ = EPGOptions((; ETL = o.nTE, α = α[], TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle))
+    θ = default_epg_parameters(o)
     decay_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
 
     if o.SetFlipAngle !== nothing
@@ -607,8 +607,14 @@ function thread_buffer_maker(o::T2mapOptions{T}) where {T}
         decay_scale      = decay_scale,
         decay_curvefit   = zeros(T, o.nTE),
         residuals        = zeros(T, o.nTE),
-        decay_curve_work = EPGdecaycurve_work(T, o.nTE),
+        decay_curve_work = EPGdecaycurve_work(default_epg_parameters(o)),
         flip_angle_work  = FlipAngleOptimizationWorkspace(o, decay_basis, decay_data),
         T2_dist_work     = T2DistWorkspace(regularization_method(o), decay_basis, decay_data, decay_scale),
     )
+end
+
+function default_epg_parameters(o::T2mapOptions{T}) where {T}
+    return o.RefConAngle == 180 ?
+        EPGConstantFlipAngleOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1)) :
+        EPGOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle))
 end

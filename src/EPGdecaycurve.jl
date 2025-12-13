@@ -134,9 +134,19 @@ abstract type AbstractEPGWorkspace{T, ETL} end
 @inline echotrainlength(work::AbstractEPGWorkspace{T}) where {T} = work.ETL
 @inline decaycurve(work::AbstractEPGWorkspace) = work.dc
 
-@inline EPGdecaycurve_work(θ::EPGParameterization{T}) where {T} = EPGdecaycurve_work(T, θ.ETL)
+@inline EPGdecaycurve_work(θ::EPGParameterization{T, ETL}) where {T, ETL} = default_cache(θ)
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualVector_Split_Dynamic(T, ETL) # default for dynamic `ETL`
 @inline EPGdecaycurve_work(::Type{T}, ::Val{ETL}) where {T, ETL} = EPGWork_ReIm_DualMVector_Split(T, Val(ETL)) # default for static `ETL`
+
+# Default fastest cache types and builders for each EPGParameterization type
+
+@inline default_cache_type(θ::EPGOptions, ::Type{T} = eltype(θ), etl::ETL = θ.ETL) where {T, ETL} = EPGWork_ReIm_DualVector_Split_Dynamic{T, ETL, Vector{SVector{3, T}}, Vector{T}}
+@inline default_cache_type(θ::EPGConstantFlipAngleOptions, ::Type{T} = eltype(θ), etl::ETL = θ.ETL) where {T, ETL} = EPGWork_ReIm_DualFlat_Split_Dynamic{T, ETL, Vector{T}, Vector{T}}
+@inline default_cache_type(θ::EPGIncreasingFlipAnglesOptions, ::Type{T} = eltype(θ), etl::ETL = θ.ETL) where {T, ETL} = EPGWork_Basic_Cplx{T, ETL, Vector{SVector{3, Complex{T}}}, Vector{T}}
+
+@inline default_cache(θ::EPGOptions, ::Type{T} = eltype(θ), etl::ETL = θ.ETL) where {T, ETL} = EPGWork_ReIm_DualVector_Split_Dynamic(T, etl)
+@inline default_cache(θ::EPGConstantFlipAngleOptions, ::Type{T} = eltype(θ), etl::ETL = θ.ETL) where {T, ETL} = EPGWork_ReIm_DualFlat_Split_Dynamic(T, etl)
+@inline default_cache(θ::EPGIncreasingFlipAnglesOptions, ::Type{T} = eltype(θ), etl::ETL = θ.ETL) where {T, ETL} = EPGWork_Basic_Cplx(T, etl)
 
 """
     EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real)
@@ -166,6 +176,7 @@ pulse sequence.
   - `decay_curve::AbstractVector`: normalized echo decay curve with length `ETL`
 """
 @inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions((; ETL, α, TE, T2, T1, β)))
+@inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real) = EPGdecaycurve(EPGConstantFlipAngleOptions((; ETL, α, TE, T2, T1)))
 @inline EPGdecaycurve(θ::EPGParameterization{T}) where {T} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
 @inline EPGdecaycurve!(work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}) where {T} = EPGdecaycurve!(decaycurve(work), work, θ)
 @inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}) where {T} = epg_decay_curve!(dc, work, θ)
@@ -174,11 +185,11 @@ pulse sequence.
 #### Jacobian utilities (currently hardcoded for `EPGWork_ReIm_DualVector_Split_Dynamic`)
 ####
 
-struct EPGWorkCacheDict{ETL} <: AbstractDict{DataType, Any}
-    ETL::ETL
-    dict::Dict{DataType, Any}
+struct EPGWorkCacheDict{T, ETL, Tθ <: EPGParameterization{T, ETL}} <: AbstractDict{DataType, Any}
+    θ::Tθ
+    dict::Dict{DataType, AbstractEPGWorkspace{<:Any, ETL}}
 end
-EPGWorkCacheDict(ETL) = EPGWorkCacheDict(ETL, Dict{DataType, Any}())
+EPGWorkCacheDict(θ::EPGParameterization{<:Any, ETL}) where {ETL} = EPGWorkCacheDict(θ, Dict{DataType, AbstractEPGWorkspace{<:Any, ETL}}())
 
 @inline Base.keys(caches::EPGWorkCacheDict) = Base.keys(caches.dict)
 @inline Base.values(caches::EPGWorkCacheDict) = Base.values(caches.dict)
@@ -186,18 +197,18 @@ EPGWorkCacheDict(ETL) = EPGWorkCacheDict(ETL, Dict{DataType, Any}())
 @inline Base.iterate(caches::EPGWorkCacheDict, state...) = Base.iterate(caches.dict, state...)
 
 @inline function Base.getindex(caches::EPGWorkCacheDict{ETL}, ::Type{T}) where {ETL, T}
-    R = EPGWork_ReIm_DualVector_Split_Dynamic{T, ETL, Vector{SVector{3, T}}, Vector{T}}
+    R = default_cache_type(caches.θ, T)
     get!(caches.dict, T) do
-        return EPGWork_ReIm_DualVector_Split_Dynamic(T, caches.ETL)::R
+        return default_cache(caches.θ, T)
     end::R
 end
 
-struct EPGFunctor{T, ETL, Fs, TC <: EPGWorkCacheDict{ETL}, Tθ <: EPGParameterization{T, ETL}}
+struct EPGFunctor{T, ETL, Fs, Tθ <: EPGParameterization{T, ETL}, TC <: EPGWorkCacheDict{T, ETL, Tθ}}
     θ::Tθ
     fields::SymbolVector{Fs}
     caches::TC
 end
-EPGFunctor(θ::EPGParameterization, fields::SymbolVector) = EPGFunctor(θ, fields, EPGWorkCacheDict(echotrainlength(θ)))
+EPGFunctor(θ::EPGParameterization, fields::SymbolVector) = EPGFunctor(θ, fields, EPGWorkCacheDict(θ))
 EPGFunctor(θ::EPGParameterization, fields::Val) = EPGFunctor(θ, SymbolVector(fields))
 EPGFunctor(f!::EPGFunctor, θ::EPGParameterization) = EPGFunctor(θ, f!.fields, f!.caches)
 
