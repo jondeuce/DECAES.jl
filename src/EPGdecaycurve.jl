@@ -2,11 +2,37 @@
 #### Helper functions
 ####
 
-# Element matrix for refocusing pulse with angle α (in degrees); acts on the magnetization state vector (MPSV)
+@static if !isdefined(Base, :cisd)
+    @inline function cisd(theta::Real)
+        s, c = sincosd(theta)
+        return Complex(c, s)
+    end
+end
+
+# Rotation matrix R_x(α) = R(α, 0) for rotating the complex magnetization vector representation (M⁺, M⁻, Mz) about the x-axis by angle α (degrees), where M⁺ = Mx + iMy and M⁻ = Mx - iMy.
+# Equivalently, rotates the magnetization phase state vector (MPSV) of Fourier coefficients (Fₖ⁺, Fₖ⁻, Zₖ) = (Fₖ, F̄₋ₖ, Zₖ).
 @inline element_flipmat(α::T) where {T} = SA{Complex{T}}[
     cosd(α / 2)^2 sind(α / 2)^2 -im*sind(α);
     sind(α / 2)^2 cosd(α / 2)^2 im*sind(α);
     -im*sind(α)/2 im*sind(α)/2 cosd(α)]
+
+# Rotation matrix R(α, φ) for rotating the MPSV by angle α (degrees) about an axis having an angle φ (degrees) with the x-axis.
+@inline element_flipmat(α::T, φ::T) where {T} = SA{Complex{T}}[
+    cosd(α / 2)^2 cisd(2φ) * sind(α / 2)^2 -im*cisd(φ)*sind(α);
+    cisd(-2φ) * sind(α / 2)^2 cosd(α / 2)^2 im*cisd(-φ)*sind(α);
+    -im*cisd(-φ)*sind(α)/2 im*cisd(φ)*sind(α)/2 cosd(α)]
+
+# Real representation for the rotation matrix R(α, 90) for the Carr-Purcell (CP/anti-CPMG) pulse sequence following excitation 90_y.
+@inline anti_cpmg_flipmat(α::T) where {T} = SA{T}[
+    cosd(α / 2)^2 -sind(α / 2)^2 sind(α);
+    -sind(α / 2)^2 cosd(α / 2)^2 sind(α);
+    -sind(α)/2 -sind(α)/2 cosd(α)]
+
+# Real representation for the rotation matrix R_x(α) for the Carr-Purcell-Meiboom-Gill (CPMG) pulse sequence following excitation 90_y and change of variables Mz = i * Mz′.
+@inline cpmg_flipmat(α::T) where {T} = SA{T}[
+    cosd(α / 2)^2 sind(α / 2)^2 sind(α);
+    sind(α / 2)^2 cosd(α / 2)^2 -sind(α);
+    -sind(α)/2 sind(α)/2 cosd(α)]
 
 ####
 ####
@@ -321,7 +347,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
     return dc
 end
 
-function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ::EPGIncreasingFlipAnglesOptions{T}) where {T}
+function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ::EPGParameterization{T}) where {T}
     ETL = length(dc)
 
     # Unpack workspace
