@@ -46,6 +46,21 @@ export NNLSWorkspace, NormalEquation, NormalEquationCholesky
 
 @muladd begin
 
+"""
+    NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T})
+    NNLSWorkspace(::Type{T}, m::Int, n::Int)
+
+Preallocated workspace for the nonnegative least squares problem
+
+```math
+\\min_{x \\ge 0} ||Ax - b||_2
+```
+
+for an `m × n` matrix `A`, reused across solves so that repeated calls allocate nothing.
+Pass it to [`nnls!`](@ref), then read the results with [`solution`](@ref), [`dual`](@ref), [`components`](@ref), [`ncomponents`](@ref) and [`residualnorm`](@ref).
+
+The Tikhonov-regularized problem is solved by passing `A = [A₀; λI]` and `b = [b₀; 0]`, in which case the workspace must be sized for the padded system.
+"""
 struct NNLSWorkspace{T}
     A::Matrix{T}               # factor storage; A[1:nsetp, 1:nsetp] holds the upper triangular factor of the passive columns
     b::Vector{T}               # transformed right-hand side Q'b
@@ -70,11 +85,43 @@ struct NNLSWorkspace{T}
     mode::Base.RefValue{Int}   # termination status; 0 on success
     nsetp::Base.RefValue{Int}  # passive-set size
 end
+
+"""
+    solution(work::NNLSWorkspace)
+
+Solution `x` of the last solve, indexed by original column. Inactive components are exactly zero.
+"""
 @inline solution(work::NNLSWorkspace) = work.x
+
+"""
+    dual(work::NNLSWorkspace)
+
+Dual vector `w = Aᵀ(b - Ax)` of the last solve, indexed by original column.
+At a solution, `w ≤ 0` with `w = 0` on the solution indices; see [`components`](@ref).
+"""
 @inline dual(work::NNLSWorkspace) = @views work.w[work.invidx]
+
+"""
+    residualnorm(work::NNLSWorkspace)
+
+Residual norm `||Ax - b||₂` at the solution of the last solve.
+"""
 @inline residualnorm(work::NNLSWorkspace) = work.rnorm[]
+
+"""
+    ncomponents(work::NNLSWorkspace)
+
+Number of positive components in the solution of the last solve.
+"""
 @inline ncomponents(work::NNLSWorkspace) = work.nsetp[]
+
+"""
+    components(work::NNLSWorkspace)
+
+Original column indices of the positive components in the solution of the last solve.
+"""
 @inline components(work::NNLSWorkspace) = @views work.idx[1:ncomponents(work)]
+
 @inline positive_solution(work::NNLSWorkspace) = @views solution(work)[components(work)]
 @inline positive_solution!(work::NNLSWorkspace, x::AbstractVector) = copyto!(x, positive_solution(work))
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = @views UpperTriangular(work.A[1:ncomponents(work), 1:ncomponents(work)])
@@ -159,6 +206,11 @@ function Base.copy(w::NNLSWorkspace)
     )
 end
 
+"""
+    load!(work::NNLSWorkspace, A::AbstractMatrix, b::AbstractVector)
+
+Copy the problem data `A` and `b` into `work`. The sizes must match those the workspace was constructed for.
+"""
 function load!(work::NNLSWorkspace{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     @assert size(A) == size(work.A)
     @assert size(b) == size(work.b)
@@ -209,6 +261,12 @@ end
 
 #### Cholesky factorization for the normal equation A'Ax = A'b
 
+"""
+    NormalEquationCholesky <: LinearAlgebra.Factorization
+
+Cholesky factorization of the normal equations `AₚᵀAₚ` restricted to the positive components of the last solve, where `Aₚ = A[:, components(work)]`.
+Obtained from `cholesky(NormalEquation(), work)` and usable with `ldiv!`; the factor itself is the triangular factor the solver already maintains, so no additional factorization is performed.
+"""
 struct NormalEquationCholesky{T, W <: NNLSWorkspace{T}} <: Factorization{T}
     work::W
 end
@@ -232,6 +290,11 @@ function LinearAlgebra.ldiv!(y::AbstractVector, F::NormalEquationCholesky, x::Ab
 end
 Base.:\(F::NormalEquationCholesky, x::AbstractVector) = ldiv!(F, copy(x))
 
+"""
+    NormalEquation
+
+Singleton type indicating the normal-equations factorization of an [`NNLSWorkspace`](@ref); see [`NormalEquationCholesky`](@ref).
+"""
 struct NormalEquation end
 
 LinearAlgebra.cholesky!(::NormalEquation, work::NNLSWorkspace) = NormalEquationCholesky(work)
@@ -256,6 +319,14 @@ function nnls(A::AbstractMatrix{T}, b::AbstractVector{T}, args...; kwargs...) wh
     return nnls!(work, A, b, args...; kwargs...)
 end
 
+"""
+    nnls!(work::NNLSWorkspace, A::AbstractMatrix, b::AbstractVector)
+    nnls!(work::NNLSWorkspace, A::AbstractMatrix, b::AbstractVector, λ::Real)
+
+Solve `min_{x ≥ 0} ||Ax - b||₂` in place, returning [`solution`](@ref)`(work)`.
+
+The second form solves the Tikhonov-regularized problem `min_{x ≥ 0} ||A₀x - b₀||₂² + λ²||x||₂²` and requires `A = [A₀; λI]` and `b = [b₀; 0]`, i.e. `size(A, 1) > size(A, 2)`.
+"""
 function nnls!(
     work::NNLSWorkspace{T},
     A::AbstractMatrix{T},
@@ -284,16 +355,9 @@ function nnls!(
     return solution(work)
 end
 
-"""
-CONSTRUCTION AND/OR APPLICATION OF A SINGLE
-HOUSEHOLDER TRANSFORMATION Q = I + U*(U**T)/B
-
-The original version of this code was developed by
-Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
-1973 JUN 12, and published in the book
-"SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
-Revised FEB 1995 to accompany reprinting of the book by SIAM.
-"""
+# Construct the Householder transformation Q = I + u*(uᵀ)/b that annihilates x[2:end], overwriting x with u and returning the scalar factor tau.
+# Adapted from the FORTRAN of Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory,
+# published in "Solving Least Squares Problems", Prentice-Hall, 1974, revised February 1995 for the SIAM reprint.
 function construct_householder!(x::AbstractVector{T}) where {T}
     if length(x) <= 1
         return zero(T)
@@ -317,16 +381,9 @@ function construct_householder!(x::AbstractVector{T}) where {T}
     return tau
 end
 
-"""
-CONSTRUCTION AND/OR APPLICATION OF A SINGLE
-HOUSEHOLDER TRANSFORMATION Q = I + U*(U**T)/B
-
-The original version of this code was developed by
-Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
-1973 JUN 12, and published in the book
-"SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
-Revised FEB 1995 to accompany reprinting of the book by SIAM.
-"""
+# Apply the Householder transformation defined by u and tau to the vector c, in place.
+# Adapted from the FORTRAN of Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory,
+# published in "Solving Least Squares Problems", Prentice-Hall, 1974, revised February 1995 for the SIAM reprint.
 function apply_householder!(
     c::AbstractVector{T},
     u::AbstractVector{T},
@@ -516,20 +573,9 @@ for K in (1, 2, 4)
     end
 end
 
-"""
-COMPUTE ORTHOGONAL ROTATION MATRIX
-The original version of this code was developed by
-Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
-1973 JUN 12, and published in the book
-"SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
-Revised FEB 1995 to accompany reprinting of the book by SIAM.
-
-    COMPUTE MATRIX  (C, S) SO THAT (C, S)(A) = (SQRT(A**2+B**2))
-                    (-S,C)         (-S,C)(B)   (   0          )
-    COMPUTE SIG = SQRT(A**2+B**2)
-        SIG IS COMPUTED LAST TO ALLOW FOR THE POSSIBILITY THAT
-        SIG MAY BE IN THE SAME LOCATION AS A OR B .
-"""
+# Compute the Givens rotation (c, s) with (c, s; -s, c) * (a, b) = (σ, 0) and σ = hypot(a, b).
+# Adapted from the FORTRAN of Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory,
+# published in "Solving Least Squares Problems", Prentice-Hall, 1974, revised February 1995 for the SIAM reprint.
 @inline function orthogonal_rotmat(a::T, b::T) where {T}
     σ = hypot(a, b)
     c = a / σ
@@ -543,13 +589,9 @@ end
     return x, y
 end
 
-"""
-The original version of this code was developed by
-Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory
-1973 JUN 15, and published in the book
-"SOLVING LEAST SQUARES PROBLEMS", Prentice-HalL, 1974.
-Revised FEB 1995 to accompany reprinting of the book by SIAM.
-"""
+# Solve the triangular system U * x = z, or Uᵀ * x = z when `transp`, overwriting the right-hand side z with x.
+# Adapted from the FORTRAN of Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory,
+# published in "Solving Least Squares Problems", Prentice-Hall, 1974, revised February 1995 for the SIAM reprint.
 function solve_triangular_system!(
     z::AbstractVector{T},
     A::AbstractMatrix{T},
@@ -692,7 +734,7 @@ function unsafe_nnls!(
     init_dual::Bool = true,
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
-    (; A, b, x, w, zz, idx, invidx, b0, H, hlen, gc, gs, gi, transforms) = work
+    (; A, b, x, w, zz, idx, invidx, b0, r, H, hlen, gc, gs, gi, transforms) = work
     m, n = size(A)
 
     copyto!(b0, b) # b holds the untransformed right-hand side at entry, for every caller; snapshot it for residual and dual computations
@@ -707,6 +749,7 @@ function unsafe_nnls!(
     work.mode[] = 0
     terminated = false
     use_stale_w = !init_dual # init_dual = false: the caller preloaded w for the first pivot selection
+    rfresh = false # whether r = b0 - A0[:, idx[1:nsetp]]*x₊ is current for the present passive set; see the rnorm epilogue
 
     # ******  MAIN LOOP BEGINS HERE  ******
     @inbounds while true
@@ -723,6 +766,7 @@ function unsafe_nnls!(
             use_stale_w = false
         else
             compute_dual!(work, A0, nsetp, m)
+            rfresh = true
         end
 
         while true
@@ -761,6 +805,7 @@ function unsafe_nnls!(
             nsetp += 1
             idx[nsetp], idx[jmax] = idx[jmax], idx[nsetp]
             w[nsetp] = zero(T)
+            rfresh = false # b was transformed and the passive set changed
             break
         end
 
@@ -869,13 +914,32 @@ function unsafe_nnls!(
     # Compute the norm of the final residual vector
     sm = zero(T)
     if nsetp < m
-        @inbounds @simd for i in nsetp+1:m
-            bi = b[i]
-            zz[i] = bi
-            sm = sm + bi * bi
+        @inbounds @simd ivdep for i in nsetp+1:m
+            zz[i] = b[i]
         end
     else
         fill!(w, zero(T))
+    end
+
+    # Compute the norm of the final residual from the untransformed residual r = b0 - A0[:, idx[1:nsetp]]*x₊.
+    # The transformed free rows of b lose relative accuracy when a nearly dependent column enters, for instance a duplicated column, whereas r is accurate to working precision.
+    # r is already current when termination followed the dual computation; otherwise recompute it; when all rows are triangularized the residual is zero by convention, matching the classic algorithm's empty free-row sum.
+    if nsetp < m
+        if !rfresh
+            @inbounds @simd ivdep for i in 1:m
+                r[i] = b0[i]
+            end
+            @inbounds for t in 1:nsetp
+                xt = zz[t]
+                jt = idx[t]
+                @simd ivdep for i in 1:m
+                    r[i] = r[i] - xt * A0[i, jt]
+                end
+            end
+        end
+        @inbounds @simd for i in 1:m
+            sm = sm + r[i] * r[i]
+        end
     end
 
     work.rnorm[] = sqrt(sm)
@@ -890,7 +954,7 @@ function unsafe_nnls!(
     init_dual::Bool = true,
     max_iter::Int = 3 * size(work.A, 2),
 ) where {T}
-    (; A, b, x, w, zz, idx, invidx, diag, b0, H, hlen, gc, gs, gi, transforms) = work
+    (; A, b, x, w, zz, idx, invidx, diag, b0, r, H, hlen, gc, gs, gi, transforms) = work
     M, N = size(A)
     m, n = M - N, N
     m0 = m # number of data rows; rows m0+1:M are the implicit λI padding
@@ -907,11 +971,11 @@ function unsafe_nnls!(
     work.mode[] = 0
     terminated = false
     use_stale_w = !init_dual # init_dual = false: the caller preloaded w for the first pivot selection
+    rfresh = false # whether r = b0 - A0[:, idx[1:nsetp]]*x₊ is current for the present passive set; see the rnorm epilogue
 
     # ******  MAIN LOOP BEGINS HERE  ******
     @inbounds while true
         # QUIT IF ALL COEFFICIENTS ARE ALREADY IN THE SOLUTION.
-        # OR IF M COLS OF A HAVE BEEN TRIANGULARIZED.
         if nsetp >= n
             terminated = true
             break
@@ -931,6 +995,7 @@ function unsafe_nnls!(
             end
         else
             compute_dual!(work, A0, nsetp, m0)
+            rfresh = true
         end
 
         while true
@@ -983,6 +1048,7 @@ function unsafe_nnls!(
             nsetp += 1
             idx[nsetp], idx[jmax] = idx[jmax], idx[nsetp]
             w[nsetp] = zero(T)
+            rfresh = false # b was transformed and the passive set changed
             break
         end
 
@@ -1091,13 +1157,36 @@ function unsafe_nnls!(
     # Compute the norm of the final residual vector
     sm = zero(T)
     if nsetp < M
-        @inbounds @simd for i in nsetp+1:M
-            bi = b[i]
-            zz[i] = bi
-            sm = sm + bi * bi
+        @inbounds @simd ivdep for i in nsetp+1:M
+            zz[i] = b[i]
         end
     else
         fill!(w, zero(T))
+    end
+
+    # Compute the norm of the final residual from the untransformed residual:
+    #   ||[A₀; λI]x - [b₀; 0]||² = ||r||² + λ²||x₊||²,   r = b0 - A0[:, idx[1:nsetp]]*x₊.
+    # For λ = 0 with the data rows exhausted the residual is zero by convention, matching the classic algorithm's exactly-zero free rows.
+    if !(iszero(λ) && nsetp >= m0)
+        if !rfresh
+            @inbounds @simd ivdep for i in 1:m0
+                r[i] = b0[i]
+            end
+            @inbounds for t in 1:nsetp
+                xt = zz[t]
+                jt = idx[t]
+                @simd ivdep for i in 1:m0
+                    r[i] = r[i] - xt * A0[i, jt]
+                end
+            end
+        end
+        @inbounds @simd for i in 1:m0
+            sm = sm + r[i] * r[i]
+        end
+        λ² = λ * λ
+        @inbounds @simd for i in 1:nsetp
+            sm = sm + λ² * zz[i] * zz[i]
+        end
     end
 
     work.rnorm[] = sqrt(sm)
