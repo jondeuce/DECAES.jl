@@ -386,24 +386,23 @@ end
 chi2_relerr⁻¹(res²_target, relerr) = res²_target * (1 + relerr)
 
 # Helper struct which wraps `N` caches of `NNLSTikhonovRegProblem` workspaces.
-# Useful for optimization problems where the last function call may not be
-# the optimium, but perhaps it was one or two calls previous and is still in the
-# `NNLSTikhonovRegProblemCache` and a recomputation can be avoided.
-struct NNLSTikhonovRegProblemCache{N, W <: NTuple{N}}
-    cache::W
-    idx::Base.RefValue{Int}
+# Useful for optimization problems where the last function call may not be the optimium,
+# but perhaps it was recent and is still in the `NNLSTikhonovRegProblemCache`, avoiding a recomputation.
+struct NNLSTikhonovRegProblemCache{T, N, W <: AbstractVector}
+    cache::W # a Vector rather than an NTuple, so runtime slot indexing compiles to a load instead of a branch chain
+    idx::Base.RefValue{Int} # index of the most recently written slot
 end
 function NNLSTikhonovRegProblemCache(A::AbstractMatrix{T}, b::AbstractVector{T}, ::Val{N} = Val(8)) where {T, N}
-    cache = ntuple(_ -> NNLSTikhonovRegProblem(A, b), N)
+    cache = [NNLSTikhonovRegProblem(A, b) for _ in 1:N]
     idx = Ref(1)
-    return NNLSTikhonovRegProblemCache(cache, idx)
+    return NNLSTikhonovRegProblemCache{T, N, typeof(cache)}(cache, idx)
 end
-reset_cache!(work::NNLSTikhonovRegProblemCache{N}) where {N} = foreach(w -> regparam!(w, NaN), work.cache)
+reset_cache!(work::NNLSTikhonovRegProblemCache) = (foreach(w -> regparam!(w, NaN), work.cache); nothing)
 Base.getindex(work::NNLSTikhonovRegProblemCache) = work.cache[get_cache_index(work)]
 
-function next_cache_index!(work::NNLSTikhonovRegProblemCache{N}) where {N}
-    for (i, w) in enumerate(work.cache)
-        if isnan(regparam(w))
+function next_cache_index!(work::NNLSTikhonovRegProblemCache{T, N}) where {T, N}
+    for i in 1:N
+        if isnan(regparam(work.cache[i]))
             set_cache_index!(work, i)
             return work.idx[]
         end
@@ -412,27 +411,27 @@ function next_cache_index!(work::NNLSTikhonovRegProblemCache{N}) where {N}
     return work.idx[]
 end
 @inline get_cache_index(work::NNLSTikhonovRegProblemCache) = work.idx[]
-@inline set_cache_index!(work::NNLSTikhonovRegProblemCache{N}, i) where {N} = (work.idx[] = mod1(i, N))
+@inline set_cache_index!(work::NNLSTikhonovRegProblemCache{T, N}, i) where {T, N} = (work.idx[] = mod1(i, N))
 
-function solve!(work::NNLSTikhonovRegProblemCache, μ::Real)
+function solve!(work::NNLSTikhonovRegProblemCache{T}, μ::T) where {T}
     # Find index of cached workspace with μi nearest to μ
     @assert μ > 0 "Regularization parameter μ must be positive, got μ = $μ"
-    T = typeof(regparam(work[]))
-    μ = T(μ)
 
     emptycache = true
     imax, Δlogμmax = 0, T(Inf)
-    for (i, μi) in enumerate(regparam.(work.cache))
+    for (i, w) in enumerate(work.cache)
+        μi = regparam(w)
         if !isnan(μi)
             emptycache = false
-            imax, Δlogμ = i, μ == μi ? zero(T) : T(abs(log1p((μ - μi) / μi)))
+            Δlogμ = μ == μi ? zero(T) : T(abs(log1p((μ - μi) / μi)))
             Δlogμ < Δlogμmax && ((imax, Δlogμmax) = (i, Δlogμ))
             Δlogμmax == 0 && break
         end
     end
 
-    if emptycache || Δlogμmax > 0
-        # No cached solves; solve from scratch
+    if emptycache || imax == 0 || Δlogμmax > 0
+        # No cached solve is an exact match, so solve from scratch.
+        # A nearest match can also fail to exist when μ is so large that (μ - μi) / μi rounds to -1 and Δlogμ overflows to Inf.
         next_cache_index!(work)
         solve!(work[], μ)
     else

@@ -703,14 +703,25 @@ splittable(box::BoundingBox{D}) where {D} = any(widths(box) .> 1)
 ####
 
 struct DiscreteSurrogateSearcher{D, T}
-    grid::Array{SVector{D, T}, D}
-    seen::Array{Bool, D}
-    numeval::Base.RefValue{Int}
+    grid::Array{SVector{D, T}, D} # parameter grid being searched
+    seen::Array{Bool, D} # whether the surrogate has been evaluated at each grid point
+    numeval::Base.RefValue{Int} # number of evaluations performed
+end
+function DiscreteSurrogateSearcher(grid::Array{SVector{D, T}, D}) where {D, T}
+    return DiscreteSurrogateSearcher(grid, fill(false, size(grid)), Ref(0))
 end
 function DiscreteSurrogateSearcher(surr::AbstractSurrogate; mineval::Int, maxeval::Int)
     @assert mineval <= maxeval
-    state = DiscreteSurrogateSearcher(surr.grid, fill(false, size(surr.grid)), Ref(0))
+    state = DiscreteSurrogateSearcher(surr.grid)
     return initialize!(surr, state; mineval, maxeval)
+end
+
+# Clear the evaluation state so the searcher can be reused for a new search without reallocating.
+# The flip-angle optimization reuses one searcher per thread, resetting it once per voxel.
+function reset!(state::DiscreteSurrogateSearcher)
+    fill!(state.seen, false)
+    state.numeval[] = 0
+    return state
 end
 
 function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}; mineval::Int, maxeval::Int) where {D}

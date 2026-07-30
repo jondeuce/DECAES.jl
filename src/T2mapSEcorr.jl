@@ -375,13 +375,14 @@ end
 # =========================================================
 # Flip angle optimization
 # =========================================================
-struct FlipAngleOptimizationWorkspace{T, B, E, S}
-    decay_basis::Matrix{T}
-    decay_data::Vector{T}
+struct FlipAngleOptimizationWorkspace{T, B, E, S, R}
+    decay_basis::Matrix{T} # decay basis at the current flip angle `α`
+    decay_data::Vector{T} # decay curve data
     decay_basis_set::B # B <: EPGBasisSetFunctor{T, ETL}
     decay_basis_set_ensemble::E # E <: Union{Nothing, EPGBasisSetEnsemble{1, T, ETL}}
-    α::Base.RefValue{T}
+    α::Base.RefValue{T} # current flip angle, in degrees
     α_surrogate::S # S <: Union{Nothing, AbstractSurrogate{1, T}}
+    α_searcher::R # R <: Union{Nothing, DiscreteSurrogateSearcher{1, T}}; reused across voxels
 end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{T}, decay_data::Vector{T}) where {T}
@@ -394,6 +395,7 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{
         epg_decay_basis!(decay_basis_set, decay_basis, SA{T}[α[]])
         decay_basis_set_ensemble = nothing
         α_surrogate = nothing
+        α_searcher = nothing
     else
         # Compute basis for each angle
         decay_basis_set_ensemble = EPGBasisSetEnsemble(o, θ, Val((:α,)), decay_data)
@@ -401,9 +403,10 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{
         α_surrogate = o.legacy ?
                       CubicSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob; legacy = true) :
                       CubicHermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
+        α_searcher = DiscreteSurrogateSearcher(α_surrogate.grid) # reused per voxel; see `optimize_flip_angle!`
     end
 
-    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate)
+    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate, α_searcher)
 end
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
@@ -411,8 +414,9 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
     if o.SetFlipAngle === nothing
         # Find optimal flip angle
         empty!(work.α_surrogate)
-        nnls_searcher = DiscreteSurrogateSearcher(work.α_surrogate; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
-        α_opt, _ = bisection_search(work.α_surrogate, nnls_searcher; maxeval = o.nRefAngles)
+        reset!(work.α_searcher) # reuse the searcher's buffers instead of allocating one per voxel
+        initialize!(work.α_surrogate, work.α_searcher; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
+        α_opt, _ = bisection_search(work.α_surrogate, work.α_searcher; maxeval = o.nRefAngles)
         work.α[] = α_opt[1]
 
         # Compute basis using optimized flip angles
