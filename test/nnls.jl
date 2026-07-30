@@ -194,7 +194,7 @@ function verify_NNLS_tikh(m, n, μ)
         work.w .= randn(n)
         work.zz .= randn(m + n)
         work.idx .= rand(Int, n)
-        work.diag .= rand(Bool, n)
+        work.diag .= rand(0:n, n)
         work.rnorm[] = rand()
         work.mode[] = rand(1:100)
         work.nsetp[] = rand(0:min(m + n, n))
@@ -338,6 +338,25 @@ end
 @testset "NNLS Tikh" begin
     for (m, n) in NNLS_SIZES, μ in [0.0, 1e-6, 1e-2, 10.0, 1e4]
         verify_NNLS_tikh(m, n, μ)
+    end
+end
+
+# Direct workspace calling convention, as used by lsqnonneg.jl: initialize the workspace manually, preload the initial dual w,
+# and call `unsafe_nnls!` with `init_dual = false`.
+# The solver must use the preloaded w and derive all other internal state from the workspace fields and the pristine matrix alone.
+@testset "NNLS direct workspace API" begin
+    for (m, n) in NNLS_SIZES, μ in [0.0, 1e-2]
+        A0, b0 = rand_NNLS_data(m, n)
+        A, b = maybe_pad_NNLS_data(A0, b0, μ)
+        work = NNLS.NNLSWorkspace(A, b)
+        x_ref = copy(μ > 0 ? NNLS.nnls!(work, A, b, μ) : NNLS.nnls!(work, A, b))
+
+        NNLS.load!(work, A, b)
+        μ > 0 ? NNLS.init_nnls!(work, μ) : NNLS.init_nnls!(work)
+        mul!(work.w, A0', b0) # caller-preloaded initial dual w₀ = A₀'b₀
+        μ > 0 ? NNLS.unsafe_nnls!(work, A0, μ; init_dual = false) : NNLS.unsafe_nnls!(work, A0; init_dual = false)
+        @test NNLS.solution(work) ≈ x_ref atol = 1e-12 rtol = 1e-8
+        @test all(isfinite, NNLS.solution(work))
     end
 end
 

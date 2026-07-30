@@ -34,7 +34,6 @@ function solve!(
     kwargs...,
 ) where {T}
     m, n = size(A)
-    C = work.nnls_work.A
     f = work.nnls_work.b
     x = work.nnls_work.x
     w = work.nnls_work.w
@@ -60,19 +59,16 @@ function solve!(
     @inbounds for j in 1:n-1
         wj = zero(T)
         @simd for i in 1:m
-            Aij = A[i, j]
-            wj += Aij * z[i]
-            C[i, j] = Aij # initialize nnls workspace
+            wj += A[i, j] * z[i]
         end
         w[j] = wj
     end
     @inbounds w[end] = 0
     @inbounds w[end] = all(<=(0), w)
 
-    # Initialize nnls workspace
+    # Initialize nnls workspace; A is not copied, since the solver reads pristine column data directly from the caller's matrix
     @inbounds for i in 1:m
         f[i] = b[i]
-        C[i, n] = A[i, n]
     end
 
     @inbounds for j in 1:n
@@ -80,7 +76,7 @@ function solve!(
         idx[j] = j
     end
 
-    return NNLS.unsafe_nnls!(work.nnls_work; kwargs..., init_dual = false)
+    return NNLS.unsafe_nnls!(work.nnls_work, A; kwargs..., init_dual = false)
 end
 
 function solve!(
@@ -104,7 +100,6 @@ function solve!(
         b0 = view(b, 1:m)
     end
 
-    C = work.nnls_work.A
     f = work.nnls_work.b
     x = work.nnls_work.x
     w = work.nnls_work.w
@@ -132,35 +127,26 @@ function solve!(
     @inbounds for j in 1:n-1
         wj = zero(T)
         @simd for i in 1:m
-            Aij = A0[i, j]
-            wj += Aij * z[i]
-            C[i, j] = Aij # initialize nnls workspace
+            wj += A0[i, j] * z[i]
         end
         w[j] = wj
     end
     @inbounds w[end] = 0
     @inbounds w[end] = all(<=(0), w)
 
-    # Initialize nnls workspace
+    # Initialize nnls workspace; A is not copied, since the solver reads pristine column data directly from the caller's
+    # matrix and candidate columns are materialized in a scratch buffer with their λ entry placed on the fly
     @inbounds for i in 1:m
         f[i] = b0[i]
-        C[i, n] = A0[i, n]
     end
-
-    @inbounds for j in 1:n
-        for i in m+1:size(C, 1)
-            C[i, j] = 0
-        end
-    end
-
     @inbounds for j in 1:n
         x[j] = 0
         f[m+j] = 0
         idx[j] = j
-        diag[j] = false
+        diag[j] = 0 # no λ row activated
     end
 
-    return NNLS.unsafe_nnls!(work.nnls_work, μ; kwargs..., init_dual = false)
+    return NNLS.unsafe_nnls!(work.nnls_work, A0, μ; kwargs..., init_dual = false)
 end
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
