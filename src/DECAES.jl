@@ -52,7 +52,7 @@ include("main.jl")
 export MAT, NIfTI, ParXRec, load_image
 export T2mapOptions, T2mapSEcorr, T2partOptions, T2partSEcorr
 export EPGdecaycurve, EPGdecaycurve!, EPGdecaycurve_work
-export lcurve_corner, lsqnonneg, lsqnonneg_tikh, lsqnonneg_lcurve, lsqnonneg_gcv, lsqnonneg_chi2, lsqnonneg_mdp
+export lcurve_corner, lsqnonneg, lsqnonneg_tikh, lsqnonneg_gcv, lsqnonneg_lcurve, lsqnonneg_chi2, lsqnonneg_mdp
 export main
 
 # Precompile
@@ -61,7 +61,7 @@ export main
         main(["--help"])
         main(["--version"])
         mock_load_image()
-        for Reg in ["none", "lcurve", "gcv", "chi2", "mdp"]
+        for Reg in ["gcv", "lcurve", "chi2", "mdp", "none"]
             NumVoxels = max(4, Threads.nthreads()) * default_blocksize()
             mock_T2_pipeline(; MatrixSize = (NumVoxels, 1, 1), Reg)
         end

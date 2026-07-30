@@ -1,3 +1,5 @@
+Random.seed!(0) # reproducible randomized tests: failures should be bisectable, not luck-of-the-draw
+
 const NNLS_SIZES = vec(collect(Iterators.product([1, 2, 5, 8, 13, 16, 25, 32], [1, 2, 5, 8, 13, 16, 25, 32])))
 
 function rand_NNLS_data(m, n)

@@ -1,3 +1,5 @@
+Random.seed!(0) # reproducible randomized tests
+
 function test_poly()
     function polyroots(coeffs)
         if all(iszero, coeffs)

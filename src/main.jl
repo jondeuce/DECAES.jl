@@ -119,7 +119,7 @@ add_arg_table!(CLI_SETTINGS,
     "--Reg",
     Dict(
         :arg_type => String,
-        :help => "method used for choosing the Tikhonov regularization parameter. One of \"lcurve\", \"gcv\", \"chi2\", \"mdp\", or \"none\". These flags correspond to the L-curve method, generalized cross-validation, the chi-squared method, Morozov's discrepency principle, and zero regularization. Required parameter",
+        :help => "method used for choosing the Tikhonov regularization parameter. One of \"gcv\", \"lcurve\", \"chi2\", \"mdp\", or \"none\". These flags correspond to generalized cross-validation, the L-curve method, the chi-squared method, Morozov's discrepency principle, and zero regularization. Required parameter",
         :group => :t2_map_part_required,
     ),
     "--RegParams",

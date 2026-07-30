@@ -63,9 +63,9 @@ See also:
     nRefAnglesMin::Int = !legacy ? min(5, nRefAngles) : nRefAngles
     @assert 2 <= nRefAnglesMin <= nRefAngles "Minimum number of angles to check during flip angle optimization must be in the range [2, nRefAngles], but nRefAngles = $nRefAngles and nRefAnglesMin = $nRefAnglesMin."
 
-    "Regularization routine to use. One of \"none\", \"lcurve\", \"gcv\", \"chi2\", or \"mdp\", representing no regularization, the L-Curve method, the Generalized Cross-Validation method, `Chi2Factor`-based Tikhonov regularization, or the Morozov discrepancy principle, respectively."
+    "Regularization routine to use. One of \"gcv\", \"lcurve\", \"chi2\", \"mdp\", or \"none\", representing the Generalized Cross-Validation method, the L-Curve method, `Chi2Factor`-based Tikhonov regularization, the Morozov discrepancy principle, or no regularization, respectively."
     Reg::String
-    @assert Reg ∈ ("none", "lcurve", "gcv", "chi2", "mdp")
+    @assert Reg ∈ ("gcv", "lcurve", "chi2", "mdp", "none")
 
     "Constraint on ``\\chi^2`` used for regularization when `Reg == \"chi2\"`."
     Chi2Factor::Union{T, Nothing} = nothing

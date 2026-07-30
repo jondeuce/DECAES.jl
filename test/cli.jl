@@ -1,3 +1,5 @@
+Random.seed!(0) # reproducible randomized tests (image params, arg permutations, tolerances)
+
 # Arbitrary default required parameters used during testing (nTE and nT2 handled separately)
 default_paramdict = Dict{Symbol, Any}(
     :TE => 8e-3,
@@ -258,8 +260,8 @@ function run_cli_tests()
         (:MinRefAngle .=> [55.0],),
         (:RefConAngle .=> [172.0],),
         (
-            :Reg       .=> ["lcurve", "gcv", "chi2", "mdp", "none"],
-            :RegParams .=> [nothing, nothing, 1.025, 3e-4, nothing],
+            :Reg       .=> ["none", "gcv", "lcurve", "chi2", "mdp"],
+            :RegParams .=> [nothing, nothing, nothing, 1.025, 3e-4],
         ),
         (:SPWin .=> [(13e-3, 37e-3)],),
         (:SaveResidualNorm .=> [true],),
@@ -281,8 +283,8 @@ function run_cli_tests()
         (
             :legacy    .=> [true, true],
             :Threshold .=> [1.0, 0.0],
-            :Reg       .=> ["gcv", "chi2", "none"],
-            :RegParams .=> [nothing, 1.025, nothing],
+            :Reg       .=> ["none", "gcv", "chi2"],
+            :RegParams .=> [nothing, nothing, 1.025],
         ),
     ]
 
@@ -391,8 +393,8 @@ function matlab_tests()
         (:MinRefAngle .=> [60.0],),
         (:nRefAngles .=> [7, 12],),
         (
-            :Reg       .=> ["gcv", "chi2", "none"],
-            :RegParams .=> [nothing, 1.03, nothing],
+            :Reg       .=> ["none", "gcv", "chi2"],
+            :RegParams .=> [nothing, nothing, 1.03],
         ),
         (:SetFlipAngle .=> [178.0],),
         (:SaveRegParam .=> [true],),
@@ -442,7 +444,7 @@ function matlab_tests()
             #           IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
             # This comparison is therefore skipped by default. If you have a version in which these errors are fixed,
             # the below line can be modified (with rtol set appropriately in accordance with your solver tolerance)
-            if any(param === :Reg && paramval ∈ ("lcurve", "gcv") for (param, paramval) in param_val_pairs)
+            if any(param === :Reg && paramval ∈ ("gcv", "lcurve") for (param, paramval) in param_val_pairs)
                 continue
                 # rtol = 1e-3
             end

@@ -1,3 +1,5 @@
+Random.seed!(0) # reproducible randomized tests
+
 @testset "GrowableCache" begin
     c = GrowableCache{Float64, Float64}()
     push!(c, (1.0, 2.0))
