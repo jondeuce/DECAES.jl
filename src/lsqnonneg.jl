@@ -809,6 +809,12 @@ function lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector; kwargs...)
 end
 lsqnonneg_lcurve_work(A::AbstractMatrix, b::AbstractVector) = NNLSLCurveRegProblem(A, b)
 
+# Slope-collapse guard threshold for the L-curve corner: the maximum admissible log-log tangent slope |S| = -res²/(‖x‖²·μ²) at a corner candidate.
+# The max-curvature search can latch onto spurious high curvature near μ→0, where the residual bottoms out as ‖Ax-b‖² → res²_min and the log-residual axis flattens, so the L-curve turns near-vertical and the "corner" collapses onto its top-left tail.
+# A near-vertical collapse has |S|≫1, a genuine elbow has |S| ~ 0.1 to 10; candidate points steeper than this are not accepted as corners. This is built into the search's admissibility filter; see `lcurve_corner`'s `slope_max` kwarg.
+# Set to Inf to disable and recover the pure max-curvature search.
+const LCURVE_SLOPE_MAX = Ref(10.0)
+
 function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_prob_smooth_cache)
@@ -823,12 +829,14 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
         return SA{T}[ξ, η]
     end
 
-    # Build cached function and solve
+    # Build cached function and solve via pointwise max-curvature, following Cultrera-Callegaro, rejecting corners in the near-vertical μ→0 collapse tail with the slope guard `LCURVE_SLOPE_MAX`.
     f_lcurve_cached = CachedFunction(f_lcurve, empty!(work.lsqnonneg_lcurve_fun_cache))
     f = LCurveCornerCachedFunction(f_lcurve_cached, empty!.(work.lcurve_corner_caches)...)
+    logmu_final = lcurve_corner(f, T(-8), T(2); slope_max = T(LCURVE_SLOPE_MAX[]), kwargs...)
 
-    logmu_bounds = (T(-8), T(2))
-    logmu_final = lcurve_corner(f, logmu_bounds...; kwargs...)
+    # A degenerate cornerless curve admits no corner; see `lcurve_corner`.
+    # Return the unregularized solution rather than an arbitrary near-zero μ.
+    isnan(logmu_final) && return (; x = solve!(work.nnls_prob), mu = zero(T), chi2 = one(T))
 
     # Return the final regularized solution
     mu_final = exp(logmu_final)
@@ -869,7 +877,7 @@ Find the corner of the L-curve via curvature maximization using a modified versi
 
   1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
 """
-function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 1e-4, Ptol = 1e-4, Ctol = 1e-4, backtracking = true) where {T}
+function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 1e-4, Ptol = 1e-4, Ctol = 1e-4, slope_max = T(Inf), backtracking = true) where {T}
     # Initialize state
     state = initial_state(f, T(xlow), T(xhigh))
 
@@ -878,9 +886,13 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
     Ptol = T(Ptol) # convergence occurs when diameter of L-curve state is less than Ptol
     Ctol = T(Ctol) # note: *not* a tolerance on curvature, but on the minimum diameter of the L-curve state used to estimate curvature (see `Pfilter` below)
 
-    # For very small regularization points on the L-curve may be extremely close, leading to
-    # numerically unstable curvature estimates. Assign these points -Inf curvature.
-    Pfilter = P -> min(norm(P - Ptopleft), norm(P - Pbottomright)) > T(Ctol)
+    # A candidate point is x = logμ paired with P = (log‖Ax-b‖², log‖x‖²), and is admissible as a corner only if two tests pass.
+    # First, it must not be numerically too close to an endpoint: points on the L-curve can be extremely close for tiny μ, and the curvature estimate is then unstable.
+    # Second, its log-log tangent slope |S| = -res²/(μ²‖x‖²) must not be too steep, i.e. log|S| = P[1] - P[2] - 2x ≤ log(slope_max).
+    # Steep near-vertical points are the μ→0 collapse artifact of the log transform, where the residual has bottomed out at res_min, whereas a genuine elbow has |S| ~ 0.1 to 10.
+    # Setting slope_max = Inf drops the second test and recovers the pure max-curvature search. Inadmissible points are assigned -Inf curvature, so the search never accepts them.
+    log_slope_max = log(T(slope_max))
+    Pfilter = (x, P) -> (min(norm(P - Ptopleft), norm(P - Pbottomright)) > T(Ctol)) && (P[1] - P[2] - 2 * x <= log_slope_max)
     update_curvature!(f, state, Pfilter)
 
     # msg(s, state) = (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [f.point_cache[x].C for x in state.x⃗])))
@@ -912,10 +924,12 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::
         backtracking && push!(f.state_cache, (iter, state))
     end
 
-    (x, (_, _)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
+    (x, (_, C)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
     # msg("Converged", state)
 
-    return x
+    # Every evaluated point is inadmissible when the maximum curvature is still -Inf, which happens when all points are endpoint-near or steeper than `slope_max`, as on a degenerate cornerless L-curve.
+    # Return NaN rather than an arbitrary collapse point, and let the caller fall back; `lsqnonneg_lcurve!` returns the unregularized solution in that case.
+    return C == T(-Inf) ? T(NaN) : x
 end
 
 function initial_state(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
@@ -949,7 +963,7 @@ function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCorner
     (; x⃗, P⃗) = state
     for i in 1:4
         x, P, C = x⃗[i], P⃗[i], T(-Inf)
-        if Pfilter === nothing || Pfilter(P)
+        if Pfilter === nothing || Pfilter(x, P)
             # Compute curvature from nearest neighbours
             x₋, x₊ = T(-Inf), T(+Inf)
             P₋, P₊ = P, P
