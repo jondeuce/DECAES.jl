@@ -272,8 +272,8 @@ end
     ε²e⁻ˣ = ε² * exp(-x)
     tmp1  = ε²e⁻ˣ * û
     tmp2  = (1 + x) * tmp1
-    ∇ᵀû  = -(tmp2 ⋅ t)
-    ∇²û  = tmp2 - ε² * (tmp1 ⋅ t) * t
+    ∇ᵀû   = -(tmp2 ⋅ t)
+    ∇²û   = tmp2 - ε² * (tmp1 ⋅ t) * t
     return ∇ᵀû, ∇²û
 end
 
@@ -288,8 +288,8 @@ end
     ε²e⁻ˣ = ε² * exp(-x)
     tmp1  = ε²e⁻ˣ * û
     tmp2  = (tmp1 ⋅ t)
-    ∇ᵀû  = -tmp2
-    ∇²û  = tmp1 - (ε * itnrm * tmp2) * t
+    ∇ᵀû   = -tmp2
+    ∇²û   = tmp1 - (ε * itnrm * tmp2) * t
     return ∇ᵀû, ∇²û
 end
 

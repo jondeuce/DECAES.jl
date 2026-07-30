@@ -18,8 +18,8 @@ end
 
 # Rotation matrix R(α, φ) for rotating the MPSV by angle α (degrees) about an axis having an angle φ (degrees) with the x-axis.
 @inline element_flipmat(α::T, φ::T) where {T} = SA{Complex{T}}[
-    cosd(α / 2)^2 cisd(2φ) * sind(α / 2)^2 -im*cisd(φ)*sind(α);
-    cisd(-2φ) * sind(α / 2)^2 cosd(α / 2)^2 im*cisd(-φ)*sind(α);
+    cosd(α / 2)^2 cisd(2φ)*sind(α / 2)^2 -im*cisd(φ)*sind(α);
+    cisd(-2φ)*sind(α / 2)^2 cosd(α / 2)^2 im*cisd(-φ)*sind(α);
     -im*cisd(-φ)*sind(α)/2 im*cisd(φ)*sind(α)/2 cosd(α)]
 
 # Real representation for the rotation matrix R(α, 90) for the Carr-Purcell (CP/anti-CPMG) pulse sequence following excitation 90_y.
