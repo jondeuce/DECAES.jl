@@ -164,6 +164,11 @@ abstract type AbstractEPGWorkspace{T, ETL} end
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualVector_Split_Dynamic(T, ETL) # default for dynamic `ETL`
 @inline EPGdecaycurve_work(::Type{T}, ::Val{ETL}) where {T, ETL} = EPGWork_ReIm_DualMVector_Split(T, Val(ETL)) # default for static `ETL`
 
+# Workspace used for computing decay bases over a T2 grid.
+# Constant-flip-angle bases use the lane-batched kernel; see `epg_decay_basis!`.
+@inline EPGdecaybasis_work(θ::EPGParameterization{T}) where {T} = EPGdecaycurve_work(θ)
+@inline EPGdecaybasis_work(θ::EPGConstantFlipAngleOptions{T}) where {T} = EPGWork_ReIm_Batched_Split_Dynamic(T, echotrainlength(θ))
+
 # Default fastest cache types and builders for each EPGParameterization type
 
 @inline default_cache_type(θ::EPGOptions, ::Type{T} = eltype(θ), etl::ETL = θ.ETL) where {T, ETL} = EPGWork_ReIm_DualVector_Split_Dynamic{T, ETL, Vector{SVector{3, T}}, Vector{T}}
@@ -1164,6 +1169,187 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTup
     end
 
     return dc
+end
+
+####
+#### EPGWork_ReIm_Batched_Split_Dynamic
+####
+
+const EPG_BATCH_WIDTH = 8
+
+# Batched constant-flip-angle kernel computing up to `EPG_BATCH_WIDTH` decay curves simultaneously, one T2 per lane, with α, TE and T1 shared.
+# The EPG recursion is identical to `EPGWork_ReIm_DualTuple_Split_Dynamic`, but every state update is vectorized across the lane dimension.
+# That dimension is unit-stride and shift-free, since the k ± 1 shifts move whole lane blocks,
+# unlike the single-curve kernels whose k-loops have short trip counts and shifted stores.
+# Intended for computing decay bases over a T2 grid; the single-curve `epg_decay_curve!` method duplicates one T2 across all lanes.
+struct EPGWork_ReIm_Batched_Split_Dynamic{T, ETL, MType <: AbstractMatrix{T}, VType <: AbstractVector{T}, DCType <: AbstractVector{T}} <: AbstractEPGWorkspace{T, ETL}
+    ETL::ETL   # echo train length
+    X₁::MType  # F⁺ states of the current half-step (EPG_BATCH_WIDTH × ETL, lane-major)
+    Y₁::MType  # F⁻ states of the current half-step
+    Z₁::MType  # Z states of the current half-step
+    X₂::MType  # F⁺ states of the previous half-step; the two triples are swapped each step
+    Y₂::MType  # F⁻ states of the previous half-step
+    Z₂::MType  # Z states of the previous half-step
+    dcb::MType # lane-major impulse responses (EPG_BATCH_WIDTH × ETL)
+    a::VType   # per-lane coefficients; see `epg_setup_lanes!`
+    b::VType   # per-lane a·cos α
+    c::VType   # per-lane E₁E₂·sin α
+    c′::VType  # per-lane -c/2
+    d::VType   # per-lane E₁²·cos α
+    dc::DCType # single-curve decay curve output; see `epg_decay_curve!`
+end
+
+function EPGWork_ReIm_Batched_Split_Dynamic(::Type{T}, ETL::Int) where {T}
+    W = EPG_BATCH_WIDTH
+    X₁, Y₁, Z₁ = zeros(T, W, ETL), zeros(T, W, ETL), zeros(T, W, ETL)
+    X₂, Y₂, Z₂ = zeros(T, W, ETL), zeros(T, W, ETL), zeros(T, W, ETL)
+    dcb = zeros(T, W, ETL)
+    a, b, c, c′, d = (zeros(T, W) for _ in 1:5)
+    dc = zeros(T, ETL)
+    return EPGWork_ReIm_Batched_Split_Dynamic(ETL, X₁, Y₁, Z₁, X₂, Y₂, Z₂, dcb, a, b, c, c′, d, dc)
+end
+
+# Load per-lane relaxation and rotation coefficients: lane l gets T2 = T2s[min(l0 + l - 1, lmax)].
+# Out-of-range lanes repeat the last T2, and their results are discarded by the caller.
+function epg_setup_lanes!(work::EPGWork_ReIm_Batched_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}, T2s::AbstractVector, l0::Int, lmax::Int) where {T}
+    (; a, b, c, c′, d) = work
+    α = deg2rad(θ.α)
+    TE, T1 = echotime(θ), T1time(θ)
+    E₁ = exp(-(TE / 2) / T1)
+    sinα, cosα = sincos(α)
+    E₁² = E₁ * E₁
+    @inbounds for l in 1:EPG_BATCH_WIDTH
+        T2 = T(T2s[min(l0 + l - 1, lmax)])
+        E₂ = exp(-(TE / 2) / T2)
+        a[l] = (E₂ * E₂) / 2
+        b[l] = a[l] * cosα
+        c[l] = E₁ * E₂ * sinα
+        c′[l] = -c[l] / 2
+        d[l] = E₁² * cosα
+    end
+    return work
+end
+
+function epg_impulse_response_batched!(work::EPGWork_ReIm_Batched_Split_Dynamic{T}) where {T}
+    (; X₁, Y₁, Z₁, X₂, Y₂, Z₂, dcb) = work
+    ETL = echotrainlength(work)
+    W = EPG_BATCH_WIDTH
+
+    (; a, b, c, c′, d) = work
+
+    @inbounds begin
+        @simd ivdep for l in 1:W
+            dcb[l, 1] = a[l] - b[l]
+            X₁[l, 1], Y₁[l, 1], Z₁[l, 1] = a[l] - b[l], zero(T), c′[l]
+            X₁[l, 2], Y₁[l, 2], Z₁[l, 2] = a[l] + b[l], zero(T), zero(T)
+        end
+        (X₁, Y₁, Z₁), (X₂, Y₂, Z₂) = (X₂, Y₂, Z₂), (X₁, Y₁, Z₁)
+
+        for i in 2:(ETL÷2)
+            @simd ivdep for l in 1:W
+                F, F̄, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a[l] * C, b[l] * S
+                v = muladd(-c[l], Z, C′ - S′)
+                dcb[l, i] = v
+                X₁[l, 1] = v
+                X₁[l, 2] = muladd(c[l], Z, C′ + S′)
+                Z₁[l, 1] = muladd(c′[l], S, d[l] * Z)
+            end
+
+            for k in 2:i-1
+                @simd ivdep for l in 1:W
+                    F, F̄, Z = X₂[l, k], Y₂[l, k], Z₂[l, k]
+                    C, S = F + F̄, F - F̄
+                    C′, S′ = a[l] * C, b[l] * S
+                    X₁[l, k+1] = muladd(c[l], Z, C′ + S′)
+                    Y₁[l, k-1] = muladd(-c[l], Z, C′ - S′)
+                    Z₁[l, k] = muladd(c′[l], S, d[l] * Z)
+                end
+            end
+
+            @simd ivdep for l in 1:W
+                F, F̄, Z = X₂[l, i], Y₂[l, i], Z₂[l, i]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a[l] * C, b[l] * S
+                X₁[l, i+1] = muladd(c[l], Z, C′ + S′)
+                Y₁[l, i-1] = muladd(-c[l], Z, C′ - S′)
+                Z₁[l, i] = muladd(c′[l], S, d[l] * Z)
+                Y₁[l, i] = zero(T)
+                Y₁[l, i+1] = zero(T)
+                Z₁[l, i+1] = zero(T)
+            end
+
+            (X₁, Y₁, Z₁), (X₂, Y₂, Z₂) = (X₂, Y₂, Z₂), (X₁, Y₁, Z₁)
+        end
+
+        for i in (ETL÷2+1):ETL-1
+            @simd ivdep for l in 1:W
+                F, F̄, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
+                C, S = F + F̄, F - F̄
+                C′, S′ = a[l] * C, b[l] * S
+                v = muladd(-c[l], Z, C′ - S′)
+                dcb[l, i] = v
+                X₁[l, 1] = v
+                X₁[l, 2] = muladd(c[l], Z, C′ + S′)
+                Z₁[l, 1] = muladd(c′[l], S, d[l] * Z)
+            end
+
+            for k in 2:(ETL-i+1)
+                @simd ivdep for l in 1:W
+                    F, F̄, Z = X₂[l, k], Y₂[l, k], Z₂[l, k]
+                    C, S = F + F̄, F - F̄
+                    C′, S′ = a[l] * C, b[l] * S
+                    X₁[l, k+1] = muladd(c[l], Z, C′ + S′)
+                    Y₁[l, k-1] = muladd(-c[l], Z, C′ - S′)
+                    Z₁[l, k] = muladd(c′[l], S, d[l] * Z)
+                end
+            end
+
+            (X₁, Y₁, Z₁), (X₂, Y₂, Z₂) = (X₂, Y₂, Z₂), (X₁, Y₁, Z₁)
+        end
+
+        @simd ivdep for l in 1:W
+            F, F̄, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
+            C, S = F + F̄, F - F̄
+            dcb[l, ETL] = muladd(-c[l], Z, muladd(a[l], C, -b[l] * S))
+        end
+    end
+
+    return work
+end
+
+function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_Batched_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}) where {T}
+    ETL = echotrainlength(work)
+    epg_setup_lanes!(work, θ, SA[T2time(θ)], 1, 1) # duplicate the single T2 across all lanes
+    epg_impulse_response_batched!(work)
+
+    # Scale impulse response by initial magnetization and take absolute value
+    m₀ = sind(θ.α / 2)
+    (; dcb) = work
+    @inbounds @simd ivdep for i in 1:ETL
+        dc[i] = abs(m₀ * dcb[1, i])
+    end
+
+    return dc
+end
+
+function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::EPGWork_ReIm_Batched_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}, T2_times::AbstractVector) where {T}
+    # Compute the NNLS basis over T2 space in lane-batched chunks
+    ETL, nT2 = size(decay_basis)
+    W = EPG_BATCH_WIDTH
+    m₀ = sind(θ.α / 2)
+    (; dcb) = decay_curve_work
+    @inbounds for j0 in 1:W:nT2
+        epg_setup_lanes!(decay_curve_work, θ, T2_times, j0, nT2)
+        epg_impulse_response_batched!(decay_curve_work)
+        for l in 1:min(W, nT2-j0+1)
+            @simd ivdep for i in 1:ETL
+                decay_basis[i, j0+l-1] = abs(m₀ * dcb[l, i])
+            end
+        end
+    end
+    return decay_basis
 end
 
 ####

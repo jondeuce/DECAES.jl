@@ -11,6 +11,7 @@ const EPG_Algorithms = Any[
     DECAES.EPGWork_ReIm_DualVector_Split_Dynamic,
     DECAES.EPGWork_ReIm_DualFlat_Split_Dynamic,
     DECAES.EPGWork_ReIm_DualTuple_Split_Dynamic,
+    DECAES.EPGWork_ReIm_Batched_Split_Dynamic,
     DECAES.EPGWork_ReIm_DualMVector_Split,
     # DECAES.EPGWork_ReIm_DualPaddedMVector_Vec_Split,
     DECAES.EPGWork_ReIm_DualPaddedVector_Split,
@@ -46,7 +47,7 @@ function compare_epg(work₁::DECAES.AbstractEPGWorkspace{T}, work₂::DECAES.Ab
         @info "  diff vector: $(abs.(dc₁ .- dc₂)')"
     end
 
-    @test isapprox(dc₁, dc₂; rtol = √eps(T), atol = 10 * eps(T))
+    @test isapprox(dc₁, dc₂; rtol = cbrt(eps(T))^2, atol = 10 * eps(T))
 end
 
 function test_EPG_algorithms(; verbose = false)
@@ -89,6 +90,7 @@ function test_EPG_algorithm_consistency(; verbose = false)
         DECAES.EPGWork_ReIm_DualVector_Split_Dynamic,
         DECAES.EPGWork_ReIm_DualFlat_Split_Dynamic,
         DECAES.EPGWork_ReIm_DualTuple_Split_Dynamic,
+        DECAES.EPGWork_ReIm_Batched_Split_Dynamic,
     )
 
     for T in (Float32, Float64)
@@ -172,8 +174,23 @@ function test_EPGFunctor()
     @test J * δx ≈ DECAES.EPGdecaycurve(θ′) - y atol = 5e-12
 end
 
+# The lane-batched kernel computes decay bases in chunks of EPG_BATCH_WIDTH T2s at once.
+# Compare against the per-curve reference basis for heterogeneous lanes, partial chunks, and remainder handling.
+function test_EPG_batched_basis()
+    for T in (Float32, Float64), ETL in (4, 7, 33, 48), nT2 in (1, 3, 8, 11, 40)
+        θ = mock_θ(DECAES.EPGConstantFlipAngleOptions, T, ETL)
+        T2_times = nT2 == 1 ? T[0.1] : exp10.(range(T(-2), T(0); length = nT2))
+        basis_ref = zeros(T, ETL, nT2)
+        basis_bat = zeros(T, ETL, nT2)
+        DECAES.epg_decay_basis!(basis_ref, DECAES.EPGdecaycurve_work(θ), θ, T2_times)
+        DECAES.epg_decay_basis!(basis_bat, DECAES.EPGWork_ReIm_Batched_Split_Dynamic(T, ETL), θ, T2_times)
+        @test isapprox(basis_ref, basis_bat; rtol = cbrt(eps(T))^2, atol = 10 * eps(T))
+    end
+end
+
 @testset "EPG algorithms" test_EPG_algorithms()
 @testset "EPG algorithm consistency" test_EPG_algorithm_consistency()
+@testset "EPG batched basis" test_EPG_batched_basis()
 @testset "EPGOptions" test_EPGOptions()
 @testset "EPGFunctor" test_EPGFunctor()
 

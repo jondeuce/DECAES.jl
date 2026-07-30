@@ -258,7 +258,7 @@ struct EPGBasisSetFunctor{
 end
 
 function EPGBasisSetFunctor(o::T2mapOptions{T}, θ::EPGParameterization{T}, opt_vars::Val) where {T}
-    epg_work = EPGdecaycurve_work(θ)
+    epg_work = EPGdecaybasis_work(θ)
     epg_functor! = EPGFunctor(θ, opt_vars)
     epg_jac_functor! = EPGJacobianFunctor(θ, opt_vars)
     return EPGBasisSetFunctor(θ, opt_vars, T2_component_times(o), epg_work, epg_functor!, epg_jac_functor!)
