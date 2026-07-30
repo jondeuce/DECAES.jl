@@ -188,9 +188,51 @@ function test_EPG_batched_basis()
     end
 end
 
+function test_EPG_cosine_basis()
+    for T in (Float32, Float64), ETL in (4, 7, 33, 48), nT2 in (1, 3, 8, 11, 40)
+        θ = mock_θ(DECAES.EPGConstantFlipAngleOptions, T, ETL)
+        T2_times = nT2 == 1 ? T[0.1] : exp10.(range(T(-2), T(0); length = nT2))
+        decay_basis_work = DECAES.EPGCosineSeriesBasis(θ, T2_times)
+        basis_ref = zeros(T, ETL, nT2)
+        basis_cos = zeros(T, ETL, nT2)
+        work_ref = DECAES.EPGdecaycurve_work(θ)
+        for α in T[51.3, 90.0, 119.7, 147.2, 165.0, 180.0]
+            DECAES.epg_decay_basis!(basis_ref, work_ref, DECAES.restructure(θ, (; α)), T2_times)
+            DECAES.epg_decay_basis!(basis_cos, decay_basis_work, α)
+            @test isapprox(basis_ref, basis_cos; rtol = cbrt(eps(T))^2, atol = 10 * eps(T))
+        end
+    end
+end
+
+function test_EPG_cosine_basis_gradient()
+    T = Float64
+    for ETL in (4, 7, 33, 48), nT2 in (1, 8, 40)
+        θ = mock_θ(DECAES.EPGConstantFlipAngleOptions, T, ETL)
+        T2_times = nT2 == 1 ? T[0.1] : exp10.(range(T(-2), T(0); length = nT2))
+        decay_basis_work = DECAES.EPGCosineSeriesBasis(θ, T2_times)
+        Bp, Bm, B = zeros(T, ETL, nT2), zeros(T, ETL, nT2), zeros(T, ETL, nT2)
+        Acol, dAcol = zeros(T, ETL), zeros(T, ETL)
+        h = T(1e-5)
+        for α in T[91.3, 120.7, 150.2, 164.9, 179.1]
+            DECAES.epg_decay_basis!(Bp, decay_basis_work, α + h)
+            DECAES.epg_decay_basis!(Bm, decay_basis_work, α - h)
+            DECAES.epg_decay_basis!(B, decay_basis_work, α) # reference value basis; also leaves `c` current at α
+            DECAES.cosine_∂α_features!(decay_basis_work, α) # `sn` current at α (precondition of the single-column kernel)
+            for j in 1:nT2
+                DECAES.epg_decay_basis_∂α_col!(Acol, dAcol, decay_basis_work, α, j)
+                @test isapprox(Acol, B[:, j]; rtol = cbrt(eps(T))^2, atol = 10 * eps(T)) # value column matches the full-basis kernel
+                dfd = (Bp[:, j] .- Bm[:, j]) ./ (2h)
+                @test isapprox(dAcol, dfd; rtol = T(1e-5), atol = T(1e-8) * norm(dfd)) # derivative column matches finite differences
+            end
+        end
+    end
+end
+
 @testset "EPG algorithms" test_EPG_algorithms()
 @testset "EPG algorithm consistency" test_EPG_algorithm_consistency()
 @testset "EPG batched basis" test_EPG_batched_basis()
+@testset "EPG cosine series basis" test_EPG_cosine_basis()
+@testset "EPG cosine series basis gradient" test_EPG_cosine_basis_gradient()
 @testset "EPGOptions" test_EPGOptions()
 @testset "EPGFunctor" test_EPGFunctor()
 

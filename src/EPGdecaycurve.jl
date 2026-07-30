@@ -1705,3 +1705,152 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T}, θ::EPGOp
     return dc
 end
 =#
+
+####
+#### Exact cosine-series representation of the constant-flip-angle EPG basis
+####
+
+# Exact cosine-series form of the constant-flip-angle basis, used to evaluate A(α) at arbitrary α without re-running the EPG recursion.
+# When every pulse is proportional to α, i.e. RefConAngle == 180, the signed unit-excitation impulse response of echo i is an even trigonometric polynomial of degree ≤ i in α.
+# All α-dependence enters the recursion affinely via cos α and sin α, each echo adds at most one degree, and transverse↔longitudinal transfers carry sin α factors in pairs.
+# Hence A_ij(α) = |sin(α/2) Σ_{k=0}^{i} Â_ijk cos(kα)| exactly, with coefficients from a cosine-Vandermonde solve on nTE+1 impulse-response samples at α_m = 180m/nTE; the Vandermonde has DCT-I structure and condition number ≈ 1.5.
+struct EPGCosineSeriesBasis{T}
+    ETL::Int # echo train length, and also the cosine series degree
+    nT2::Int # number of T2 times, i.e. basis columns
+    coeffs::Vector{T} # triangular cosine coefficients stored in 4-row blocks; for each column j and echo block b, the k = 0..min(4b, ETL) runs have the block's 4 rows interleaved per k and zero-padded, so evaluation is one 4-wide broadcast-FMA per harmonic.
+    c::Vector{T} # cosine feature buffer c[k+1] = cos(kα)
+    sn::Vector{T} # k-weighted sine feature buffer sn[k+1] = k·sin(kα); see `cosine_∂α_features!`
+end
+
+function EPGCosineSeriesBasis(θ::EPGConstantFlipAngleOptions{T}, T2_times::AbstractVector) where {T}
+    ETL, nT2, W = echotrainlength(θ), length(T2_times), EPG_BATCH_WIDTH
+    N = ETL # cosine series degree; echo i has degree ≤ i ≤ N, so N+1 samples interpolate exactly
+    work = EPGWork_ReIm_Batched_Split_Dynamic(T, ETL)
+    S = zeros(T, ETL, nT2, N + 1)
+    for m in 0:N
+        θm = restructure(θ, (; α = T(180) * m / N))
+        for j0 in 1:W:nT2
+            epg_setup_lanes!(work, θm, T2_times, j0, nT2)
+            epg_impulse_response_batched!(work)
+            for l in 1:min(W, nT2-j0+1), i in 1:ETL
+                S[i, j0+l-1, m+1] = work.dcb[l, i]
+            end
+        end
+    end
+    C = T[cospi(T(k * m) / N) for m in 0:N, k in 0:N]
+    Â = reshape(permutedims(C \ permutedims(reshape(S, ETL * nT2, N + 1))), ETL, nT2, N + 1)
+    nblk = cld(ETL, 4)
+    coeffs = zeros(T, 4 * nT2 * sum(b -> min(4b, ETL) + 1, 1:nblk))
+    p = 0
+    for j in 1:nT2, b in 1:nblk, k in 0:min(4b, ETL), r in 1:4
+        i = 4 * (b - 1) + r
+        coeffs[p+=1] = (i <= ETL && k <= i) ? Â[i, j, k+1] : zero(T)
+    end
+    return EPGCosineSeriesBasis{T}(ETL, nT2, coeffs, zeros(T, N + 1), zeros(T, N + 1))
+end
+
+# Sibling sharing the read-only coefficient tensor with fresh feature buffers.
+# The coefficients depend only on the sequence parameters; all thread buffers share one tensor, while the mutable `c` and `sn` buffers stay thread-local.
+EPGCosineSeriesBasis(decay_basis_work::EPGCosineSeriesBasis{T}) where {T} = EPGCosineSeriesBasis{T}(decay_basis_work.ETL, decay_basis_work.nT2, decay_basis_work.coeffs, similar(decay_basis_work.c), similar(decay_basis_work.sn))
+
+# Fill the cosine feature buffer c[k+1] = cos(kα) via the Chebyshev recurrence cos(kα) = 2 cos α cos((k-1)α) − cos((k-2)α).
+function cosine_features!(decay_basis_work::EPGCosineSeriesBasis{T}, α::T) where {T}
+    (; ETL, c) = decay_basis_work
+    cosα = cosd(α)
+    @inbounds begin
+        c[1], c[2] = one(T), cosα
+        for k in 3:ETL+1
+            c[k] = 2 * cosα * c[k-1] - c[k-2]
+        end
+    end
+    return decay_basis_work
+end
+
+function epg_decay_basis!(decay_basis::Matrix{T}, decay_basis_work::EPGCosineSeriesBasis{T}, α::T) where {T}
+    (; coeffs, c) = decay_basis_work
+    ETL, nT2 = size(decay_basis)
+    cosine_features!(decay_basis_work, α)
+    s = sind(α / 2)
+    p = 0
+    @inbounds for j in 1:nT2
+        o = (j - 1) * ETL
+        for b in 1:cld(ETL, 4)
+            i0 = 4 * (b - 1)
+            L = min(i0 + 4, ETL) + 1
+            a1 = a2 = a3 = a4 = zero(T)
+            @simd ivdep for k in 1:L
+                cₖ = c[k]
+                q = p + 4 * (k - 1)
+                a1 = muladd(coeffs[q+1], cₖ, a1)
+                a2 = muladd(coeffs[q+2], cₖ, a2)
+                a3 = muladd(coeffs[q+3], cₖ, a3)
+                a4 = muladd(coeffs[q+4], cₖ, a4)
+            end
+            p += 4L
+            if i0 + 4 <= ETL
+                decay_basis[o+i0+1], decay_basis[o+i0+2], decay_basis[o+i0+3], decay_basis[o+i0+4] = abs(s * a1), abs(s * a2), abs(s * a3), abs(s * a4)
+            else
+                nr = ETL - i0
+                nr >= 1 && (decay_basis[o+i0+1] = abs(s * a1))
+                nr >= 2 && (decay_basis[o+i0+2] = abs(s * a2))
+                nr >= 3 && (decay_basis[o+i0+3] = abs(s * a3))
+            end
+        end
+    end
+    return decay_basis
+end
+
+# Fill the k-weighted sine features sn[k+1] = k·sin(kα) used by `epg_decay_basis_∂α_col!`, via the same recurrence as the cosine features.
+function cosine_∂α_features!(decay_basis_work::EPGCosineSeriesBasis{T}, α::T) where {T}
+    (; ETL, sn) = decay_basis_work
+    αrad = deg2rad(α)
+    sinα, cosα = sin(αrad), cos(αrad)
+    @inbounds begin
+        s1, s2 = zero(T), sinα
+        sn[1], sn[2] = zero(T), sinα
+        for k in 3:ETL+1
+            s1, s2 = s2, 2 * cosα * s2 - s1 # sin(kα) = 2 cos α sin((k-1)α) − sin((k-2)α)
+            sn[k] = (k - 1) * s2
+        end
+    end
+    return decay_basis_work
+end
+
+# Fill column j of A(α) into `Acol` and its α-derivative ∂A[:, j]/∂α into `dAcol` (both length ETL) from the cosine series.
+# A_ij = |s·a_ij| with s = sind(α/2) and a_ij = Σₖ Â_ijk cos(kα), so ∂A_ij/∂α = sign(a_ij)·(s′·a_ij + s·a′_ij) with s′ = (π/360)·cosd(α/2) and a′_ij = −(π/180)·Σₖ k·Â_ijk sin(kα).
+# Requires `c` and `sn` current at α, i.e. `cosine_features!` then `cosine_∂α_features!`.
+# One column is O(ETL²/2), so building only the few support columns is far cheaper than a full basis.
+function epg_decay_basis_∂α_col!(Acol::AbstractVector{T}, dAcol::AbstractVector{T}, decay_basis_work::EPGCosineSeriesBasis{T}, α::T, j::Int) where {T}
+    (; ETL, coeffs, c, sn) = decay_basis_work
+    nblk = cld(ETL, 4)
+    s, ds = sind(α / 2), T(π) / 360 * cosd(α / 2)
+    dcoef = -T(π) / 180
+    p = 4 * (j - 1) * sum(b -> min(4b, ETL) + 1, 1:nblk)
+    @inbounds for b in 1:nblk
+        i0 = 4 * (b - 1)
+        L = min(i0 + 4, ETL) + 1
+        a1 = a2 = a3 = a4 = zero(T)
+        d1 = d2 = d3 = d4 = zero(T)
+        @simd ivdep for k in 1:L
+            cₖ, sₖ = c[k], sn[k]
+            q = p + 4 * (k - 1)
+            a1 = muladd(coeffs[q+1], cₖ, a1)
+            a2 = muladd(coeffs[q+2], cₖ, a2)
+            a3 = muladd(coeffs[q+3], cₖ, a3)
+            a4 = muladd(coeffs[q+4], cₖ, a4)
+            d1 = muladd(coeffs[q+1], sₖ, d1)
+            d2 = muladd(coeffs[q+2], sₖ, d2)
+            d3 = muladd(coeffs[q+3], sₖ, d3)
+            d4 = muladd(coeffs[q+4], sₖ, d4)
+        end
+        p += 4L
+        for (r, a, d) in ((1, a1, d1), (2, a2, d2), (3, a3, d3), (4, a4, d4))
+            i = i0 + r
+            i <= ETL || break
+            dv = muladd(ds, a, s * dcoef * d)
+            Acol[i] = abs(s * a)
+            dAcol[i] = ifelse(a < 0, -dv, dv)
+        end
+    end
+    return Acol, dAcol
+end

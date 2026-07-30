@@ -167,9 +167,10 @@ function T2mapSEcorr!(
     # Process all pixels
     # =========================================================================
 
-    # For each worker in the worker pool, allocate a separete thread-local buffer, then run the work function `work!`
+    # For each worker in the worker pool, allocate a separate thread-local buffer, then run the work function `work!`.
+    global_buffer = global_buffer_maker(opts)
     function with_thread_buffer(work!)
-        thread_buffer = thread_buffer_maker(opts)
+        thread_buffer = thread_buffer_maker(opts, global_buffer)
         return work!(thread_buffer)
     end
 
@@ -221,8 +222,8 @@ function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps{T}, dist::T2Dist
         # Load flip angle from provided B1 map
         @inbounds flip_angle_work.α[] = maps.alpha[I]
 
-        # Compute basis using provided flip angle
-        epg_decay_basis!(flip_angle_work.decay_basis_set, flip_angle_work.decay_basis, SA[flip_angle_work.α[]])
+        # Compute basis using the provided flip angle, routed through the same `final_decay_basis!` as the flip-search path, so a rerun that supplies the fitted α as a B1 map uses an identical basis.
+        final_decay_basis!(flip_angle_work)
     else
         # Find optimum flip angle and compute EPG decay basis
         optimize_flip_angle!(flip_angle_work, opts)
@@ -375,7 +376,7 @@ end
 # =========================================================
 # Flip angle optimization
 # =========================================================
-struct FlipAngleOptimizationWorkspace{T, B, E, S, R}
+struct FlipAngleOptimizationWorkspace{T, B, E, S, R, C}
     decay_basis::Matrix{T} # decay basis at the current flip angle `α`
     decay_data::Vector{T} # decay curve data
     decay_basis_set::B # B <: EPGBasisSetFunctor{T, ETL}
@@ -383,9 +384,10 @@ struct FlipAngleOptimizationWorkspace{T, B, E, S, R}
     α::Base.RefValue{T} # current flip angle, in degrees
     α_surrogate::S # S <: Union{Nothing, AbstractSurrogate{1, T}}
     α_searcher::R # R <: Union{Nothing, DiscreteSurrogateSearcher{1, T}}; reused across voxels
+    decay_basis_work::C # C <: Union{Nothing, EPGCosineSeriesBasis{T}}; evaluates the decay basis at arbitrary α, or nothing when the cosine representation does not apply
 end
 
-function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{T}, decay_data::Vector{T}) where {T}
+function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{T}, decay_data::Vector{T}, shared_decay_basis_work::Union{Nothing, EPGCosineSeriesBasis{T}} = nothing) where {T}
     α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
     θ = default_epg_parameters(o)
     decay_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
@@ -406,7 +408,23 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{
         α_searcher = DiscreteSurrogateSearcher(α_surrogate.grid) # reused per voxel; see `optimize_flip_angle!`
     end
 
-    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate, α_searcher)
+    decay_basis_work = shared_decay_basis_work !== nothing ? EPGCosineSeriesBasis(shared_decay_basis_work) :
+                       !o.legacy && o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ?
+                       EPGCosineSeriesBasis(θ, decay_basis_set.T2_times) : nothing
+
+    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate, α_searcher, decay_basis_work)
+end
+
+# Build the T2-stage decay basis at the current flip angle `work.α[]`.
+# Uses the exact cosine-series evaluation when it applies, and the exact EPG rebuild otherwise.
+function final_decay_basis!(work::FlipAngleOptimizationWorkspace)
+    α = work.α[]
+    if work.decay_basis_work !== nothing
+        epg_decay_basis!(work.decay_basis, work.decay_basis_work, α)
+    else
+        epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA[α])
+    end
+    return nothing
 end
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
@@ -420,7 +438,7 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
         work.α[] = α_opt[1]
 
         # Compute basis using optimized flip angles
-        epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA[work.α[]])
+        final_decay_basis!(work)
     end
 
     return nothing
@@ -597,10 +615,11 @@ end
 # =========================================================
 # Utility functions
 # =========================================================
-function thread_buffer_maker(o::T2mapOptions{T}) where {T}
+function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = nothing) where {T}
     decay_basis = zeros(T, o.nTE, o.nT2)
     decay_data  = zeros(T, o.nTE)
     decay_scale = Ref(one(T))
+    decay_basis_work = global_buffer === nothing ? nothing : global_buffer.decay_basis_work
     return (;
         T2_times         = logrange(o.T2Range..., o.nT2),
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
@@ -612,9 +631,17 @@ function thread_buffer_maker(o::T2mapOptions{T}) where {T}
         decay_curvefit   = zeros(T, o.nTE),
         residuals        = zeros(T, o.nTE),
         decay_curve_work = EPGdecaycurve_work(default_epg_parameters(o)),
-        flip_angle_work  = FlipAngleOptimizationWorkspace(o, decay_basis, decay_data),
+        flip_angle_work  = FlipAngleOptimizationWorkspace(o, decay_basis, decay_data, decay_basis_work),
         T2_dist_work     = T2DistWorkspace(regularization_method(o), decay_basis, decay_data, decay_scale),
     )
+end
+
+# Master decay basis workspace for the current options, or `nothing` when the cosine representation does not apply, namely in legacy mode, for a fixed flip angle, or for a non-constant flip angle.
+# The coefficient tensor is voxel- and thread-independent, so one instance is built here and its read-only coefficients are shared by every worker's buffer instead of each holding a private copy.
+function global_buffer_maker(o::T2mapOptions{T}) where {T}
+    θ = default_epg_parameters(o)
+    decay_basis_work = !o.legacy && o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ? EPGCosineSeriesBasis(θ, T2_component_times(o)) : nothing
+    return (; decay_basis_work)
 end
 
 function default_epg_parameters(o::T2mapOptions{T}) where {T}
