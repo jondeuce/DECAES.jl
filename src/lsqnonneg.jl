@@ -523,11 +523,18 @@ function solve!(work::NNLSTikhonovRegProblemCache{T}, μ::T) where {T}
         end
     end
 
-    if emptycache || imax == 0 || Δlogμmax > 0
+    if emptycache || imax == 0
         # No cached solve is an exact match, so solve from scratch.
         # A nearest match can also fail to exist when μ is so large that (μ - μi) / μi rounds to -1 and Δlogμ overflows to Inf.
         next_cache_index!(work)
         solve!(work[], μ)
+    elseif Δlogμmax > 0
+        # No exact match, so solve into the next cache slot, warm-started from the active set of the nearest cached solve.
+        # The seeded solve stashes the seed indices before touching its own workspace, so this is safe even when the next slot is the seed slot itself.
+        src = work.cache[imax].nnls_prob.nnls_work
+        idx0, nsetp0 = src.idx, NNLS.ncomponents(src)
+        next_cache_index!(work)
+        solve!(work[], μ, idx0, nsetp0)
     else
         # Exact match; return cached solution
         set_cache_index!(work, imax)
