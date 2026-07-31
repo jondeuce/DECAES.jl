@@ -152,18 +152,18 @@ function NNLSWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
 end
 
 function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
-    hcap = 2n + 8 # covers any realistic number of passive-set entries and re-entries
+    hcap = 2n + 8 # covers any realistic number of passive-set entries (n entries + re-entries)
     return NNLSWorkspace(
-        zeros(T, m, n), # A
-        zeros(T, m),    # b
-        zeros(T, n),    # x
-        zeros(T, n),    # w
-        zeros(T, m),    # zz
-        zeros(Int, n),  # idx (Note: deliberately initialize to invalid permutation)
-        zeros(Int, n),  # invidx
-        zeros(Int, n),  # diag
-        zeros(T, m),    # b0
-        zeros(T, m),    # r
+        zeros(T, m, n),       # A
+        zeros(T, m),          # b
+        zeros(T, n),          # x
+        zeros(T, n),          # w
+        zeros(T, m),          # zz
+        zeros(Int, n),        # idx (Note: deliberately initialize to invalid permutation)
+        zeros(Int, n),        # invidx
+        zeros(Int, n),        # diag
+        zeros(T, m),          # b0
+        zeros(T, m),          # r
         zeros(T, m, hcap),    # H
         zeros(T, hcap),       # htau
         zeros(Int, hcap),     # hpos
@@ -173,9 +173,9 @@ function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
         sizehint!(T[], 4n),   # gs
         sizehint!(Int[], 4n), # gi
         sizehint!(Int[], 4n), # transforms
-        Ref(zero(T)),   # rnorm
-        Ref(0),         # mode
-        Ref(0),         # nsetp
+        Ref(zero(T)),         # rnorm
+        Ref(0),               # mode
+        Ref(0),               # nsetp
     )
 end
 
@@ -355,6 +355,58 @@ function nnls!(
     return solution(work)
 end
 
+# Warm-started Tikhonov solve: seed the passive set with the columns idx0[1:nsetp0], typically cached `components(work)` indices from a solve with a similar λ value.
+# The seeded columns are entered without the positivity check, infeasible ones are dropped again by a feasibility pass, and the standard algorithm then runs to convergence, so the result is identical in quality to a cold solve.
+function nnls!(
+    work::NNLSWorkspace{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    λ::T,
+    idx0::AbstractVector{Int},
+    nsetp0::Int;
+    kwargs...,
+) where {T}
+    size(A, 1) > size(A, 2) || throw(DimensionMismatch("A must be of the form [A₀; λ*I], got size(A) = $(size(A))"))
+    checkargs(work)
+    n = size(work.A, 2)
+    0 <= nsetp0 <= min(n, length(idx0)) || throw(ArgumentError("require 0 <= nsetp0 <= min(n, length(idx0))"))
+    init_dual!(work, A, b, size(A, 1) - size(A, 2))
+    init_nnls!(work, λ)
+    @inbounds for t in 1:nsetp0
+        j = idx0[t]
+        1 <= j <= n || throw(ArgumentError("warm-start indices must be in 1:n"))
+        work.hpos[t] = j # stash the seed; read back (before slot t is reused) in `unsafe_nnls!`
+    end
+    # With a nonempty seed the round-0 dual must be recomputed from the seeded residual; with an empty seed this is a cold solve and the dual preloaded by `init_dual!` is exact.
+    unsafe_nnls!(work, A, λ; kwargs..., nwarm = nsetp0, init_dual = nsetp0 > 0)
+    return solution(work)
+end
+
+# Warm-started unregularized solve: seed the passive set with the columns idx0[1:nsetp0], typically cached `components(work)` indices from a solve with a similar matrix.
+# Same protocol as the Tikhonov warm start: seeds are entered without the positivity check, infeasible ones are dropped by a feasibility pass, and the standard algorithm runs to convergence.
+function nnls!(
+    work::NNLSWorkspace{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    idx0::AbstractVector{Int},
+    nsetp0::Int;
+    kwargs...,
+) where {T}
+    checkargs(work)
+    n = size(work.A, 2)
+    0 <= nsetp0 <= min(n, length(idx0)) || throw(ArgumentError("require 0 <= nsetp0 <= min(n, length(idx0))"))
+    init_dual!(work, A, b)
+    init_nnls!(work)
+    @inbounds for t in 1:nsetp0
+        j = idx0[t]
+        1 <= j <= n || throw(ArgumentError("warm-start indices must be in 1:n"))
+        work.hpos[t] = j # stash the seed; read back (before slot t is reused) in `unsafe_nnls!`
+    end
+    # The preloaded round-0 dual w = A'b is exact for an empty seed; the seeding block invalidates it as soon as any seed enters.
+    unsafe_nnls!(work, A; kwargs..., nwarm = nsetp0, init_dual = false)
+    return solution(work)
+end
+
 # Construct the Householder transformation Q = I + u*(uᵀ)/b that annihilates x[2:end], overwriting x with u and returning the scalar factor tau.
 # Adapted from the FORTRAN of Charles L. Lawson and Richard J. Hanson at Jet Propulsion Laboratory,
 # published in "Solving Least Squares Problems", Prentice-Hall, 1974, revised February 1995 for the SIAM reprint.
@@ -440,6 +492,24 @@ function apply_transforms!(c::AbstractVector{T}, work::NNLSWorkspace{T}) where {
     return c
 end
 
+# Apply the single stored Householder reflection t to column `col` of C (used to keep staged candidates reduced as earlier block members enter).
+@inline function apply_householder_to_col!(C::AbstractMatrix{T}, col::Int, work::NNLSWorkspace{T}, t::Int) where {T}
+    (; H, htau, hpos, hm1) = work
+    @inbounds begin
+        ip, m1, tau = hpos[t], hm1[t], htau[t]
+        sm = C[ip, col]
+        @simd for i in ip+1:m1
+            sm = sm + C[i, col] * H[i, t]
+        end
+        sm *= -tau
+        C[ip, col] = C[ip, col] + sm
+        @simd ivdep for i in ip+1:m1
+            C[i, col] = C[i, col] + sm * H[i, t]
+        end
+    end
+    return nothing
+end
+
 # Compute the dual, i.e. the negative gradient, for the active-set columns j = nsetp+1:n:
 #   w[j] = A0[1:mdata, idx[j]]' * r,   r = b0 - A0[:, idx[1:nsetp]] * x₊,
 # where x₊ = zz[1:nsetp] is the current passive-set solution and A0 is the caller's pristine matrix, indexed by original column.
@@ -475,15 +545,15 @@ end
 
 # Attempt to move a candidate column into the passive set at position ip = nsetp + 1.
 # On input c (= work.zz, used as scratch) holds the candidate column in original row coordinates (rows 1:m1; the caller zeroes inactive padded rows and places any λ entry).
-# The candidate is reduced against the current Q, then a Householder reflection is constructed on rows ip:m1
-# and the classic entering-column checks are performed, namely sufficient independence and positivity of the proposed new coefficient.
-# On acceptance the reflection is recorded and applied to b, and the new U column is written at position ip.
-# Pristine column data is never moved; kernels read it from the caller's matrix via `idx`.
-# Returns tau >= 0 on acceptance and -1 on rejection.
-function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int, m1::Int) where {T}
+# The candidate is reduced against the current Q via the transforms, then a Householder reflection is constructed on rows ip:m1 and the classic entering-column checks are performed (sufficient independence and positivity of the proposed new coefficient).
+# On acceptance: the reflection is appended to the log and applied to b, and the new U column is written at position ip (pristine column data is never moved: kernels read it from the caller's matrix via `idx`).
+# Returns tau >= 0 on acceptance, -1 on rejection, and -2 if the Householder panel is full (pathological; treated like iteration exhaustion by the caller).
+function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int, m1::Int, check::Bool = true, reduce::Bool = true) where {T}
     (; A, b, H, htau, hpos, hm1, hlen, transforms) = work
 
-    apply_transforms!(c, work)
+    if reduce # skipped when the caller already reduced c against Q (block staging)
+        apply_transforms!(c, work)
+    end
 
     # Construct the Householder reflection of c on rows ip:m1
     @inbounds alpha = c[ip]
@@ -510,7 +580,7 @@ function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int
     A1 = -beta
     @inbounds b1 = b[ip] + sm
 
-    if !(b1 / A1 > 0) # proposed new coefficient is not strictly positive
+    if check && !(b1 / A1 > 0) # proposed new coefficient is not strictly positive
         return -one(T)
     end
 
@@ -534,8 +604,7 @@ function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int
         tau = zero(T) # single-row reflection acts as the identity (matches the classic algorithm)
     end
 
-    # Write the new U column at position ip: reduced head, -beta on the diagonal
-    # (or the reduced value itself in the trivial single-row case), and zeros below (the Householder tail lives in the H panel, not in A)
+    # Write the new U column at position ip: reduced head, -beta on the diagonal (or the reduced value itself in the trivial single-row case), and zeros below (the Householder tail lives in the H panel, not in A).
     @inbounds @simd ivdep for i in 1:ip-1
         A[i, ip] = c[i]
     end
@@ -730,14 +799,15 @@ A * X = B SUBJECT TO X .GE. 0
 """
 function unsafe_nnls!(
     work::NNLSWorkspace{T},
-    A0::AbstractMatrix{T}; # pristine problem data, read-only, indexed by original column
+    A0::AbstractMatrix{T}; # pristine problem data, read-only, indexed by original column (only rows 1:m are read)
     init_dual::Bool = true,
     max_iter::Int = 3 * size(work.A, 2),
+    nwarm::Int = 0, # number of warm-start columns stashed in work.hpos[1:nwarm]
 ) where {T}
-    (; A, b, x, w, zz, idx, invidx, b0, r, H, hlen, gc, gs, gi, transforms) = work
+    (; A, b, x, w, zz, idx, invidx, b0, r, H, hpos, hlen, gc, gs, gi, transforms) = work
     m, n = size(A)
 
-    copyto!(b0, b) # b holds the untransformed right-hand side at entry, for every caller; snapshot it for residual and dual computations
+    copyto!(b0, b) # b holds the untransformed right-hand side at entry (for every caller); snapshot it for residual/dual computations
     hlen[] = 0
     empty!(gc)
     empty!(gs)
@@ -748,11 +818,78 @@ function unsafe_nnls!(
     iter = 0
     work.mode[] = 0
     terminated = false
-    use_stale_w = !init_dual # init_dual = false: the caller preloaded w for the first pivot selection
-    rfresh = false # whether r = b0 - A0[:, idx[1:nsetp]]*x₊ is current for the present passive set; see the rnorm epilogue
+    use_stale_w = !init_dual # init_dual = false: caller preloaded w for the first pivot selection
+    rfresh = false # r = b0 - A0[:, idx[1:nsetp]]*x₊ is current for the final passive set (see the rnorm epilogue)
+
+    # ******  WARM START  ******
+    # Seed the passive set with the stashed columns, skipping the positivity check; a feasibility pass below drops any that come out non-positive (mirrors the warm start of the Tikhonov method, without the λ rows).
+    # Panel-QR seeding: all seed columns are staged upfront in spare columns of H and kept reduced column-parallel as each accepted seed's reflection is constructed (right-looking), instead of each seed replaying the whole transforms sequentially (`apply_transforms!` is latency-bound and dominated warm-started solves).
+    if nwarm > 0
+        hcap = size(H, 2)
+        sbase = hcap - nwarm # staging columns sbase+1:sbase+nwarm; reflections built during seeding occupy slots 1:nwarm <= sbase
+        @inbounds for t in 1:nwarm # stage before any reflection exists (hpos[1:nwarm] still holds the stashed seeds)
+            jorig = work.hpos[t]
+            @simd ivdep for i in 1:m
+                H[i, sbase+t] = A0[i, jorig]
+            end
+        end
+        @inbounds for t in 1:nwarm
+            nsetp >= m && break # all rows triangularized; remaining seeds cannot enter
+            jorig = work.hpos[t] # slot t is intact: only reflections 1:nsetp (< t) have been written
+            jmax = invidx[jorig] # invidx tracks positions during seeding (callers initialize it to the identity)
+            jmax <= nsetp && continue # duplicate seed; already entered
+            @simd ivdep for i in 1:m
+                zz[i] = H[i, sbase+t]
+            end
+            hl0 = hlen[]
+            tau = try_enter_column!(work, zz, nsetp + 1, m, false, false) # staged column is already reduced against Q
+            tau == -2 && break # transforms full; continue with what we have
+            tau < 0 && continue # numerically dependent; skip
+            if hlen[] > hl0 # keep the still-staged seeds reduced against the new reflection
+                for t2 in t+1:nwarm
+                    apply_householder_to_col!(H, sbase + t2, work, hlen[])
+                end
+            end
+            nsetp += 1
+            idx[nsetp], idx[jmax] = idx[jmax], idx[nsetp]
+            invidx[idx[nsetp]] = nsetp
+            invidx[idx[jmax]] = jmax
+            w[nsetp] = zero(T)
+            use_stale_w = false # any preloaded dual is stale once the passive set is nonempty
+        end
+    end
+
+    # Feasibility pass: solve on the seeded set and drop columns (most negative coefficient first) until the passive-set solution is strictly positive
+    @inbounds while nsetp > 0
+        @simd for i in 1:nsetp
+            zz[i] = b[i]
+        end
+        solve_triangular_system!(zz, A, nsetp, Val(false))
+        imv = 0
+        zmin = zero(T)
+        for i in 1:nsetp
+            if zz[i] <= zmin
+                imv, zmin = i, zz[i]
+            end
+        end
+        if imv == 0 # all strictly positive
+            for i in 1:nsetp
+                x[idx[i]] = zz[i]
+            end
+            break
+        end
+        iter += 1
+        if iter > max_iter
+            work.mode[] = 1
+            terminated = true
+            break
+        end
+        x[idx[imv]] = zero(T)
+        nsetp = downdate!(work, imv, nsetp, m)
+    end
 
     # ******  MAIN LOOP BEGINS HERE  ******
-    @inbounds while true
+    @inbounds while !terminated
         # QUIT IF ALL COEFFICIENTS ARE ALREADY IN THE SOLUTION.
         # OR IF M COLS OF A HAVE BEEN TRIANGULARIZED.
         if (nsetp >= n || nsetp >= m)
@@ -760,8 +897,7 @@ function unsafe_nnls!(
             break
         end
 
-        # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W() from the pristine set Z columns
-        # and the current passive-set residual, unless the caller preloaded w for the first round.
+        # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W() from the pristine set Z columns and the current passive-set residual (unless the caller preloaded w for the first round).
         if use_stale_w
             use_stale_w = false
         else
@@ -906,13 +1042,10 @@ function unsafe_nnls!(
         invidx[idx[i]] = i
     end
 
-    # zz doubles as the candidate scratch buffer, so restore the passive-set solution into zz[1:nsetp] (bit-exact: x was assigned from these values) and mirror the transformed b on the free rows
+    # zz doubles as the candidate column buffer, so restore the passive-set solution into zz[1:nsetp]; this is bit-exact, since x was assigned from these values.
     @inbounds for i in 1:nsetp
         zz[i] = x[idx[i]]
     end
-
-    # Compute the norm of the final residual vector
-    sm = zero(T)
     if nsetp < m
         @inbounds @simd ivdep for i in nsetp+1:m
             zz[i] = b[i]
@@ -924,6 +1057,7 @@ function unsafe_nnls!(
     # Compute the norm of the final residual from the untransformed residual r = b0 - A0[:, idx[1:nsetp]]*x₊.
     # The transformed free rows of b lose relative accuracy when a nearly dependent column enters, for instance a duplicated column, whereas r is accurate to working precision.
     # r is already current when termination followed the dual computation; otherwise recompute it; when all rows are triangularized the residual is zero by convention, matching the classic algorithm's empty free-row sum.
+    sm = zero(T)
     if nsetp < m
         if !rfresh
             @inbounds @simd ivdep for i in 1:m
@@ -949,17 +1083,18 @@ end
 
 function unsafe_nnls!(
     work::NNLSWorkspace{T},
-    A0::AbstractMatrix{T}, # pristine problem data, read-only, indexed by original column; only the m0 data rows are read
+    A0::AbstractMatrix{T}, # pristine problem data, read-only, indexed by original column (only the m0 data rows are read)
     λ::T;
     init_dual::Bool = true,
     max_iter::Int = 3 * size(work.A, 2),
+    nwarm::Int = 0, # number of warm-start columns stashed in work.hpos[1:nwarm]
 ) where {T}
-    (; A, b, x, w, zz, idx, invidx, diag, b0, r, H, hlen, gc, gs, gi, transforms) = work
+    (; A, b, x, w, zz, idx, invidx, diag, b0, r, H, hpos, hlen, gc, gs, gi, transforms) = work
     M, N = size(A)
     m, n = M - N, N
-    m0 = m # number of data rows; rows m0+1:M are the implicit λI padding
+    m0 = m # number of data rows; rows m0+1:M are the (implicit) λI padding
 
-    copyto!(b0, b) # b holds the untransformed right-hand side at entry, for every caller; snapshot it for residual and dual computations
+    copyto!(b0, b) # b holds the untransformed right-hand side at entry (for every caller); snapshot it for residual/dual computations
     hlen[] = 0
     empty!(gc)
     empty!(gs)
@@ -970,27 +1105,106 @@ function unsafe_nnls!(
     iter = 0
     work.mode[] = 0
     terminated = false
-    use_stale_w = !init_dual # init_dual = false: the caller preloaded w for the first pivot selection
-    rfresh = false # whether r = b0 - A0[:, idx[1:nsetp]]*x₊ is current for the present passive set; see the rnorm epilogue
+    use_stale_w = !init_dual # init_dual = false: caller preloaded w for the first pivot selection
+    rfresh = false # r = b0 - A0[:, idx[1:nsetp]]*x₊ is current for the final passive set (see the rnorm epilogue)
+
+    # ******  WARM START  ******
+    # Seed the passive set with the stashed columns, skipping the positivity check; a feasibility pass below drops any that come out non-positive.
+    # Panel-QR seeding (see the unregularized solver): seed columns are staged upfront and kept reduced column-parallel as each accepted seed's reflection is constructed, replacing the per-seed sequential log replay.
+    # λ-entry placement: a pre-activated λ row (rj != 0) lies within the range of earlier reflections, so it must be placed at staging time; a fresh λ row is assigned at entry time (row m + 1) and lies strictly above the rows of every reflection built so far, so lazy placement commutes with the reduction.
+    if nwarm > 0
+        hcap = size(H, 2)
+        sbase = hcap - nwarm # staging columns sbase+1:sbase+nwarm; reflections built during seeding occupy slots 1:nwarm <= sbase
+        @inbounds for t in 1:nwarm # stage before any reflection exists (hpos[1:nwarm] still holds the stashed seeds)
+            jorig = work.hpos[t]
+            @simd ivdep for i in 1:m0
+                H[i, sbase+t] = A0[i, jorig]
+            end
+            @simd ivdep for i in m0+1:M # padded rows participate in the panel reduction; clear stale data
+                H[i, sbase+t] = zero(T)
+            end
+            rj = diag[jorig]
+            if rj != 0
+                H[rj, sbase+t] = λ
+            end
+        end
+        @inbounds for t in 1:nwarm
+            jorig = work.hpos[t] # slot t is intact: only reflections 1:nsetp (< t) have been written
+            jmax = invidx[jorig] # invidx tracks positions during seeding (init_nnls! set it to the identity)
+            jmax <= nsetp && continue # duplicate seed; already entered
+            m1 = min(m + 1, M)
+            @simd ivdep for i in 1:m1
+                zz[i] = H[i, sbase+t]
+            end
+            if diag[jorig] == 0
+                zz[m1] = λ # fresh λ row: untouched by every reflection built so far
+            end
+            hl0 = hlen[]
+            tau = try_enter_column!(work, zz, nsetp + 1, m1, false, false) # staged column is already reduced against Q
+            tau == -2 && break # transforms full; continue with what we have
+            tau < 0 && continue # numerically dependent; skip
+            if hlen[] > hl0 # keep the still-staged seeds reduced against the new reflection
+                for t2 in t+1:nwarm
+                    apply_householder_to_col!(H, sbase + t2, work, hlen[])
+                end
+            end
+            if diag[idx[jmax]] == 0
+                m += 1
+                diag[idx[jmax]] = m
+            end
+            nsetp += 1
+            idx[nsetp], idx[jmax] = idx[jmax], idx[nsetp]
+            invidx[idx[nsetp]] = nsetp
+            invidx[idx[jmax]] = jmax
+            w[nsetp] = zero(T)
+        end
+    end
+
+    # Feasibility pass: solve on the seeded set and drop columns (most negative coefficient first) until the passive-set solution is strictly positive
+    @inbounds while nsetp > 0
+        @simd for i in 1:nsetp
+            zz[i] = b[i]
+        end
+        solve_triangular_system!(zz, A, nsetp, Val(false))
+        imv = 0
+        zmin = zero(T)
+        for i in 1:nsetp
+            if zz[i] <= zmin
+                imv, zmin = i, zz[i]
+            end
+        end
+        if imv == 0 # all strictly positive
+            for i in 1:nsetp
+                x[idx[i]] = zz[i]
+            end
+            break
+        end
+        iter += 1
+        if iter > max_iter
+            work.mode[] = 1
+            terminated = true
+            break
+        end
+        x[idx[imv]] = zero(T)
+        nsetp = downdate!(work, imv, nsetp, m)
+    end
 
     # ******  MAIN LOOP BEGINS HERE  ******
-    @inbounds while true
+    @inbounds while !terminated
         # QUIT IF ALL COEFFICIENTS ARE ALREADY IN THE SOLUTION.
         if nsetp >= n
             terminated = true
             break
         end
 
-        # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W() from the pristine set Z columns
-        # and the current passive-set residual, unless the caller preloaded w for the first round.
-        # Only the data rows contribute: a set Z column's λ row is inactive, or its coefficient is zero, so the padded rows drop out.
-        if use_stale_w
+        # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W() from the pristine set Z columns and the current passive-set residual.
+        # Only the data rows contribute: a set Z column's λ row is inactive (or its coefficient is zero), so the padded rows drop out.
+        if use_stale_w # caller preloaded w for the first round
             use_stale_w = false
         elseif iszero(λ) && nsetp >= m0
             # The passive set spans the data rows and the padding is zero, so the dual vanishes identically.
-            # In the transformed formulation the free rows are all exactly-zero padded rows, so enforce the same exact zero
-            # here rather than computing the roundoff noise of a residual that is mathematically zero.
-            @simd ivdep for j in (nsetp+1):n
+            # In the transformed formulation the free rows are all exactly-zero padded rows; enforce the same exact zero here rather than computing residual roundoff noise.
+            @simd ivdep for j in nsetp+1:n
                 w[j] = zero(T)
             end
         else
@@ -1149,13 +1363,10 @@ function unsafe_nnls!(
         invidx[idx[i]] = i
     end
 
-    # zz doubles as the candidate scratch buffer, so restore the passive-set solution into zz[1:nsetp] (bit-exact: x was assigned from these values) and mirror the transformed b on the free rows
+    # zz doubles as the candidate column buffer, so restore the passive-set solution into zz[1:nsetp]; this is bit-exact, since x was assigned from these values.
     @inbounds for i in 1:nsetp
         zz[i] = x[idx[i]]
     end
-
-    # Compute the norm of the final residual vector
-    sm = zero(T)
     if nsetp < M
         @inbounds @simd ivdep for i in nsetp+1:M
             zz[i] = b[i]
@@ -1167,6 +1378,7 @@ function unsafe_nnls!(
     # Compute the norm of the final residual from the untransformed residual:
     #   ||[A₀; λI]x - [b₀; 0]||² = ||r||² + λ²||x₊||²,   r = b0 - A0[:, idx[1:nsetp]]*x₊.
     # For λ = 0 with the data rows exhausted the residual is zero by convention, matching the classic algorithm's exactly-zero free rows.
+    sm = zero(T)
     if !(iszero(λ) && nsetp >= m0)
         if !rfresh
             @inbounds @simd ivdep for i in 1:m0

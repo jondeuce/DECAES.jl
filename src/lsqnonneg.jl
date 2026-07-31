@@ -79,6 +79,46 @@ function solve!(
     return NNLS.unsafe_nnls!(work.nnls_work, A; kwargs..., init_dual = false)
 end
 
+# Warm-started unregularized solve: seeds the passive set with the original column indices idx0[1:nsetp0] (e.g. `NNLS.components` saved from a solve against a nearby matrix, such as an adjacent flip angle's decay basis in the surrogate search).
+# Seeds are stashed in hpos, entered without the positivity check, and a feasibility pass drops any that come out non-positive, so the result satisfies the same KKT conditions as a cold solve regardless of seed quality.
+# The initial dual is recomputed from the seeded residual (`init_dual = true`), so no dual preload is needed here.
+function solve!(
+    work::NNLSProblem{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    idx0::AbstractVector{Int},
+    nsetp0::Int;
+    kwargs...,
+) where {T}
+    m, n = size(A)
+    f = work.nnls_work.b
+    x = work.nnls_work.x
+    idx = work.nnls_work.idx
+    invidx = work.nnls_work.invidx
+    hpos = work.nnls_work.hpos
+    @assert 0 <= nsetp0 <= min(n, length(idx0))
+
+    # Stash the seeds first: idx0 may alias this workspace's own idx (which is re-initialized below)
+    @inbounds for t in 1:nsetp0
+        j = idx0[t]
+        @assert 1 <= j <= n
+        hpos[t] = j
+    end
+
+    # Initialize nnls workspace (A is not copied; see `solve!(work, A, b)`)
+    @inbounds @simd ivdep for i in 1:m
+        f[i] = b[i]
+    end
+    @inbounds for j in 1:n
+        x[j] = 0
+        idx[j] = j
+        invidx[j] = j # seeding tracks positions via invidx; must start as the identity
+    end
+
+    return NNLS.unsafe_nnls!(work.nnls_work, A; kwargs..., nwarm = nsetp0)
+end
+
+
 function solve!(
     work::NNLSProblem{T},
     A::AbstractMatrix{T},
@@ -148,6 +188,67 @@ function solve!(
 
     return NNLS.unsafe_nnls!(work.nnls_work, A0, μ; kwargs..., init_dual = false)
 end
+
+# Warm-started Tikhonov solve: like `solve!(work, A, b, μ)` above, but seeds the passive set with the original column indices `idx0[1:nsetp0]` (e.g. saved via `NNLS.components` from a solve at a nearby μ).
+# Seeding follows the same protocol as `NNLS.nnls!(work, A, b, λ, idx0, nsetp0)`: seeds are stashed in `hpos`, entered without the positivity check, and a feasibility pass drops any that come out non-positive, so the result satisfies the same KKT conditions as a cold solve regardless of seed quality.
+# The initial dual is recomputed from the seeded residual (`init_dual = true`), so no dual preload is needed here.
+function solve!(
+    work::NNLSProblem{T},
+    A::AbstractMatrix{T},
+    b::AbstractVector{T},
+    μ::T,
+    idx0::AbstractVector{Int},
+    nsetp0::Int;
+    kwargs...,
+) where {T}
+    if A isa TikhonovPaddedMatrix
+        A0 = parent(A)
+        m, n = size(A0)
+    else
+        M, N = size(A)
+        m, n = M - N, N
+        A0 = view(A, 1:m, :)
+    end
+    if b isa PaddedVector
+        b0 = parent(b)
+    else
+        b0 = view(b, 1:m)
+    end
+    @assert 0 <= nsetp0 <= min(n, length(idx0))
+
+    f = work.nnls_work.b
+    x = work.nnls_work.x
+    idx = work.nnls_work.idx
+    invidx = work.nnls_work.invidx
+    diag = work.nnls_work.diag
+    hpos = work.nnls_work.hpos
+
+    # Stash the seeds first: idx0 may alias this workspace's own idx (which is re-initialized below)
+    @inbounds for t in 1:nsetp0
+        j = idx0[t]
+        @assert 1 <= j <= n
+        hpos[t] = j
+    end
+
+    # Initialize nnls workspace (A is not copied; see `solve!(work, A, b, μ)`)
+    @inbounds for i in 1:m
+        f[i] = b0[i]
+    end
+    @inbounds for j in 1:n
+        x[j] = 0
+        f[m+j] = 0
+        idx[j] = j
+        invidx[j] = j # seeding tracks positions via invidx; must start as the identity
+        diag[j] = 0 # no λ row activated
+    end
+
+    return NNLS.unsafe_nnls!(work.nnls_work, A0, μ; kwargs..., nwarm = nsetp0)
+end
+
+# Unregularized solve, optionally warm-started from another workspace's active set (e.g. the flip-angle surrogate search solve of the same voxel); a seed changes only the solve cost, never the solution
+solve_unreg!(prob::NNLSProblem, seed::Nothing) = solve!(prob)
+solve_unreg!(prob::NNLSProblem, seed::NNLS.NNLSWorkspace) = solve!(prob, prob.A, prob.b, seed.idx, NNLS.ncomponents(seed))
+
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
@@ -280,10 +381,17 @@ lsqnonneg_tikh!(work::NNLSTikhonovRegProblem, μ::Real) = solve!(work, μ)
 regparam(work::NNLSTikhonovRegProblem) = regparam(work.nnls_prob.A)
 regparam!(work::NNLSTikhonovRegProblem, μ::Real) = regparam!(work.nnls_prob.A, μ)
 
+# Solve the Tikhonov-regularized NNLS problem with regularization parameter `μ`
 function solve!(work::NNLSTikhonovRegProblem, μ::Real; kwargs...)
-    # Set regularization parameter and solve NNLS problem
     regparam!(work, μ)
     solve!(work.nnls_prob, μ; kwargs...)
+    return solution(work)
+end
+
+# Warm-started solve: seed the passive set with the column indices idx0[1:nsetp0].
+function solve!(work::NNLSTikhonovRegProblem, μ::Real, idx0::AbstractVector{Int}, nsetp0::Int; kwargs...)
+    regparam!(work, μ)
+    solve!(work.nnls_prob, μ, idx0, nsetp0; kwargs...)
     return solution(work)
 end
 

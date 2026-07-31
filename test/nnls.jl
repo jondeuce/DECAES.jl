@@ -186,7 +186,7 @@ function verify_NNLS_tikh(m, n, μ)
     @test work.A == A
     @test work.b == b
 
-    for mode in [:direct]#, :shuffle]
+    for mode in [:direct, :shuffle]
         # Fill workspace with junk values
         work.A .= randn(m + n, n)
         work.b .= randn(m + n)
