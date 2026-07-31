@@ -246,8 +246,8 @@ function solve!(
 end
 
 # Unregularized solve, optionally warm-started from another workspace's active set (e.g. the flip-angle surrogate search solve of the same voxel); a seed changes only the solve cost, never the solution
-solve_unreg!(prob::NNLSProblem, seed::Nothing) = solve!(prob)
-solve_unreg!(prob::NNLSProblem, seed::NNLS.NNLSWorkspace) = solve!(prob, prob.A, prob.b, seed.idx, NNLS.ncomponents(seed))
+solve_unreg!(prob::NNLSProblem, nnls_prob_seed::Nothing) = solve!(prob)
+solve_unreg!(prob::NNLSProblem, nnls_prob_seed::NNLS.NNLSWorkspace) = solve!(prob, prob.A, prob.b, nnls_prob_seed.idx, NNLS.ncomponents(nnls_prob_seed))
 
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
@@ -547,19 +547,20 @@ end
 #### Chi2 method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSChi2RegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2}
+struct NNLSChi2RegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
     A::TA
     b::Tb
     m::Int
     n::Int
     nnls_prob::W1
     nnls_prob_smooth_cache::W2
+    nnls_prob_seed::S
 end
-function NNLSChi2RegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+function NNLSChi2RegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    return NNLSChi2RegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache)
+    return NNLSChi2RegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSChi2RegProblem) = solution(work.nnls_prob_smooth_cache[])
@@ -599,11 +600,11 @@ function lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real,
     work = lsqnonneg_chi2_work(A, b)
     return lsqnonneg_chi2!(work, chi2_target, args...; kwargs...)
 end
-lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector) = NNLSChi2RegProblem(A, b)
+lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSChi2RegProblem(A, b, nnls_prob_seed)
 
 function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :brent) where {T}
-    # Non-regularized solution
-    solve!(work.nnls_prob)
+    # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present
+    solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
 
@@ -739,19 +740,20 @@ end
 #### Morozov discrepency principle (MDP) method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSMDPRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2}
+struct NNLSMDPRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
     A::TA
     b::Tb
     m::Int
     n::Int
     nnls_prob::W1
     nnls_prob_smooth_cache::W2
+    nnls_prob_seed::S # warm-start source for the unregularized solve, or nothing; see `NNLSChi2RegProblem`
 end
-function NNLSMDPRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+function NNLSMDPRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    return NNLSMDPRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache)
+    return NNLSMDPRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSMDPRegProblem) = solution(work.nnls_prob_smooth_cache[])
@@ -795,13 +797,13 @@ function lsqnonneg_mdp(A::AbstractMatrix, b::AbstractVector, δ::Real, args...; 
     work = lsqnonneg_mdp_work(A, b)
     return lsqnonneg_mdp!(work, δ, args...; kwargs...)
 end
-lsqnonneg_mdp_work(A::AbstractMatrix, b::AbstractVector) = NNLSMDPRegProblem(A, b)
+lsqnonneg_mdp_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSMDPRegProblem(A, b, nnls_prob_seed)
 
 function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
     @assert δ > 0 "Residual norm δ must be a positive value, but got δ = $δ"
 
-    # Non-regularized solution
-    solve!(work.nnls_prob)
+    # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present
+    solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
 
@@ -850,7 +852,7 @@ end
 #### L-curve method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, C1, C2}
+struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, C1, C2, S}
     A::TA
     b::Tb
     m::Int
@@ -859,8 +861,9 @@ struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T},
     nnls_prob_smooth_cache::W2
     lsqnonneg_lcurve_fun_cache::C1
     lcurve_corner_caches::C2
+    nnls_prob_seed::S # warm-start source for the unregularized solve, or nothing; see `NNLSChi2RegProblem`
 end
-function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
@@ -869,7 +872,7 @@ function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where 
         GrowableCache{T, LCurveCornerPoint{T}}(64, isapprox),
         GrowableCache{T, LCurveCornerState{T}}(64, isapprox),
     )
-    return NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches)
+    return NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSLCurveRegProblem) = solution(work.nnls_prob_smooth_cache[])
@@ -907,7 +910,7 @@ function lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector; kwargs...)
     work = lsqnonneg_lcurve_work(A, b)
     return lsqnonneg_lcurve!(work; kwargs...)
 end
-lsqnonneg_lcurve_work(A::AbstractMatrix, b::AbstractVector) = NNLSLCurveRegProblem(A, b)
+lsqnonneg_lcurve_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSLCurveRegProblem(A, b, nnls_prob_seed)
 
 # Slope-collapse guard threshold for the L-curve corner: the maximum admissible log-log tangent slope |S| = -res²/(‖x‖²·μ²) at a corner candidate.
 # The max-curvature search can latch onto spurious high curvature near μ→0, where the residual bottoms out as ‖Ax-b‖² → res²_min and the log-residual axis flattens, so the L-curve turns near-vertical and the "corner" collapses onto its top-left tail.
@@ -936,12 +939,12 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
 
     # A degenerate cornerless curve admits no corner; see `lcurve_corner`.
     # Return the unregularized solution rather than an arbitrary near-zero μ.
-    isnan(logmu_final) && return (; x = solve!(work.nnls_prob), mu = zero(T), chi2 = one(T))
+    isnan(logmu_final) && return (; x = solve_unreg!(work.nnls_prob, work.nnls_prob_seed), mu = zero(T), chi2 = one(T))
 
     # Return the final regularized solution
     mu_final = exp(logmu_final)
     x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
-    x_unreg = solve!(work.nnls_prob)
+    x_unreg = solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
 
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
@@ -1180,7 +1183,7 @@ kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(P�
 #### GCV method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2}
+struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2, S}
     A::TA
     b::Tb
     m::Int
@@ -1189,14 +1192,15 @@ struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0
     svd_work::W0
     nnls_prob::W1
     nnls_prob_smooth_cache::W2
+    nnls_prob_seed::S # warm-start source for the unregularized solve, or nothing; see `NNLSChi2RegProblem`
 end
-function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
     m, n = size(A)
     svd_work = SVDValsWorkspace(A) # workspace for computing singular values
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
     γ = svd_work.S # store reference to (generalized) singular values for convenience
-    return NNLSGCVRegProblem(A, b, m, n, γ, svd_work, nnls_prob, nnls_prob_smooth_cache)
+    return NNLSGCVRegProblem(A, b, m, n, γ, svd_work, nnls_prob, nnls_prob_smooth_cache, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSGCVRegProblem) = solution(work.nnls_prob_smooth_cache[])
@@ -1245,7 +1249,7 @@ function lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector; kwargs...)
     work = lsqnonneg_gcv_work(A, b)
     return lsqnonneg_gcv!(work; kwargs...)
 end
-lsqnonneg_gcv_work(A::AbstractMatrix, b::AbstractVector) = NNLSGCVRegProblem(A, b)
+lsqnonneg_gcv_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSGCVRegProblem(A, b, nnls_prob_seed)
 
 function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0, bounds = (-8.0, 2.0), rtol = 0.0, atol = 1e-4, maxiters = 20) where {T}
     # Find μ by minimizing the function G(μ) (GCV method)
@@ -1312,7 +1316,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
     # Return the final regularized solution
     mu_final = exp(logmu_final)
     x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
-    x_unreg = solve!(work.nnls_prob)
+    x_unreg = solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
 
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)

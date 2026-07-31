@@ -321,16 +321,20 @@ function run_cli_tests()
             settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
             cli_t2map_args = construct_args(paramdict; settings_kwargs_cli...)
 
-            if B1map && !("--SetFlipAngle" ∈ cli_t2map_args)
+            b1_used = B1map && !("--SetFlipAngle" ∈ cli_t2map_args)
+            if b1_used
                 # Write reference B1map computed above to file and pass filename to DECAES CLI
                 B1mapfilename = joinpath(path, "B1" * file_suffix)
                 write_image(B1mapfilename, t2map["alpha"])
                 append!(cli_t2map_args, ["--B1map", B1mapfilename])
             end
 
+            # A B1 map run has no flip-angle search, so its T2-stage unregularized solve is unseeded and takes a different arithmetic path than the search run.
+            # Only chi2 is sensitive to this, since it scales its χ² target by the residual of that solve.
             t2maps_cli, t2dist_cli, t2parts_cli = run_main(image, cli_t2map_args; make_settings_file)
-            t2map_passed = test_compare_t2map(t2map, t2dist, t2maps_cli, t2dist_cli; rtol = 1e-14)
-            t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = 1e-14)
+            cli_rtol = b1_used ? 1e-12 : 1e-14
+            t2map_passed = test_compare_t2map(t2map, t2dist, t2maps_cli, t2dist_cli; rtol = cli_rtol)
+            t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = cli_rtol)
             if !(t2map_passed && t2part_passed)
                 println("\n ------------------------------- \n")
                 @error "CLI with --T2map and --T2part failed"
