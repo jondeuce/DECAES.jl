@@ -62,40 +62,17 @@ if RUN_MATLAB_TESTS && RUN_MWI_TOOLBOX_TESTS
     end
 end
 
-@testset "misc.jl" verbose = true begin
-    include("misc.jl")
-end
+# Test files to run, in order. With no arguments the whole suite runs, otherwise names are matched as substrings of the file name:
+#   julia --project=test test/runtests.jl
+#   julia --project=test test/runtests.jl nnls
+#   julia --project=test test/runtests.jl nnls splines
+#   julia -e 'using Pkg; Pkg.test("DECAES"; test_args = ["nnls"])'
 
-@testset "nhs.jl" verbose = true begin
-    include("nhs.jl")
-end
+const TEST_FILES = ["misc", "nhs", "utils", "optimization", "splines", "nnls", "epg", "cli", "aqua"]
+const SELECTED_TEST_FILES = isempty(ARGS) ? TEST_FILES : filter(name -> any(arg -> occursin(arg, name), ARGS), TEST_FILES)
 
-@testset "utils.jl" verbose = true begin
-    include("utils.jl")
-end
-
-@testset "optimization.jl" verbose = true begin
-    include("optimization.jl")
-end
-
-@testset "splines.jl" verbose = true begin
-    include("splines.jl")
-end
-
-@testset "nnls.jl" verbose = true begin
-    include("nnls.jl")
-end
-
-@testset "epg.jl" verbose = true begin
-    include("epg.jl")
-end
-
-@testset "cli.jl" verbose = true begin
-    include("cli.jl")
-end
-
-@testset "aqua" begin
-    # Typically causes a lot of false positives with ambiguities and/or unbound args checks;
-    # unfortunately have to periodically check this manually
-    Aqua.test_all(DECAES; ambiguities = false, unbound_args = true)
+for name in SELECTED_TEST_FILES
+    @testset "$name.jl" verbose = true begin
+        include("$name.jl")
+    end
 end
