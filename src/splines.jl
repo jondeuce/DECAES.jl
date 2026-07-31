@@ -706,9 +706,10 @@ struct DiscreteSurrogateSearcher{D, T}
     grid::Array{SVector{D, T}, D} # parameter grid being searched
     seen::Array{Bool, D} # whether the surrogate has been evaluated at each grid point
     numeval::Base.RefValue{Int} # number of evaluations performed
+    plan::Vector{CartesianIndex{D}} # scratch buffer of planned initialization points; see `initialize!`
 end
 function DiscreteSurrogateSearcher(grid::Array{SVector{D, T}, D}) where {D, T}
-    return DiscreteSurrogateSearcher(grid, fill(false, size(grid)), Ref(0))
+    return DiscreteSurrogateSearcher(grid, fill(false, size(grid)), Ref(0), sizehint!(CartesianIndex{D}[], length(grid)))
 end
 function DiscreteSurrogateSearcher(surr::AbstractSurrogate; mineval::Int, maxeval::Int)
     @assert mineval <= maxeval
@@ -725,23 +726,36 @@ function reset!(state::DiscreteSurrogateSearcher)
 end
 
 function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}; mineval::Int, maxeval::Int) where {D}
-    # Evaluate at least `mineval` points by repeatedly bisecting the grid in a breadth-first manner
+    # Evaluate at least `mineval` points by repeatedly bisecting the grid in a breadth-first manner. The points are first planned by the same recursion, recording only indices, and then evaluated in ascending grid order.
+    # Neighbouring gridpoints have similar loss-function state, for instance nearby decay bases in the NNLS surrogate search, so evaluating in sorted order lets warm starts chain through small parameter jumps instead of bouncing across the grid.
+    # The planned point set is identical to the set the unsorted recursion would evaluate; only the evaluation order differs, which perturbs warm-started solves at roundoff level.
     box = BoundingBox(size(state.grid))
+    planned = empty!(state.plan)
     for depth in 1:mineval # should never reach `mineval` depth, this is just to ensure the loop terminates in case `mineval` is greater than the number of gridpoints
-        initialize!(surr, state, box, depth; mineval, maxeval)
-        state.numeval[] >= mineval && break
+        plan_initialize!(planned, box, depth; mineval, maxeval)
+        length(planned) >= mineval && break
+    end
+    sort!(planned) # `CartesianIndex` sorts in column-major order, matching the grid layout; `sort!` on a sized buffer allocates nothing
+    for I in planned
+        update!(surr, state, I; maxeval)
     end
     return state
 end
 
-function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}, depth::Int; mineval::Int, maxeval::Int) where {D}
-    depth <= 0 && return state
-    evaluate_box!(surr, state, box; maxeval)
-    state.numeval[] ≥ mineval && return state
+# Dry-run mirror of the recursive initialization, recording the indices that `evaluate_box!` and `update!` would evaluate, without evaluating anything; membership in `planned` plays the role of `state.seen` and `state.numeval`.
+function plan_initialize!(planned::Vector{CartesianIndex{D}}, box::BoundingBox{D}, depth::Int; mineval::Int, maxeval::Int) where {D}
+    depth <= 0 && return planned
+    cs = corners(box)
+    for I in cs
+        count(in(planned), cs) >= 2^D && break # box sufficiently evaluated
+        length(planned) >= maxeval && break # max evals reached
+        I in planned || push!(planned, I)
+    end
+    length(planned) >= mineval && return planned
     left, right = bisect(box)
-    initialize!(surr, state, left, depth - 1; mineval, maxeval)
-    initialize!(surr, state, right, depth - 1; mineval, maxeval)
-    return state
+    plan_initialize!(planned, left, depth - 1; mineval, maxeval)
+    plan_initialize!(planned, right, depth - 1; mineval, maxeval)
+    return planned
 end
 
 function update!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}, I::CartesianIndex{D}; maxeval::Int) where {D}
@@ -984,15 +998,20 @@ nearest_interior_gridpoint(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D,
 ####
 
 struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tb <: AbstractVector{T}, W}
-    As::TA
-    ∇As::TdA
-    αs::Array{SVector{D, T}, D}
-    b::Tb
-    u::Array{T, D}
-    ∂Ax⁺::Vector{T}
-    Ax⁺b::Vector{T}
-    nnls_work::W
-    legacy::Bool
+    As::TA # decay bases over the parameter grid; As[:, :, I] is A(αs[I])
+    ∇As::TdA # parameter derivatives of the grid bases; ∇As[:, :, d, I] is ∂A(αs[I])/∂αs[I][d]
+    αs::Array{SVector{D, T}, D} # parameter grid
+    b::Tb # decay curve data
+    u::Array{T, D} # loss values at the evaluated grid points
+    ∂Ax⁺::Vector{T} # scratch for ∂A_P x_P
+    Ax⁺b::Vector{T} # scratch for the residual A_P x_P - b
+    nnls_work::W # exact QR solver workspace
+    seen_pts::Vector{CartesianIndex{D}} # grid points evaluated during the current search
+    seen_idx::Matrix{Int} # column p holds the active set, as original column indices, of the solve at grid point p by linear index
+    seen_nsetp::Vector{Int} # active-set size per grid point, by linear index
+    seen_stamp::Vector{Int} # voxel counter when seen_idx[:, p] was last written, 0 meaning never; enables cross-voxel warm starts
+    voxel::Base.RefValue{Int} # monotonic voxel counter; a grid point last written at voxel-1 seeds the same grid point this voxel, same A and nearby b
+    legacy::Bool # legacy mode forces the exact QR evaluation path
 end
 
 function NNLSDiscreteSurrogateSearch(
@@ -1013,14 +1032,63 @@ function NNLSDiscreteSurrogateSearch(
     ∂Ax⁺ = zeros(T, M)
     Ax⁺b = zeros(T, M)
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
-    return NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, ∂Ax⁺, Ax⁺b, nnls_work, legacy)
+    seen_pts = sizehint!(CartesianIndex{D}[], length(αs))
+    seen_idx = zeros(Int, N, length(αs))
+    seen_nsetp = zeros(Int, length(αs))
+    seen_stamp = zeros(Int, length(αs))
+    return NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, ∂Ax⁺, Ax⁺b, nnls_work, seen_pts, seen_idx, seen_nsetp, seen_stamp, Ref(1), legacy)
 end
 
 load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T} = copyto!(prob.b, b)
 
+# Fully reset warm-start state: the next `loss!` solves cold and every per-gridpoint seed is discarded, both this-voxel and cross-voxel, so results are independent of any prior state. Used to isolate a search for reproducibility.
+reset_warmstart!(prob::NNLSDiscreteSurrogateSearch) = (empty!(prob.seen_pts); fill!(prob.seen_stamp, 0); prob.voxel[] = 1; prob)
+
+# Advance to the next voxel without discarding the per-gridpoint active sets. Each grid point last evaluated in the previous voxel has the same decay basis `As` and a nearby signal `b`,
+# so it seeds the same grid point this voxel; see `loss!`. Only the this-voxel `seen_pts` list is cleared. NNLS converges to the same solution from any seed, so this changes solve speed, not results.
+advance_warmstart!(prob::NNLSDiscreteSurrogateSearch) = (prob.voxel[] += 1; empty!(prob.seen_pts); prob)
+
 function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
-    (; As, b, nnls_work) = prob
-    @views solve!(nnls_work, As[:, :, I], b)
+    (; As, b, nnls_work, seen_pts, seen_idx, seen_nsetp, seen_stamp, voxel) = prob
+    lin = LinearIndices(size(prob.u))[I]
+
+    # Choose the warm-start seed, in order of preference. First, this grid point's active set from the immediately-previous voxel, which has the same decay basis and a nearby signal and is usually the best seed available.
+    # Otherwise the nearest grid point already evaluated during this voxel's search, since nearby parameters have nearly identical decay bases and hence nearly identical active sets, and even a far seed beats a cold solve. Otherwise solve cold.
+    seedlin = 0
+    @inbounds begin
+        prevstamp = seen_stamp[lin]
+        if prevstamp > 0 && prevstamp == voxel[] - 1
+            seedlin = lin
+        else
+            bestd = typemax(Int)
+            for J in seen_pts
+                d = 0
+                for k in 1:D
+                    d += abs(J[k] - I[k])
+                end
+                if d < bestd
+                    seedlin, bestd = LinearIndices(size(prob.u))[J], d
+                end
+            end
+        end
+    end
+    np0 = seedlin == 0 ? 0 : @inbounds(seen_nsetp[seedlin])
+
+    @inbounds if np0 > 0
+        @views solve!(nnls_work, As[:, :, I], b, seen_idx[:, seedlin], np0)
+    else
+        @views solve!(nnls_work, As[:, :, I], b)
+    end
+
+    # Record the active set for future warm starts; each grid point is evaluated at most once per search, so no overwrite occurs.
+    wk = nnls_work.nnls_work
+    ns = NNLS.ncomponents(wk)
+    seen_nsetp[lin] = ns
+    @inbounds for t in 1:ns
+        seen_idx[t, lin] = wk.idx[t]
+    end
+    seen_stamp[lin] = voxel[]
+    push!(seen_pts, I)
     u = resnorm_sq(nnls_work)
     return u
 end

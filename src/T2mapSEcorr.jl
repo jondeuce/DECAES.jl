@@ -432,6 +432,7 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
     if o.SetFlipAngle === nothing
         # Find optimal flip angle
         empty!(work.α_surrogate)
+        advance_warmstart!(work.decay_basis_set_ensemble.nnls_search_prob) # cross-voxel NNLS warm starting
         reset!(work.α_searcher) # reuse the searcher's buffers instead of allocating one per voxel
         initialize!(work.α_surrogate, work.α_searcher; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
         α_opt, _ = bisection_search(work.α_surrogate, work.α_searcher; maxeval = o.nRefAngles)
