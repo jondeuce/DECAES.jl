@@ -3,11 +3,11 @@
 ####
 
 struct NNLSProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W}
-    A::TA
-    b::Tb
-    m::Int
-    n::Int
-    nnls_work::W
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_work::W # underlying NNLS solver workspace
 end
 function NNLSProblem(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     m, n = size(A)
@@ -117,7 +117,6 @@ function solve!(
 
     return NNLS.unsafe_nnls!(work.nnls_work, A; kwargs..., nwarm = nsetp0)
 end
-
 
 function solve!(
     work::NNLSProblem{T},
@@ -249,7 +248,6 @@ end
 solve_unreg!(prob::NNLSProblem, nnls_prob_seed::Nothing) = solve!(prob)
 solve_unreg!(prob::NNLSProblem, nnls_prob_seed::NNLS.NNLSWorkspace) = solve!(prob, prob.A, prob.b, nnls_prob_seed.idx, NNLS.ncomponents(nnls_prob_seed))
 
-
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
 @inline resnorm(work::NNLSProblem) = NNLS.residualnorm(work.nnls_work)
@@ -283,7 +281,7 @@ lsqnonneg!(work::NNLSProblem{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) whe
 ####
 
 struct PaddedVector{T, Tb <: AbstractVector{T}} <: AbstractVector{T}
-    b::Tb
+    b::Tb # decay curve data
     pad::Int
 end
 Base.size(x::PaddedVector) = (length(x.b) + x.pad,)
@@ -303,7 +301,7 @@ function Base.copyto!(y::AbstractVector{T}, x::PaddedVector{T}) where {T}
 end
 
 struct TikhonovPaddedMatrix{T, TA <: AbstractMatrix{T}} <: AbstractMatrix{T}
-    A::TA
+    A::TA # decay basis matrix
     μ::Base.RefValue{T}
 end
 TikhonovPaddedMatrix(A::AbstractMatrix, μ::Real) = TikhonovPaddedMatrix(A, Ref(μ))
@@ -341,12 +339,12 @@ struct NNLSTikhonovRegProblem{
     W <: NNLSProblem{T, <:TikhonovPaddedMatrix{T}, <:PaddedVector{T}},
     B,
 }
-    A::TA
-    b::Tb
-    m::Int
-    n::Int
-    nnls_prob::W
-    buffers::B
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W # NNLS problem over the μ-augmented system [A; μI] x = [b; 0]
+    buffers::B # scratch for the μ-derivative and curvature computations (see `gradient_temps`, `hessian_temps`)
 end
 function NNLSTikhonovRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, μ::Real = T(NaN)) where {T}
     m, n = size(A)
@@ -544,23 +542,62 @@ function solve!(work::NNLSTikhonovRegProblemCache{T}, μ::T) where {T}
 end
 
 ####
+#### Gram matrix-based fast path for the μ-search
+####
+
+# Seed the Gram fast path from the unregularized solution's active set.
+# Requires `solve!(work.nnls_prob)` to have been called; `work` is any of the μ-selection problem types (chi2/gcv/lcurve) exposing `.nnls_gram`, `.A`, `.nnls_prob`.
+function nnls_gram_setup!(work)
+    gp = work.nnls_gram
+    NNLS.load!(gp, work.A, work.b)
+    wk = work.nnls_prob.nnls_work
+    NNLS.set_active!(gp, work.A, wk.idx, NNLS.ncomponents(wk))
+    return gp
+end
+
+# Evaluate (‖Ax(μ)-b‖², ‖x(μ)‖²) via the Gram fast path, warm-chained across μ, falling back to the exact QR solver (and reseeding the Gram context from its active set) if the Gram path fails a conditioning/iteration guard.
+# Used by the gcv and lcurve μ-searches (see `lsqnonneg_gcv!`, `lsqnonneg_lcurve!`); the selected μ is then recomputed with an exact final solve, so the fast path affects the search decisions only within the search tolerance.
+function nnls_gram_losses!(work, μ::T) where {T}
+    gp = work.nnls_gram
+    res² = NNLS.solve!(gp, work.A, work.b, μ)
+    if isnan(res²)
+        solve!(work.nnls_prob_smooth_cache, μ)
+        cache = work.nnls_prob_smooth_cache[]
+        wk = cache.nnls_prob.nnls_work
+        NNLS.set_active!(gp, work.A, wk.idx, NNLS.ncomponents(wk))
+        return resnorm_sq(cache), seminorm_sq(cache)
+    end
+    return res², NNLS.seminorm_sq(gp)
+end
+
+# Exact final solve at the selected μ, seeded from the Gram path's active set and stored in a fresh μ-cache slot so the usual `solution(work)` accessors see it.
+function nnls_gram_polish_solve!(work, μ::T) where {T}
+    gp = work.nnls_gram
+    cache = work.nnls_prob_smooth_cache
+    next_cache_index!(cache)
+    return solve!(cache[], μ, gp.P, gp.np[])
+end
+
+####
 #### Chi2 method for choosing the Tikhonov regularization parameter
 ####
 
 struct NNLSChi2RegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
-    A::TA
-    b::Tb
-    m::Int
-    n::Int
-    nnls_prob::W1
-    nnls_prob_smooth_cache::W2
-    nnls_prob_seed::S
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
+    nnls_gram::NNLS.NNLSGram{T} # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    nnls_prob_seed::S # warm-start source for the unregularized solve (an NNLS workspace whose active set seeds the solve, e.g. the flip-angle search of the same voxel), or nothing; if not nothing it is always used (a seed changes only the solve cost, never the solution)
 end
 function NNLSChi2RegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    return NNLSChi2RegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_prob_seed)
+    nnls_gram = NNLS.NNLSGram(A, b)
+    return NNLSChi2RegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_gram, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSChi2RegProblem) = solution(work.nnls_prob_smooth_cache[])
@@ -602,8 +639,9 @@ function lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real,
 end
 lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSChi2RegProblem(A, b, nnls_prob_seed)
 
-function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :brent) where {T}
-    # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present
+function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :brent_gram) where {T}
+    # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present.
+    # :brent_gram solves the same χ²(μ) = target root problem to the same tolerance as :brent, using the Gram fast path for the search evaluations and an exact final solve.
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
@@ -633,21 +671,21 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         end
 
     elseif method === :bisect
-        f = function (logμ)
+        function f_bisect(logμ)
             solve!(work.nnls_prob_smooth_cache, exp(logμ))
             return chi2_relerr!(work.nnls_prob_smooth_cache[], res²_target, logμ)
         end
 
         # Find bracketing interval containing root, then perform bisection search with slightly higher tolerance to not waste f evals
-        a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
+        a, b, fa, fb = bracket_root_monotonic(f_bisect, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
 
         if fa * fb < 0
             # Bracketing interval found
-            a, fa, c, fc, b, fb = bisect_root(f, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = T(1e-3) * (chi2_target - 1), maxiters = 100)
+            a, fa, c, fc, b, fb = bisect_root(f_bisect, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = T(1e-3) * (chi2_target - 1), maxiters = 100)
 
             # Root of secant line through `(a, fa), (b, fb)` or `(c, fc), (b, fb)` to improve bisection accuracy
             tmp = fa * fc < 0 ? root_real_linear(a, c, fa, fc) : fc * fb < 0 ? root_real_linear(c, b, fc, fb) : T(NaN)
-            d, fd = isnan(tmp) ? (c, fc) : (tmp, f(tmp))
+            d, fd = isnan(tmp) ? (c, fc) : (tmp, f_bisect(tmp))
 
             # Return regularization parameter with lowest abs(relerr)
             logmu_final, relerr_final = abs(fd) < abs(fc) ? (d, fd) : (c, fc)
@@ -664,17 +702,17 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         end
 
     elseif method === :brent
-        f = function (logμ)
+        function f_brent(logμ)
             solve!(work.nnls_prob_smooth_cache, exp(logμ))
             return chi2_relerr!(work.nnls_prob_smooth_cache[], res²_target, logμ)
         end
 
         # Find bracketing interval containing root
-        a, b, fa, fb = bracket_root_monotonic(f, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
+        a, b, fa, fb = bracket_root_monotonic(f_brent, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
 
         if fa * fb < 0
             # Find root using Brent's method
-            logmu_final, relerr_final = brent_root(f, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = T(1e-3) * (chi2_target - 1), maxiters = 100)
+            logmu_final, relerr_final = brent_root(f_brent, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = T(1e-3) * (chi2_target - 1), maxiters = 100)
         else
             # No bracketing interval found; choose point with smallest value of f (note: this branch should never be reached)
             logmu_final, relerr_final = !isfinite(fa) ? (b, fb) : !isfinite(fb) ? (a, fa) : abs(fa) < abs(fb) ? (a, fa) : (b, fb)
@@ -683,6 +721,35 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         if isfinite(relerr_final)
             mu_final, res²_final = exp(logmu_final), chi2_relerr⁻¹(res²_target, relerr_final)
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
+        else
+            x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
+        end
+
+    elseif method === :brent_gram
+        # Fast variant: search evaluations use the Gram fast path, warm-chained across μ, with KKT verification and an exact-solver fallback.
+        # Only the residual norm feeds the root finder and the final solution is recomputed with the exact QR solver below,
+        # so the fast path affects the selected μ only within the root-finding tolerance.
+        # The residual curve is flat near the root for high-SNR voxels, so within that band the selected μ can differ noticeably from `:brent`.
+        nnls_gram_setup!(work) # seed the Gram fast path from the unregularized active set
+        function f_brent_gram(logμ)
+            res², _ = nnls_gram_losses!(work, exp(logμ))
+            return (res² - res²_target) / res²_target
+        end
+
+        # Find bracketing interval containing root
+        a, b, fa, fb = bracket_root_monotonic(f_brent_gram, T(-4.0), T(1.0); dilate = T(1.5), mono = +1, maxiters = 6)
+
+        if fa * fb < 0
+            # Find root using Brent's method
+            logmu_final, relerr_final = brent_root(f_brent_gram, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = T(1e-3) * (chi2_target - 1), maxiters = 100)
+        else
+            # No bracketing interval found; choose point with smallest value of f (note: this branch should never be reached)
+            logmu_final, relerr_final = !isfinite(fa) ? (b, fb) : !isfinite(fb) ? (a, fa) : abs(fa) < abs(fb) ? (a, fa) : (b, fb)
+        end
+
+        if isfinite(relerr_final)
+            mu_final, res²_final = exp(logmu_final), chi2_relerr⁻¹(res²_target, relerr_final)
+            x_final = nnls_gram_polish_solve!(work, mu_final)
         else
             x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
         end
@@ -741,19 +808,21 @@ end
 ####
 
 struct NNLSMDPRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
-    A::TA
-    b::Tb
-    m::Int
-    n::Int
-    nnls_prob::W1
-    nnls_prob_smooth_cache::W2
-    nnls_prob_seed::S # warm-start source for the unregularized solve, or nothing; see `NNLSChi2RegProblem`
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
+    nnls_gram::NNLS.NNLSGram{T} # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
 end
 function NNLSMDPRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
-    return NNLSMDPRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_prob_seed)
+    nnls_gram = NNLS.NNLSGram(A, b)
+    return NNLSMDPRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_gram, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSMDPRegProblem) = solution(work.nnls_prob_smooth_cache[])
@@ -819,12 +888,14 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
         return (; x = x_final, mu = T(Inf), chi2 = res²_max / res²_min)
     end
 
-    # Prepare to solve
+    # Prepare to solve.
+    # The residual-norm root ‖Ax(μ)-b‖² = δ² is found with the Gram fast path for the search evaluations, seeded by the unregularized solve above, and an exact final solve.
     reset_cache!(work.nnls_prob_smooth_cache)
+    nnls_gram_setup!(work)
 
     function f(logμ)
-        solve!(work.nnls_prob_smooth_cache, exp(logμ))
-        return resnorm_sq(work.nnls_prob_smooth_cache[]) - δ^2
+        res², _ = nnls_gram_losses!(work, exp(logμ))
+        return res² - δ^2
     end
 
     # Find bracketing interval containing root
@@ -840,7 +911,7 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
 
     if isfinite(err_final)
         mu_final, res²_final = exp(logmu_final), δ^2 + err_final
-        x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
+        x_final = nnls_gram_polish_solve!(work, mu_final)
     else
         x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
     end
@@ -853,26 +924,28 @@ end
 ####
 
 struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, C1, C2, S}
-    A::TA
-    b::Tb
-    m::Int
-    n::Int
-    nnls_prob::W1
-    nnls_prob_smooth_cache::W2
-    lsqnonneg_lcurve_fun_cache::C1
-    lcurve_corner_caches::C2
-    nnls_prob_seed::S # warm-start source for the unregularized solve, or nothing; see `NNLSChi2RegProblem`
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
+    nnls_gram::NNLS.NNLSGram{T} # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    lsqnonneg_lcurve_fun_cache::C1 # cache of (log res², log ‖x‖²) points on the L-curve
+    lcurve_corner_caches::C2 # corner-search point and state caches (see `lcurve_corner`)
+    nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
 end
 function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
+    nnls_gram = NNLS.NNLSGram(A, b)
     lsqnonneg_lcurve_fun_cache = GrowableCache{T, SVector{2, T}}(64, isapprox)
     lcurve_corner_caches = (
         GrowableCache{T, LCurveCornerPoint{T}}(64, isapprox),
         GrowableCache{T, LCurveCornerState{T}}(64, isapprox),
     )
-    return NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches, nnls_prob_seed)
+    return NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_gram, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSLCurveRegProblem) = solution(work.nnls_prob_smooth_cache[])
@@ -922,14 +995,17 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_prob_smooth_cache)
 
+    # The corner search's (ξ, η) points are evaluated through the Gram fast path, which yields both ‖Ax-b‖² and ‖x‖² from one warm-chained μ-solve.
+    # The corner curvature is computed from these cached points and the final solution is recomputed exactly, so the fast path affects only the corner-search decisions, within its tolerance.
+    solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
+    nnls_gram_setup!(work)
+
     # A point on the L-curve is given by (ξ(μ), η(μ)) = (log||Ax-b||^2, log||x||^2)
     #   Note: Squaring the norms is convenient for computing gradients of (ξ(μ), η(μ));
     #         this scales the L-curve, but does not change μ* = argmax C(ξ(μ), η(μ)).
     function f_lcurve(logμ)
-        solve!(work.nnls_prob_smooth_cache, exp(logμ))
-        ξ = log(resnorm_sq(work.nnls_prob_smooth_cache[]))
-        η = log(seminorm_sq(work.nnls_prob_smooth_cache[]))
-        return SA{T}[ξ, η]
+        res², η² = nnls_gram_losses!(work, exp(logμ))
+        return SA{T}[log(res²), log(η²)]
     end
 
     # Build cached function and solve via pointwise max-curvature, following Cultrera-Callegaro, rejecting corners in the near-vertical μ→0 collapse tail with the slope guard `LCURVE_SLOPE_MAX`.
@@ -939,12 +1015,11 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
 
     # A degenerate cornerless curve admits no corner; see `lcurve_corner`.
     # Return the unregularized solution rather than an arbitrary near-zero μ.
-    isnan(logmu_final) && return (; x = solve_unreg!(work.nnls_prob, work.nnls_prob_seed), mu = zero(T), chi2 = one(T))
+    isnan(logmu_final) && return (; x = solution(work.nnls_prob), mu = zero(T), chi2 = one(T))
 
-    # Return the final regularized solution
+    # Return the final regularized solution (recomputed exactly; the unregularized solve was already done above to seed the Gram path)
     mu_final = exp(logmu_final)
-    x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
-    x_unreg = solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
+    x_final = nnls_gram_polish_solve!(work, mu_final)
     chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
 
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
@@ -1184,23 +1259,25 @@ kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(P�
 ####
 
 struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2, S}
-    A::TA
-    b::Tb
-    m::Int
-    n::Int
-    γ::Vector{T}
-    svd_work::W0
-    nnls_prob::W1
-    nnls_prob_smooth_cache::W2
-    nnls_prob_seed::S # warm-start source for the unregularized solve, or nothing; see `NNLSChi2RegProblem`
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    γ::Vector{T} # singular values of A; reference into `svd_work`
+    svd_work::W0 # workspace for computing the singular values of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
+    nnls_gram::NNLS.NNLSGram{T} # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
 end
 function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
     m, n = size(A)
     svd_work = SVDValsWorkspace(A) # workspace for computing singular values
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
+    nnls_gram = NNLS.NNLSGram(A, b)
     γ = svd_work.S # store reference to (generalized) singular values for convenience
-    return NNLSGCVRegProblem(A, b, m, n, γ, svd_work, nnls_prob, nnls_prob_smooth_cache, nnls_prob_seed)
+    return NNLSGCVRegProblem(A, b, m, n, γ, svd_work, nnls_prob, nnls_prob_smooth_cache, nnls_gram, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSGCVRegProblem) = solution(work.nnls_prob_smooth_cache[])
@@ -1263,10 +1340,25 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
     # Non-zero lower bound for GCV to avoid log(0) in the objective function
     gcv_low = gcv_lower_bound(work)
 
-    # Objective functions
+    # The gradient-free search, method = :brent and the default, evaluates the GCV objective 𝒢(μ) = ‖Ax(μ)-b‖² / dof(μ)² through the Gram fast path;
+    # dof is cheap in μ given the singular values, so only the residual needs an NNLS solve.
+    # The gradient-based methods keep the exact μ-cache solves, since ∇resnorm_sq needs the QR triangular factor.
+    # The final solution is always recomputed exactly.
+    use_gram = method === :brent
     reset_cache!(work.nnls_prob_smooth_cache)
+    if use_gram
+        solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
+        nnls_gram_setup!(work)
+    end
     function log𝒢(logμ)
-        𝒢 = gcv!(work, logμ)
+        if use_gram
+            μ = exp(logμ)
+            res², _ = nnls_gram_losses!(work, μ)
+            dof = gcv_dof(work.m, work.n, work.γ, μ)
+            𝒢 = res² / dof^2
+        else
+            𝒢 = gcv!(work, logμ)
+        end
         𝒢 = max(𝒢, gcv_low)
         return log(𝒢)
     end
@@ -1295,6 +1387,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         logmu_final       = @inbounds T(minx[1])
         log𝒢_final        = T(minf)
     elseif method === :brent
+        # Gradient-free golden-section/parabolic search over the full bounds. The GCV minimization is bracket-shrink bound (convergence needs the bracket width, not just a good point, to reach `atol`), so a warm start cannot speed it without narrowing the bounds a priori (sacrificing determinism, risking collapse).
         logmu_final, log𝒢_final = brent_minimize(log𝒢, logμ₋, logμ₊; xrtol = T(rtol), xatol = T(atol), maxiters)
     elseif method === :brent_newton
         log𝒢₋, ∇log𝒢₋ = log𝒢_and_∇log𝒢(logμ₋)
@@ -1313,10 +1406,10 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         error("Unknown minimization method: $method")
     end
 
-    # Return the final regularized solution
+    # Return the final regularized solution (recomputed exactly; if the Gram path was used the unregularized solve was already done above to seed it)
     mu_final = exp(logmu_final)
-    x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
-    x_unreg = solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
+    x_final = use_gram ? nnls_gram_polish_solve!(work, mu_final) : solve!(work.nnls_prob_smooth_cache, mu_final)
+    use_gram || solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
 
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)

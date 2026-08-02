@@ -42,7 +42,7 @@ using LinearAlgebra: LinearAlgebra, Factorization, UpperTriangular, ldiv!, norm
 using MuladdMacro: MuladdMacro, @muladd
 
 export nnls, nnls!, load!
-export NNLSWorkspace, NormalEquation, NormalEquationCholesky
+export NNLSWorkspace, NNLSGram, NormalEquation, NormalEquationCholesky
 
 @muladd begin
 
@@ -1404,6 +1404,320 @@ function unsafe_nnls!(
     work.rnorm[] = sqrt(sm)
     work.nsetp[] = nsetp
     return work.x
+end
+
+####
+#### Gram matrix-based fast path for the Tikhonov-regularized problem
+####
+
+# The Gram matrix of the active columns is μ-independent, so evaluating the Tikhonov-regularized NNLS residual norm at a new μ with a warm active set costs only a p×p Cholesky factorization (p = active-set size) plus one KKT-verification GEMV, instead of a full QR factor rebuild.
+# The KKT conditions are verified with the exact residual dual w = A'(b - A_P x), so accepted solutions are genuine NNLS solutions up to normal-equation roundoff (κ(A_P)² amplification, tamed by the μ² shift of the Gram matrix - the μ-search evaluates μ well above the conditioning danger zone, and the root tolerance is many orders coarser than the roundoff).
+# Conditioning trouble (non-positive or tiny Cholesky pivots) or an exhausted iteration budget returns NaN, and the caller falls back to the exact QR solver.
+struct NNLSGram{T}
+    P::Vector{Int}           # active set (original column indices) in P[1:np]
+    inP::Vector{Bool}        # membership mask of P[1:np]
+    np::Base.RefValue{Int}   # active-set size
+    GP::Matrix{T}            # n×n buffer; GP[1:np, 1:np] = Gram of the active columns (both triangles)
+    L::Matrix{T}             # n×n buffer; upper Cholesky factor of GP + μ²I
+    c::Vector{T}             # A'b
+    cscale::Base.RefValue{T} # maximum(abs, c); scale for the dual tolerance
+    xp::Vector{T}            # solution on the active set (length n buffer)
+    r::Vector{T}             # residual b - A_P x (length m)
+    w::Vector{T}             # dual A'r (length n)
+    dinv::Vector{T}          # reciprocals of the Cholesky diagonal, so the O(p²) column updates multiply instead of divide
+end
+
+function NNLSGram(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    m, n = size(A)
+    return NNLSGram(
+        zeros(Int, n), fill(false, n), Ref(0),
+        zeros(T, n, n), zeros(T, n, n),
+        zeros(T, n), Ref(zero(T)),
+        zeros(T, n), zeros(T, m), zeros(T, n), zeros(T, n),
+    )
+end
+
+# Load the μ-independent right-hand side data c = A'b (once per problem/voxel)
+function load!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    (; c) = gp
+    m, n = size(A)
+    cmax = zero(T)
+    @inbounds for j in 1:n
+        s = zero(T)
+        @simd for i in 1:m
+            s = muladd(A[i, j], b[i], s)
+        end
+        c[j] = s
+        cmax = max(cmax, abs(s))
+    end
+    gp.cscale[] = cmax
+    return gp
+end
+
+# Set the active set to idx0[1:np0] and (re)build its Gram block
+function set_active!(gp::NNLSGram{T}, A::AbstractMatrix{T}, idx0::AbstractVector{Int}, np0::Int) where {T}
+    (; P, inP, GP) = gp
+    m = size(A, 1)
+    fill!(inP, false)
+    @inbounds for t in 1:np0
+        j = idx0[t]
+        P[t] = j
+        inP[j] = true
+    end
+    @inbounds for t in 1:np0, s in 1:t
+        g = coldot(A, P[s], P[t], m)
+        GP[s, t] = g
+        GP[t, s] = g
+    end
+    gp.np[] = np0
+    return gp
+end
+
+@inline function add_active!(gp::NNLSGram{T}, A::AbstractMatrix{T}, j::Int) where {T}
+    (; P, inP, GP, np) = gp
+    m = size(A, 1)
+    p = np[] + 1
+    @inbounds begin
+        P[p] = j
+        inP[j] = true
+        for s in 1:p
+            g = coldot(A, P[s], j, m)
+            GP[s, p] = g
+            GP[p, s] = g
+        end
+    end
+    np[] = p
+    return gp
+end
+
+@inline function remove_active!(gp::NNLSGram, i::Int)
+    (; P, inP, GP, np) = gp
+    p = np[]
+    @inbounds begin
+        inP[P[i]] = false
+        if i < p # swap-remove row/column i with the last
+            P[i] = P[p]
+            for s in 1:p
+                GP[s, i] = GP[s, p]
+            end
+            for s in 1:p
+                GP[i, s] = GP[p, s]
+            end
+            GP[i, i] = GP[p, p]
+        end
+    end
+    np[] = p - 1
+    return gp
+end
+
+@inline function coldot(A::AbstractMatrix{T}, ji::Int, jj::Int, m::Int) where {T}
+    s = zero(T)
+    @inbounds @simd for i in 1:m
+        s = muladd(A[i, ji], A[i, jj], s)
+    end
+    return s
+end
+
+# ||x(μ)||² from the Gram path's active-set solution (valid immediately after a successful `solve!`: xp[1:np] holds the coefficients on P[1:np])
+@inline function seminorm_sq(gp::NNLSGram{T}) where {T}
+    s = zero(T)
+    @inbounds @simd for i in 1:gp.np[]
+        s = muladd(gp.xp[i], gp.xp[i], s)
+    end
+    return s
+end
+
+# Solve min ||Ax - b||² + μ²||x||² s.t. x ≥ 0 via active-set iteration on the cached Gram data, warm-started from the current active set.
+# Returns the squared data residual ||Ax - b||² (the chi2 functional; the μ²||x||² penalty is excluded, matching `resnorm_sq`), or NaN on failure (caller falls back to the exact solver).
+# On success the active set is left at the solution (warm start for the next μ).
+function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ::T) where {T}
+    (; P, inP, np, GP, L, c, xp, r, w, dinv) = gp
+    m, n = size(A)
+    μ² = μ * μ
+
+    # Dual tolerance for accepting a KKT point, relative to the scale of A'b.
+    # The objective is flat along the degenerate directions of near-collinear columns, so a dual violation of size δ admits an active set whose
+    # objective is suboptimal only by O(δ²) but whose ‖Ax-b‖² and ‖x‖² individually move by O(δ).
+    # Callers read those two separately and amplify: a transversal root-find by O(1), a smooth minimization by O(√·), a curvature maximization more still.
+    wtol = eps(T)^(3//4) * gp.cscale[]
+
+    # Cholesky pivot guard: a length-p accumulated dot product carries relative error O(p·eps), so the threshold scales with the problem size.
+    ϵpiv = 10 * n * eps(T)
+    maxiter = 2 * n + 10
+    iters = 0
+    lvalid = 0 # leading columns of L that are current for this μ (adds append a column; drops invalidate from the removed column)
+
+    @inbounds while true
+        iters += 1
+        iters > maxiter && return T(NaN)
+        p = np[]
+
+        # Upper Cholesky L'L = GP[1:p, 1:p] + μ²I, with a conditioning guard on the pivots.
+        # Left-looking column-oriented: column jcol is computed from GP[:, jcol] and the previous columns of L only,
+        # so recomputation can resume from the first column invalidated by an active-set change (μ is fixed for the duration of this call)
+        jcol = lvalid + 1
+        while jcol <= p
+            if jcol + 1 <= p
+                # Two columns at a time: each pass over L[:, k] feeds both accumulators, halving the loads of the O(p³) update
+                @simd ivdep for k in 1:jcol-1
+                    L[k, jcol] = GP[k, jcol]
+                    L[k, jcol+1] = GP[k, jcol+1]
+                end
+                for k in 1:jcol-1
+                    a = L[k, jcol]
+                    b2 = L[k, jcol+1]
+                    @simd for k2 in 1:k-1
+                        lk = L[k2, k]
+                        a = a - lk * L[k2, jcol]
+                        b2 = b2 - lk * L[k2, jcol+1]
+                    end
+                    dk = dinv[k]
+                    L[k, jcol] = a * dk
+                    L[k, jcol+1] = b2 * dk
+                end
+                s = GP[jcol, jcol] + μ²
+                @simd for k in 1:jcol-1
+                    s = s - L[k, jcol] * L[k, jcol]
+                end
+                s <= ϵpiv * (GP[jcol, jcol] + μ²) && return T(NaN)
+                Ljj = sqrt(s)
+                L[jcol, jcol] = Ljj
+                dinv[jcol] = inv(Ljj)
+                s2 = GP[jcol, jcol+1]
+                @simd for k2 in 1:jcol-1
+                    s2 = s2 - L[k2, jcol] * L[k2, jcol+1]
+                end
+                L[jcol, jcol+1] = s2 * dinv[jcol]
+                s = GP[jcol+1, jcol+1] + μ²
+                @simd for k in 1:jcol
+                    s = s - L[k, jcol+1] * L[k, jcol+1]
+                end
+                s <= ϵpiv * (GP[jcol+1, jcol+1] + μ²) && return T(NaN)
+                L[jcol+1, jcol+1] = sqrt(s)
+                dinv[jcol+1] = inv(L[jcol+1, jcol+1])
+                jcol += 2
+            else
+                for k in 1:jcol-1
+                    s2 = GP[k, jcol]
+                    @simd for k2 in 1:k-1
+                        s2 = s2 - L[k2, k] * L[k2, jcol]
+                    end
+                    L[k, jcol] = s2 * dinv[k]
+                end
+                s = GP[jcol, jcol] + μ²
+                @simd for k in 1:jcol-1
+                    s = s - L[k, jcol] * L[k, jcol]
+                end
+                s <= ϵpiv * (GP[jcol, jcol] + μ²) && return T(NaN)
+                L[jcol, jcol] = sqrt(s)
+                dinv[jcol] = inv(L[jcol, jcol])
+                jcol += 1
+            end
+        end
+        lvalid = p
+
+        # xp = (GP + μ²I) \ c_P via forward/back substitution
+        for i in 1:p
+            s = c[P[i]]
+            @simd for k in 1:i-1
+                s = s - L[k, i] * xp[k]
+            end
+            xp[i] = s * dinv[i]
+        end
+        for i in p:-1:1
+            s = xp[i]
+            @simd for k in i+1:p
+                s = s - L[i, k] * xp[k]
+            end
+            xp[i] = s * dinv[i]
+        end
+
+        # Feasibility: drop the most negative coefficient, if any
+        imv, xmin = 0, zero(T)
+        for i in 1:p
+            if xp[i] <= xmin
+                imv, xmin = i, xp[i]
+            end
+        end
+
+        if imv > 0
+            remove_active!(gp, imv)
+            lvalid = min(lvalid, imv - 1) # swap-remove invalidates the factor from column imv on
+            continue
+        end
+
+        # Residual r = b - A_P x and squared objective
+        @simd ivdep for i in 1:m
+            r[i] = b[i]
+        end
+
+        res² = zero(T)
+        tt = 1
+        while tt + 1 <= p # two active columns per pass, halving the loads and stores of r
+            x1, x2 = xp[tt], xp[tt+1]
+            j1, j2 = P[tt], P[tt+1]
+            @simd ivdep for i in 1:m
+                r[i] = r[i] - x1 * A[i, j1] - x2 * A[i, j2]
+            end
+            tt += 2
+        end
+        if tt <= p
+            xt = xp[tt]
+            jt = P[tt]
+            @simd ivdep for i in 1:m
+                r[i] = r[i] - xt * A[i, jt]
+            end
+        end
+
+        @simd for i in 1:m
+            res² = muladd(r[i], r[i], res²)
+        end
+
+        # KKT dual w = A'r, computed only for the inactive columns, which are the only ones the scan below can select.
+        # The active set is typically most of the basis, so this is far less work than a full A'r.
+        @simd for jj in 1:n
+            w[jj] = zero(T)
+        end
+        for jj in 1:n
+            inP[jj] && continue
+            s = zero(T)
+            @simd for i in 1:m
+                s = muladd(A[i, jj], r[i], s)
+            end
+            w[jj] = s
+        end
+
+        # w_Z must be non-positive (within tolerance)
+        wmax, jmax = wtol, 0
+        for j in 1:n
+            wj = w[j]
+            if wj > wmax && !inP[j]
+                wmax, jmax = wj, j
+            end
+        end
+
+        if jmax > 0
+            # Enter the worst violator plus up to 3 further strong violators in one batch (adds are cheap - a few Gram dots each - while every feasibility round costs a residual build and a dual GEMV; the feasibility drops above handle any overshoot)
+            p >= min(m, n) && return T(NaN) # cannot grow the active set further; fall back
+            add_active!(gp, A, jmax)
+            wthresh = max(wtol, T(0.2) * wmax)
+            for _ in 1:3
+                np[] >= min(m, n) && break
+                wbest, jbest = wthresh, 0
+                for j in 1:n
+                    wj = w[j]
+                    if wj > wbest && !inP[j]
+                        wbest, jbest = wj, j
+                    end
+                end
+                jbest == 0 && break
+                add_active!(gp, A, jbest)
+            end
+            continue
+        end
+
+        return res²
+    end
 end
 
 end # @muladd

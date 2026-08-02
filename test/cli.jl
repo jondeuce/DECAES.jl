@@ -330,9 +330,10 @@ function run_cli_tests()
             end
 
             # A B1 map run has no flip-angle search, so its T2-stage unregularized solve is unseeded and takes a different arithmetic path than the search run.
-            # Only chi2 is sensitive to this, since it scales its χ² target by the residual of that solve.
+            # chi2 is sensitive to this through its χ² target, which is scaled by the residual of that solve.
+            # gcv minimizes a smooth objective, so a perturbation of the evaluated points moves the minimizer by its square root; its μ is therefore only defined to the search tolerance `atol = 1e-4` on logμ.
             t2maps_cli, t2dist_cli, t2parts_cli = run_main(image, cli_t2map_args; make_settings_file)
-            cli_rtol = b1_used ? 1e-12 : 1e-14
+            cli_rtol = !b1_used ? 1e-14 : paramdict[:Reg] == "gcv" ? 1e-4 : 1e-9
             t2map_passed = test_compare_t2map(t2map, t2dist, t2maps_cli, t2dist_cli; rtol = cli_rtol)
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = cli_rtol)
             if !(t2map_passed && t2part_passed)
