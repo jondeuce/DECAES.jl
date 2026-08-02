@@ -186,6 +186,7 @@ function T2mapSEcorr!(
     # Run analysis in parallel
     with_singlethreaded_blas() do
         workerpool(with_thread_buffer, indices_blocks; ntasks, verbose = !opts.Silent) do inds, thread_buffer
+            reset_voxel_chains!(thread_buffer)
             GC.@preserve thread_buffer maps dist image @inbounds for j in inds
                 I = indices[j]
                 voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(image, I, :), opts, I)
@@ -194,6 +195,15 @@ function T2mapSEcorr!(
     end
 
     return convert(Dict{String, Any}, maps), convert(Array{T, 4}, dist)
+end
+
+# Reset every cross-voxel warm-start chain, namely the flip-search per-gridpoint active sets and the chi2/mdp μ-seeds, at the start of each voxel block.
+# Without this, a chain persists across whichever blocks a worker happens to pull, so the dynamic block-to-worker assignment perturbs near-tie search decisions and the output depends on both the run and the thread count.
+# Resetting makes each block's result a function of its own voxels alone, at the cost of one cold-started voxel per block.
+function reset_voxel_chains!(thread_buffer)
+    (; flip_angle_work) = thread_buffer
+    flip_angle_work.decay_basis_set_ensemble !== nothing && reset_warmstart!(flip_angle_work.decay_basis_set_ensemble.nnls_search_prob)
+    return nothing
 end
 
 # =========================================================
