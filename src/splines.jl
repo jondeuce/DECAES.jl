@@ -997,15 +997,17 @@ nearest_interior_gridpoint(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D,
 #### Global optimization for NNLS problem
 ####
 
-struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tb <: AbstractVector{T}, W}
+# Runtime toggle for the precomputed-Gram fast path of the surrogate search's NNLS evaluations (see `NNLS.NNLSGridGram`); `false` recovers the exact-QR evaluation path for every solve.
+const SURROGATE_USE_FAST_GRAM = Ref(true)
+
+struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tb <: AbstractVector{T}, W, WG}
     As::TA # decay bases over the parameter grid; As[:, :, I] is A(αs[I])
     ∇As::TdA # parameter derivatives of the grid bases; ∇As[:, :, d, I] is ∂A(αs[I])/∂αs[I][d]
     αs::Array{SVector{D, T}, D} # parameter grid
     b::Tb # decay curve data
     u::Array{T, D} # loss values at the evaluated grid points
-    ∂Ax⁺::Vector{T} # scratch for ∂A_P x_P
-    Ax⁺b::Vector{T} # scratch for the residual A_P x_P - b
     nnls_work::W # exact QR solver workspace
+    nnls_gram::WG # Gram fast path for the loss evaluations (see `SURROGATE_USE_FAST_GRAM`)
     seen_pts::Vector{CartesianIndex{D}} # grid points evaluated during the current search
     seen_idx::Matrix{Int} # column p holds the active set, as original column indices, of the solve at grid point p by linear index
     seen_nsetp::Vector{Int} # active-set size per grid point, by linear index
@@ -1029,14 +1031,13 @@ function NNLSDiscreteSurrogateSearch(
 
     αs = meshgrid(SVector{D, T}, αs...)
     u = zeros(T, size(αs))
-    ∂Ax⁺ = zeros(T, M)
-    Ax⁺b = zeros(T, M)
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
+    nnls_gram = NNLS.NNLSGridGram(T, N, length(αs))
     seen_pts = sizehint!(CartesianIndex{D}[], length(αs))
     seen_idx = zeros(Int, N, length(αs))
     seen_nsetp = zeros(Int, length(αs))
     seen_stamp = zeros(Int, length(αs))
-    return NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, ∂Ax⁺, Ax⁺b, nnls_work, seen_pts, seen_idx, seen_nsetp, seen_stamp, Ref(1), legacy)
+    return NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, nnls_work, nnls_gram, seen_pts, seen_idx, seen_nsetp, seen_stamp, Ref(1), legacy)
 end
 
 load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T} = copyto!(prob.b, b)
@@ -1074,10 +1075,14 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) wh
     end
     np0 = seedlin == 0 ? 0 : @inbounds(seen_nsetp[seedlin])
 
-    @inbounds if np0 > 0
-        @views solve!(nnls_work, As[:, :, I], b, seen_idx[:, seedlin], np0)
-    else
-        @views solve!(nnls_work, As[:, :, I], b)
+    # Precomputed-Gram fast path (reads the seed out of seen_idx before it is overwritten below); exact QR solve on toggle-off, legacy mode, or a conditioning/iteration guard failure
+    solved = SURROGATE_USE_FAST_GRAM[] && !prob.legacy && @views loss_gram!(prob, I, lin, seen_idx[:, max(seedlin, 1)], np0)
+    @inbounds if !solved
+        if np0 > 0
+            @views solve!(nnls_work, As[:, :, I], b, seen_idx[:, seedlin], np0)
+        else
+            @views solve!(nnls_work, As[:, :, I], b)
+        end
     end
 
     # Record the active set for future warm starts; each grid point is evaluated at most once per search, so no overwrite occurs.
@@ -1093,22 +1098,26 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) wh
     return u
 end
 
+# Envelope-theorem gradient ∂u/∂αd = 2·(∂A_P x_P)ᵀ(A_P x_P − b), valid by Danskin's theorem because x is the NNLS minimizer at α.
+# The solve already left r = b − A_P x_P current, so the fit residual is −r and the gradient is −2·Σ_{t} x_t ⟨∂A[:, P_t], r⟩:
+# accumulating that as one dot product per support column avoids rebuilding the residual, materializing ∂A_P x_P, and scanning all n columns for positivity.
 function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
-    (; As, ∇As, b, ∂Ax⁺, Ax⁺b, nnls_work) = prob
-    ℓ = resnorm_sq(nnls_work)
-    x = solution(nnls_work)
-    @inbounds Ax⁺b .= zero(T)
-    @inbounds for j in 1:size(As, 2)
-        (x[j] > 0) && @views(axpy!(x[j], As[:, j, I], Ax⁺b))
-    end
-    @inbounds Ax⁺b .-= b
+    (; ∇As, nnls_work) = prob
+    wk = nnls_work.nnls_work
+    r = NNLS.residual(wk)
+    x = NNLS.solution(wk)
+    m, p = size(∇As, 1), NNLS.ncomponents(wk)
     ∇u = ntuple(D) do d
-        @inbounds ∂Ax⁺ .= zero(T)
-        @inbounds for j in 1:size(∇As, 2)
-            (x[j] > 0) && @views(axpy!(x[j], ∇As[:, j, d, I], ∂Ax⁺))
+        s = zero(T)
+        @inbounds for t in 1:p
+            j = wk.idx[t]
+            sj = zero(T)
+            @simd for i in 1:m
+                sj = muladd(∇As[i, j, d, I], r[i], sj)
+            end
+            s = muladd(x[j], sj, s)
         end
-        ∂u = 2 * dot(∂Ax⁺, Ax⁺b)
-        return ∂u
+        return -2 * s
     end
     return SVector{D, T}(∇u)
 end
@@ -1117,6 +1126,57 @@ function loss_with_grad!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIn
     u = loss!(prob, I)
     ∇u = ∇loss!(prob, I)
     return u, ∇u
+end
+
+# Evaluate the loss at grid point I via the precomputed-Gram fast path, seeded with the active set idx0[1:np0] (np0 = 0 solves cold).
+# On success the solution, active set, and exact residual norm are written into the NNLS workspace - the quantities every downstream consumer reads (`∇loss!`, the warm-start records in `loss!`, and the chi2-stage seed) - and `true` is returned; `false` means the caller must run the exact QR solver instead.
+function loss_gram!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}, lin::Int, idx0, np0::Int) where {D, T}
+    (; As, b, nnls_work, nnls_gram) = prob
+    A = view(As, :, :, I)
+    m = size(A, 1)
+    G = nnls_gram.Gready[lin] ? nnls_gram.G[lin] : NNLS.fill_gram!(nnls_gram, A, lin)
+    NNLS.load!(nnls_gram, A, b)
+    NNLS.set_active!(nnls_gram, G, idx0, np0)
+    NNLS.solve!(nnls_gram, G, m) || return false
+
+    # Scatter the results into the NNLS workspace; the residual norm is computed from the exact m-space residual r = b − A_P x_P
+    wk = nnls_work.nnls_work
+    p = nnls_gram.np[]
+    fill!(wk.x, zero(T))
+    @inbounds for t in 1:p
+        wk.x[nnls_gram.P[t]] = nnls_gram.xp[t]
+        wk.idx[t] = nnls_gram.P[t]
+    end
+    r = wk.r
+    @inbounds @simd ivdep for i in 1:m
+        r[i] = b[i]
+    end
+    t = 1
+    @inbounds while t + 1 <= p # two support columns per pass, halving the loads and stores of r
+        x1, x2 = nnls_gram.xp[t], nnls_gram.xp[t+1]
+        j1, j2 = nnls_gram.P[t], nnls_gram.P[t+1]
+        @simd ivdep for i in 1:m
+            r[i] = r[i] - x1 * A[i, j1] - x2 * A[i, j2]
+        end
+        t += 2
+    end
+    res² = zero(T)
+    if t <= p
+        xt, jt = @inbounds(nnls_gram.xp[t]), @inbounds(nnls_gram.P[t])
+        @inbounds @simd for i in 1:m # the last column folds the norm into its own pass
+            ri = r[i] - xt * A[i, jt]
+            r[i] = ri
+            res² = muladd(ri, ri, res²)
+        end
+    else
+        @inbounds @simd for i in 1:m
+            res² = muladd(r[i], r[i], res²)
+        end
+    end
+    wk.rnorm[] = sqrt(res²)
+    wk.nsetp[] = p
+    wk.mode[] = 0
+    return true
 end
 
 function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1, T}; legacy = false) where {T}

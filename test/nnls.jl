@@ -539,25 +539,23 @@ end
     end
 end
 
-#=
-Gradient notes:
-
-d/dμ x(μ):
-  ∇x = -2 * μ * (B\(B\(A'b)))
-     = -2 * μ * (B\x)             <-- x = (A'A)\(A'b) = B\(A'b)
-
-d/dμ ||A*x(μ)-b||^2:
-  ∇μ = 2 * ((A*x-b)' * (A*∇x))
-     = 2 * (A'*(A*x-b))' * ∇x
-     = 2 * ((-μ^2*x)' * ∇x)       <-- A'*(A*x-b) = -μ^2*x, as 0 = w = [A; μI]' * ([A; μI]*x - [b;0]) = [A; μI]' * [A*x-b; μ*x] = A'*(A*x-b) + μ^2*x
-     = 4μ^3 * x' * (B\x)
-
-d/dμ ||x(μ)||^2:
-  ∇μ = -4μ * b' * (A*(B\(B\(B\(A'b)))))
-     = -4μ * b' * (A*(B\(B\x)))   <-- x = (A'A)\(A'b) = B\(A'b)
-     = -4μ * (B\(A'b))'* (B\x)    <-- B = B'
-     = -4μ * x' * (B\x)
-=#
+# Gradient notes:
+#
+# d/dμ x(μ):
+#   ∇x = -2 * μ * (B\(B\(A'b)))
+#      = -2 * μ * (B\x)             <-- x = (A'A)\(A'b) = B\(A'b)
+#
+# d/dμ ||A*x(μ)-b||^2:
+#   ∇μ = 2 * ((A*x-b)' * (A*∇x))
+#      = 2 * (A'*(A*x-b))' * ∇x
+#      = 2 * ((-μ^2*x)' * ∇x)       <-- A'*(A*x-b) = -μ^2*x, as 0 = w = [A; μI]' * ([A; μI]*x - [b;0]) = [A; μI]' * [A*x-b; μ*x] = A'*(A*x-b) + μ^2*x
+#      = 4μ^3 * x' * (B\x)
+#
+# d/dμ ||x(μ)||^2:
+#   ∇μ = -4μ * b' * (A*(B\(B\(B\(A'b)))))
+#      = -4μ * b' * (A*(B\(B\x)))   <-- x = (A'A)\(A'b) = B\(A'b)
+#      = -4μ * (B\(A'b))'* (B\x)    <-- B = B'
+#      = -4μ * x' * (B\x)
 @testset "least-squares gradients" begin
     for (m, n) in NNLS_SIZES
         A, b = rand_NNLS_data(m, n)

@@ -343,13 +343,7 @@ function test_minimize_normal_hermite_interpolator()
     end
 end
 
-function test_mock_surrogate_search_problem(
-    opts::T2mapOptions = DECAES.mock_t2map_opts(;
-        MatrixSize = (1, 1, 1),
-        nRefAngles = 8,
-        nTE = 11,
-    ),
-)
+function test_mock_surrogate_search_problem(opts::T2mapOptions = DECAES.mock_t2map_opts(; MatrixSize = (1, 1, 1), nRefAngles = 8, nTE = 11))
     function A(α, β)
         theta = DECAES.EPGOptions((; ETL = opts.nTE, α = α, TE = opts.TE, T2 = 0.0, T1 = opts.T1, β = β))
         T2_times = DECAES.logrange(opts.T2Range..., opts.nT2)
@@ -383,9 +377,23 @@ function test_mock_surrogate_search_problem(
     for I in CartesianIndices(prob.αs)
         α, β    = prob.αs[I]
         l′, ∇l′ = fg_approx!(work, prob, α, β; h = 1e-6)
-        l, ∇l   = fg_surrogate!(prob, I)
-        @test l ≈ l′
+
+        # Exact QR evaluation path: strict agreement with the independent reference solve
+        DECAES.SURROGATE_USE_FAST_GRAM[] = false
+        DECAES.reset_warmstart!(prob)
+        l, ∇l = fg_surrogate!(prob, I)
+        @test l ≈ l′ rtol = 1e-6 atol = 1e-8
         @test ∇l ≈ ∇l′ rtol = 1e-6 atol = 1e-8
+
+        # Precomputed-Gram evaluation path: the same KKT point, so it is held to the reference at the same tolerances as the exact path and to the exact path itself at solver roundoff
+        DECAES.SURROGATE_USE_FAST_GRAM[] = true
+        DECAES.reset_warmstart!(prob)
+        lg, ∇lg = fg_surrogate!(prob, I)
+        @test lg ≈ l′ rtol = 1e-6 atol = 1e-8
+        @test ∇lg ≈ ∇l′ rtol = 1e-6 atol = 1e-8
+
+        @test lg ≈ l rtol = 1e-10 atol = 1e-10
+        @test ∇lg ≈ ∇l rtol = 1e-10 atol = 1e-10
     end
 end
 

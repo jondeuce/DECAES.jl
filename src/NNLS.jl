@@ -109,6 +109,16 @@ Residual norm `||Ax - b||₂` at the solution of the last solve.
 @inline residualnorm(work::NNLSWorkspace) = work.rnorm[]
 
 """
+    residual(work::NNLSWorkspace)
+
+Residual `r = b₀ - A₀x` of the last solve, in original data coordinates.
+Every solve leaves it current, so consumers that need the residual itself, and not only its norm, can read it instead of rebuilding `b₀ - A₀[:, P] x_P`.
+For the padded Tikhonov convention only the leading `m₀` data rows are meaningful; the Tikhonov rows contribute `λ²||x₊||²` to the norm separately.
+Note the sign: this is `b₀ - A₀x`, the negative of the fit residual reported by the output maps.
+"""
+@inline residual(work::NNLSWorkspace) = work.r
+
+"""
     ncomponents(work::NNLSWorkspace)
 
 Number of positive components in the solution of the last solve.
@@ -1074,6 +1084,10 @@ function unsafe_nnls!(
         @inbounds @simd for i in 1:m
             sm = sm + r[i] * r[i]
         end
+    else
+        @inbounds @simd ivdep for i in 1:m # the residual is zero by convention, so leave `r` current for `residual`
+            r[i] = zero(T)
+        end
     end
 
     work.rnorm[] = sqrt(sm)
@@ -1399,6 +1413,10 @@ function unsafe_nnls!(
         @inbounds @simd for i in 1:nsetp
             sm = sm + λ² * zz[i] * zz[i]
         end
+    else
+        @inbounds @simd ivdep for i in 1:m0 # the residual is zero by convention, so leave `r` current for `residual`
+            r[i] = zero(T)
+        end
     end
 
     work.rnorm[] = sqrt(sm)
@@ -1717,6 +1735,352 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
         end
 
         return res²
+    end
+end
+
+####
+#### Gram matrix-based fast path for a fixed grid of unregularized problems
+####
+
+# Precomputed-Gram fast path for unregularized NNLS solves against a fixed set of bases.
+# The bases depend only on the grid parameters, never on the signal b, so the Gram matrices Gᵢ = AᵢᵀAᵢ are signal-independent: each evaluated grid point's Gram is filled once per workspace lifetime (lazily, ~n²m flops) and amortizes to zero cost across signals.
+# Each evaluation then costs one GEMV c = Aᵢᵀb plus an active-set iteration entirely in Gram space: a resumable p×p Cholesky of G_P, feasibility drops, and the KKT dual w = c − G[:, P]x_P at n·p flops - the m·n dual GEMV per round of the QR solver disappears.
+# Unlike `NNLSGram` there is no μ² diagonal shift to condition the normal equations, so a tiny or non-positive Cholesky pivot, a full active set, or an exhausted iteration budget returns `false` and the caller falls back to the exact QR solver.
+struct NNLSGridGram{T}
+    G::Vector{Matrix{T}}     # per-grid-point n×n Gram matrices (allocated + filled lazily on first evaluation)
+    Gready::Vector{Bool}     # whether G[i] has been allocated and filled
+    c::Vector{T}             # Aᵢᵀb for the current evaluation
+    cscale::Base.RefValue{T} # maximum(abs, c); scale for the dual tolerance
+    P::Vector{Int}           # active set (original column indices) in P[1:np]
+    inP::Vector{Bool}        # membership mask of P[1:np]
+    rejected::Vector{Bool}   # candidates rejected during the current solve: numerically dependent on the active set (Schur complement d ≤ ϵ·Gⱼⱼ) or immediately infeasible after entry; mirrors the exact solver's `w[pos] = 0` candidate rejection and prevents add→drop cycling at the dual tolerance boundary
+    np::Base.RefValue{Int}   # active-set size
+    GP::Matrix{T}            # gathered active-set Gram block (both triangles)
+    L::Matrix{T}             # upper Cholesky factor of GP
+    dinv::Vector{T}          # reciprocals of the Cholesky diagonal, so the O(p²) column updates and the triangular solves multiply instead of divide
+    xp::Vector{T}            # unconstrained-on-P solution of the current round
+    xcur::Vector{T}          # feasible iterate aligned with P (Lawson-Hanson secondary-loop interpolation state)
+    u::Vector{T}             # bordering scratch: u = L'⁻¹G_{P,j} for the entering-column pre-check / factor extension
+    w::Vector{T}             # dual c − G[:, P]x_P
+end
+
+function NNLSGridGram(::Type{T}, n::Int, ngrid::Int) where {T}
+    return NNLSGridGram(
+        [Matrix{T}(undef, 0, 0) for _ in 1:ngrid], fill(false, ngrid),
+        zeros(T, n), Ref(zero(T)), zeros(Int, n), fill(false, n), fill(false, n), Ref(0),
+        zeros(T, n, n), zeros(T, n, n), zeros(T, n), zeros(T, n), zeros(T, n), zeros(T, n), zeros(T, n),
+    )
+end
+
+# Fill and cache the Gram matrix of the grid point with linear index `lin`
+function fill_gram!(gp::NNLSGridGram{T}, A::AbstractMatrix{T}, lin::Int) where {T}
+    m, n = size(A)
+    G = gp.G[lin] = Matrix{T}(undef, n, n)
+    @inbounds for t in 1:n, s in 1:t
+        g = coldot(A, s, t, m)
+        G[s, t] = g
+        G[t, s] = g
+    end
+    gp.Gready[lin] = true
+    return G
+end
+
+# Load the signal-dependent right-hand side data c = Aᵀb, once per grid point per signal.
+# Columns are processed in blocks of 4 sharing each load of b, cf. `compute_dual_block!`.
+function load!(gp::NNLSGridGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    (; c) = gp
+    m, n = size(A)
+    j = 1
+    @inbounds while j + 3 <= n
+        s1 = s2 = s3 = s4 = zero(T)
+        @simd for i in 1:m
+            bi = b[i]
+            s1 = muladd(A[i, j], bi, s1)
+            s2 = muladd(A[i, j+1], bi, s2)
+            s3 = muladd(A[i, j+2], bi, s3)
+            s4 = muladd(A[i, j+3], bi, s4)
+        end
+        c[j], c[j+1], c[j+2], c[j+3] = s1, s2, s3, s4
+        j += 4
+    end
+    @inbounds while j <= n
+        s = zero(T)
+        @simd for i in 1:m
+            s = muladd(A[i, j], b[i], s)
+        end
+        c[j] = s
+        j += 1
+    end
+    cmax = zero(T)
+    @inbounds @simd for j in 1:n
+        cmax = max(cmax, abs(c[j]))
+    end
+    gp.cscale[] = cmax
+    return gp
+end
+
+# Set the active set to idx0[1:np0] and gather its Gram block
+function set_active!(gp::NNLSGridGram{T}, G::Matrix{T}, idx0, np0::Int) where {T}
+    (; P, inP, rejected, GP) = gp
+    fill!(inP, false)
+    fill!(rejected, false)
+    @inbounds for t in 1:np0
+        j = idx0[t]
+        P[t] = j
+        inP[j] = true
+    end
+    @inbounds for t in 1:np0, s in 1:t
+        g = G[P[s], P[t]]
+        GP[s, t] = g
+        GP[t, s] = g
+    end
+    gp.np[] = np0
+    return gp
+end
+
+@inline function add_active!(gp::NNLSGridGram{T}, G::Matrix{T}, j::Int) where {T}
+    (; P, inP, GP, np) = gp
+    p = np[] + 1
+    @inbounds begin
+        P[p] = j
+        inP[j] = true
+        @simd for s in 1:p
+            g = G[P[s], j]
+            GP[s, p] = g
+            GP[p, s] = g
+        end
+    end
+    np[] = p
+    return gp
+end
+
+@inline function remove_active!(gp::NNLSGridGram, i::Int)
+    (; P, inP, GP, np, xcur) = gp
+    p = np[]
+    @inbounds begin
+        inP[P[i]] = false
+        if i < p # swap-remove row/column i with the last (xcur rides along with P)
+            P[i] = P[p]
+            xcur[i] = xcur[p]
+            @simd ivdep for s in 1:p
+                GP[s, i] = GP[s, p]
+            end
+            @simd ivdep for s in 1:p
+                GP[i, s] = GP[p, s]
+            end
+            GP[i, i] = GP[p, p]
+        end
+    end
+    np[] = p - 1
+    return gp
+end
+
+# Solve min ||Ax - b||² s.t. x ≥ 0 on the cached Gram data of one grid point, warm-started from the current active set.
+# This is the Lawson-Hanson iteration in Gram (normal-equations) form, cf. FNNLS (Bro & de Jong 1997):
+#   - entering candidates pass a bordering pre-check: with L'L = G_P and u = L'⁻¹G_{P,j}, the Schur complement d = Gⱼⱼ − ‖u‖² must exceed ϵ·Gⱼⱼ (numerical independence; the proposed new coefficient is wⱼ/d > 0), and u then extends the Cholesky factor in place - no refactorization on adds;
+#   - infeasible solves run the classic secondary-loop interpolation toward the last feasible iterate, so the objective strictly decreases and add→drop cycling cannot occur;
+#   - candidates that fail the pre-check or come out infeasible immediately after entry are rejected for the remainder of the solve (their attainable improvement is at the dual tolerance level), mirroring the exact solver's `w[pos] = 0` handling.
+# Returns `true` with the solution in xp[1:np] on P[1:np], or `false` on a conditioning/iteration guard (caller falls back to the exact QR solver).
+function solve!(gp::NNLSGridGram{T}, G::Matrix{T}, m::Int) where {T}
+    (; c, P, inP, rejected, np, GP, L, dinv, xp, xcur, u, w) = gp
+    n = size(G, 1)
+
+    # Dual tolerance for accepting a KKT point, relative to the scale of Aᵀb.
+    # The objective is flat along the degenerate directions of near-collinear columns, so a dual violation of size δ admits an active set whose
+    # objective is suboptimal only by O(δ²) but whose loss ‖A x − b‖² moves by O(δ), and the surrogate search reads that loss directly.
+    wtol = eps(T)^(3//4) * gp.cscale[]
+
+    # Cholesky pivot guard: a length-p accumulated dot product carries relative error O(p·eps), so the threshold scales with the problem size.
+    ϵpiv = 10 * n * eps(T)
+    maxiter = 3 * n
+    iters = 0
+    lvalid = 0 # leading columns of L that are current; accepted adds extend the factor, drops invalidate from the removed column
+    feasible = false # xcur[1:np] holds a feasible iterate; false until the first all-positive solve, so the seed feasibility pass drops most-negative coefficients without interpolation
+    jentered = 0 # column entered by the most recent accept; rejected if the immediately-following solve drops it
+    @inbounds while true
+        iters += 1
+        iters > maxiter && return false
+        p = np[]
+
+        # Upper Cholesky L'L = GP[1:p, 1:p] with a conditioning guard on the pivots.
+        # Left-looking column-oriented, so recomputation resumes from the first column invalidated by an active-set change, and two columns at a time, so each pass over L[:, k] feeds both accumulators and halves the loads of the O(p³) update.
+        jcol = lvalid + 1
+        while jcol <= p
+            if jcol + 1 <= p
+                @simd ivdep for k in 1:jcol-1
+                    L[k, jcol] = GP[k, jcol]
+                    L[k, jcol+1] = GP[k, jcol+1]
+                end
+                for k in 1:jcol-1
+                    a1 = L[k, jcol]
+                    a2 = L[k, jcol+1]
+                    @simd for k2 in 1:k-1
+                        lk = L[k2, k]
+                        a1 = a1 - lk * L[k2, jcol]
+                        a2 = a2 - lk * L[k2, jcol+1]
+                    end
+                    dk = dinv[k]
+                    L[k, jcol] = a1 * dk
+                    L[k, jcol+1] = a2 * dk
+                end
+                s = GP[jcol, jcol]
+                @simd for k in 1:jcol-1
+                    s = s - L[k, jcol] * L[k, jcol]
+                end
+                s <= ϵpiv * GP[jcol, jcol] && return false
+                Ljj = sqrt(s)
+                L[jcol, jcol] = Ljj
+                dinv[jcol] = inv(Ljj)
+                s2 = GP[jcol, jcol+1]
+                @simd for k2 in 1:jcol-1
+                    s2 = s2 - L[k2, jcol] * L[k2, jcol+1]
+                end
+                L[jcol, jcol+1] = s2 * dinv[jcol]
+                s = GP[jcol+1, jcol+1]
+                @simd for k in 1:jcol
+                    s = s - L[k, jcol+1] * L[k, jcol+1]
+                end
+                s <= ϵpiv * GP[jcol+1, jcol+1] && return false
+                Ljj = sqrt(s)
+                L[jcol+1, jcol+1] = Ljj
+                dinv[jcol+1] = inv(Ljj)
+                jcol += 2
+            else
+                for k in 1:jcol-1
+                    s2 = GP[k, jcol]
+                    @simd for k2 in 1:k-1
+                        s2 = s2 - L[k2, k] * L[k2, jcol]
+                    end
+                    L[k, jcol] = s2 * dinv[k]
+                end
+                s = GP[jcol, jcol]
+                @simd for k in 1:jcol-1
+                    s = s - L[k, jcol] * L[k, jcol]
+                end
+                s <= ϵpiv * GP[jcol, jcol] && return false
+                Ljj = sqrt(s)
+                L[jcol, jcol] = Ljj
+                dinv[jcol] = inv(Ljj)
+                jcol += 1
+            end
+        end
+        lvalid = p
+
+        # xp = GP \ c_P via forward/back substitution
+        for i in 1:p
+            s = c[P[i]]
+            @simd for k in 1:i-1
+                s = s - L[k, i] * xp[k]
+            end
+            xp[i] = s * dinv[i]
+        end
+        for i in p:-1:1
+            s = xp[i]
+            @simd for k in i+1:p
+                s = s - L[i, k] * xp[k]
+            end
+            xp[i] = s * dinv[i]
+        end
+
+        # Feasibility
+        imv, xmin = 0, zero(T)
+        for i in 1:p
+            if xp[i] <= xmin
+                imv, xmin = i, xp[i]
+            end
+        end
+        if imv > 0
+            if feasible
+                # Secondary loop: interpolate the feasible iterate toward xp until the first coefficient hits zero and drop that column
+                α = one(T)
+                for i in 1:p
+                    if xp[i] <= 0
+                        t = xcur[i] / (xcur[i] - xp[i])
+                        if t < α
+                            α, imv = t, i
+                        end
+                    end
+                end
+                for i in 1:p
+                    xcur[i] = xcur[i] + α * (xp[i] - xcur[i])
+                end
+                xcur[imv] = zero(T)
+                P[imv] == jentered && (rejected[jentered] = true) # the entering column came straight back out, so its dual is marginal at the tolerance boundary; reject it for the rest of the solve
+            end
+            jentered = 0
+            remove_active!(gp, imv)
+            lvalid = min(lvalid, imv - 1) # swap-remove invalidates the factor from column imv on
+            continue
+        end
+
+        # All positive: xp is the new feasible iterate
+        for i in 1:p
+            xcur[i] = xp[i]
+        end
+        feasible = true
+        jentered = 0
+
+        # KKT dual w = c − G[:, P]x_P, two active columns per pass so each load of w feeds both (n·p flops on contiguous Gram columns)
+        @simd ivdep for j in 1:n
+            w[j] = c[j]
+        end
+        t = 1
+        while t + 1 <= p
+            x1, x2 = xp[t], xp[t+1]
+            j1, j2 = P[t], P[t+1]
+            @simd ivdep for j in 1:n
+                w[j] = w[j] - x1 * G[j, j1] - x2 * G[j, j2]
+            end
+            t += 2
+        end
+        if t <= p
+            xt = xp[t]
+            jt = P[t]
+            @simd ivdep for j in 1:n
+                w[j] = w[j] - xt * G[j, jt]
+            end
+        end
+
+        # w_Z must be non-positive (within tolerance); enter the worst violator passing the bordering pre-check
+        while true
+            wmax, jmax = wtol, 0
+            for j in 1:n
+                wj = w[j]
+                if wj > wmax && !inP[j] && !rejected[j]
+                    wmax, jmax = wj, j
+                end
+            end
+            jmax == 0 && return true # KKT satisfied, up to rejected tolerance-level candidates
+            p >= min(m, n) && return false # cannot grow the active set further; fall back
+
+            # Bordering pre-check + in-place factor extension: u = L'⁻¹G_{P,j}, d = Gⱼⱼ − ‖u‖²
+            d = G[jmax, jmax]
+            for i in 1:p
+                s = G[P[i], jmax]
+                @simd for k in 1:i-1
+                    s = s - L[k, i] * u[k]
+                end
+                s *= dinv[i]
+                u[i] = s
+                d = d - s * s
+            end
+            if d <= ϵpiv * G[jmax, jmax] # numerically dependent on the active set
+                rejected[jmax] = true
+                continue
+            end
+            add_active!(gp, G, jmax)
+            pnew = np[]
+            @simd ivdep for i in 1:p
+                L[i, pnew] = u[i]
+            end
+            Ljj = sqrt(d)
+            L[pnew, pnew] = Ljj
+            dinv[pnew] = inv(Ljj)
+            lvalid = pnew
+            xcur[pnew] = zero(T)
+            jentered = jmax
+            break
+        end
     end
 end
 
