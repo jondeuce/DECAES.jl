@@ -451,11 +451,22 @@ function reginska_g(A, b, logμ)
     return η² == 0 ? Inf : log(res²) - log(η²) - 2 * logμ
 end
 
-function reginska_leftmost_downcrossing(A, b; grid = range(-8, 2; length = 1000))
-    prevpos, prevl = false, first(grid)
-    for logμ in grid
+function reginska_leftmost_downcrossing(A, b, logμ_grid = range(-8, 2; length = 1000); atol = 1e-6)
+    prevpos, prevl = false, first(logμ_grid)
+    for logμ in logμ_grid
         g = reginska_g(A, b, logμ)
-        prevpos && g <= 0 && return (prevl + logμ) / 2
+        if prevpos && g <= 0
+            lo, hi = prevl, logμ
+            while hi - lo > atol
+                mid = (lo + hi) / 2
+                if reginska_g(A, b, mid) > 0
+                    lo = mid
+                else
+                    hi = mid
+                end
+            end
+            return (lo + hi) / 2
+        end
         prevpos, prevl = g > 0, logμ
     end
     return NaN
@@ -468,7 +479,7 @@ end
         mu > 0 || continue
         lc = reginska_leftmost_downcrossing(A, b)
         @test !isnan(lc) # an interior balance point exists
-        @test abs(log(mu) - lc) < 0.05 # the leap scan lands on the leftmost crossing
+        @test abs(log(mu) - lc) < 0.001 # the leap scan lands on the leftmost crossing
     end
 end
 

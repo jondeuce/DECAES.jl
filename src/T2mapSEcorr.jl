@@ -198,7 +198,7 @@ function T2mapSEcorr!(
     return convert(Dict{String, Any}, maps), convert(Array{T, 4}, dist)
 end
 
-# Reset every cross-voxel warm-start chain, namely the flip-search per-gridpoint active sets and the chi2/mdp μ-seeds, at the start of each voxel block.
+# Reset every cross-voxel warm-start chain, namely the flip-search per-gridpoint active sets, at the start of each voxel block.
 # Without this, a chain persists across whichever blocks a worker happens to pull, so the dynamic block-to-worker assignment perturbs near-tie search decisions and the output depends on both the run and the thread count.
 # Resetting makes each block's result a function of its own voxels alone, at the cost of one cold-started voxel per block.
 function reset_voxel_chains!(thread_buffer)
@@ -384,10 +384,25 @@ end
 ∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}, opt_vars::Val) where {D, T} = ∇epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, opt_vars))
 ∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}) where {D, T} = ∇epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, work.opt_vars))
 
+# Internal runtime toggle: after the discrete surrogate search, refine the continuous minimizer α* with one true (f, f′) evaluation via the cosine-series basis and a sub-bracket cubic-Hermite re-minimization.
+# Costs one extra basis build and NNLS solve per voxel in exchange for the accuracy gain.
+const FLIP_ALPHA_POLISH = Ref(true)
+
+# Scratch for the α-polish: the NNLS problem at α₀ plus the two columns written by the single-column derivative kernel.
+struct AlphaPolishWorkspace{T, P}
+    prob::P # NNLSProblem workspace at α₀
+    Acol::Vector{T} # ETL, value column written by `epg_decay_basis_∂α_col!` and discarded
+    ∂col::Vector{T} # ETL, α-derivative column
+end
+function AlphaPolishWorkspace(decay_basis::Matrix{T}, decay_data::Vector{T}) where {T}
+    ETL = size(decay_basis, 1)
+    return AlphaPolishWorkspace(NNLSProblem(decay_basis, decay_data), zeros(T, ETL), zeros(T, ETL))
+end
+
 # =========================================================
 # Flip angle optimization
 # =========================================================
-struct FlipAngleOptimizationWorkspace{T, B, E, S, R, C}
+struct FlipAngleOptimizationWorkspace{T, B, E, S, R, C, P}
     decay_basis::Matrix{T} # decay basis at the current flip angle `α`
     decay_data::Vector{T} # decay curve data
     decay_basis_set::B # B <: EPGBasisSetFunctor{T, ETL}
@@ -396,6 +411,7 @@ struct FlipAngleOptimizationWorkspace{T, B, E, S, R, C}
     α_surrogate::S # S <: Union{Nothing, AbstractSurrogate{1, T}}
     α_searcher::R # R <: Union{Nothing, DiscreteSurrogateSearcher{1, T}}; reused across voxels
     decay_basis_work::C # C <: Union{Nothing, EPGCosineSeriesBasis{T}}; evaluates the decay basis at arbitrary α, or nothing when the cosine representation does not apply
+    α_polish_work::P # P <: Union{Nothing, AlphaPolishWorkspace{T}}; loss/gradient evaluation at the continuous surrogate minimizer (see FLIP_ALPHA_POLISH)
 end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{T}, decay_data::Vector{T}, shared_decay_basis_work::Union{Nothing, EPGCosineSeriesBasis{T}} = nothing) where {T}
@@ -423,19 +439,65 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{
                        !o.legacy && o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ?
                        EPGCosineSeriesBasis(θ, decay_basis_set.T2_times) : nothing
 
-    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate, α_searcher, decay_basis_work)
+    # α-polish needs the exact continuous-α basis (cosine series) and the gradient-carrying surrogate
+    α_polish_work = decay_basis_work !== nothing && α_surrogate isa CubicHermiteSplineSurrogate ? AlphaPolishWorkspace(decay_basis, decay_data) : nothing
+
+    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate, α_searcher, decay_basis_work, α_polish_work)
 end
 
-# Build the T2-stage decay basis at the current flip angle `work.α[]`.
-# Uses the exact cosine-series evaluation when it applies, and the exact EPG rebuild otherwise.
-function final_decay_basis!(work::FlipAngleOptimizationWorkspace)
-    α = work.α[]
-    if work.decay_basis_work !== nothing
-        epg_decay_basis!(work.decay_basis, work.decay_basis_work, α)
-    else
-        epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA[α])
+# One refinement of the surrogate minimizer: the discrete search only ever evaluates the true loss f(α) = min_{x≥0} ‖A(α)x − b‖² at grid nodes, so the returned continuous α* carries the cubic-Hermite interpolation error of the final grid cell, O(h⁴) in the cell width.
+# The cosine-series basis makes a true off-grid evaluation cheap: build A(α*), solve NNLS, form the envelope gradient g* = 2·(∂A/∂α·x)ᵀ(Ax − b), then re-minimize the cubic Hermite on the sub-bracket [αₗ, α*] or [α*, αᵣ] selected by sign(g*), whose endpoint data are true (f, f′) values.
+# Returns `true` iff `work.decay_basis` already holds the exact basis at the final `work.α[]`, letting the caller skip the final rebuild.
+function polish_flip_angle!(work::FlipAngleOptimizationWorkspace{T}) where {T}
+    (; grid, seen, u, ∇u) = work.α_surrogate
+    α₀ = work.α[]
+
+    # Refine only when α₀ lies strictly between grid nodes; landing on a node needs no refinement, since the loss there is already a true evaluation.
+    i = searchsortedlast(grid, SA{T}[α₀]; by = first)
+    (1 <= i < length(grid) && first(grid[i]) < α₀) || return false
+
+    # Bracket α₀ by the nearest evaluated node on either side, since `u` and `∇u` hold true (f, f′) data only where the search evaluated.
+    il, ir = i, i + 1
+    while il >= 1 && !seen[il]
+        il -= 1
     end
-    return nothing
+    while ir <= length(grid) && !seen[ir]
+        ir += 1
+    end
+    (il >= 1 && ir <= length(grid)) || return false
+
+    # True loss and envelope gradient at α₀
+    f₀, g₀ = polish_loss_grad!(work, α₀)
+
+    # Re-minimize the cubic Hermite on the sub-bracket containing the descent direction
+    spl = g₀ > 0 ? CubicHermiteInterpolator(first(grid[il]), α₀, u[il], f₀, first(∇u[il]), g₀) :
+          CubicHermiteInterpolator(α₀, first(grid[ir]), f₀, u[ir], g₀, first(∇u[ir]))
+    αnew, _ = minimize(spl)
+
+    # If the refinement returns α₀, let the caller skip the final rebuild
+    αnew == α₀ && return true
+    work.α[] = αnew
+    return false
+end
+
+# Polish evaluation: build the basis A(α₀), solve NNLS warm-started from the search's final active set, which is the exact support at α₀, then accumulate the residual and envelope gradient over the support columns.
+function polish_loss_grad!(work::FlipAngleOptimizationWorkspace{T}, α₀::T) where {T}
+    (; decay_basis, decay_basis_set_ensemble, decay_basis_work, α_polish_work) = work
+    epg_decay_basis!(decay_basis, decay_basis_work, α₀) # basis at α₀; leaves `c` current
+    solve_unreg!(α_polish_work.prob, decay_basis_set_ensemble.nnls_search_prob.nnls_work.nnls_work)
+    x = NNLS.solution(α_polish_work.prob.nnls_work)
+
+    # The solve left r = b − A_P x_P current, so f₀ = ‖r‖² and the envelope gradient 2·(∂A_P x_P)ᵀ(A_P x_P − b) is −2·Σ_j x_j⟨∂A[:, j], r⟩, one dot product per support column.
+    wk = α_polish_work.prob.nnls_work
+    r = NNLS.residual(wk)
+    (; Acol, ∂col) = α_polish_work # `Acol` is discarded; the value column is already in `decay_basis`
+    cosine_∂α_features!(decay_basis_work, α₀)
+    g₀ = zero(T)
+    @inbounds for j in NNLS.components(wk) # the support is already known; scanning all n columns for positivity would rediscover it
+        epg_decay_basis_∂α_col!(Acol, ∂col, decay_basis_work, α₀, j)
+        g₀ = muladd(x[j], dot(∂col, r), g₀)
+    end
+    return dot(r, r), -2 * g₀
 end
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
@@ -449,10 +511,25 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
         α_opt, _ = bisection_search(work.α_surrogate, work.α_searcher; maxeval = o.nRefAngles)
         work.α[] = α_opt[1]
 
+        # Refine the surrogate minimizer against a true off-grid loss evaluation; `true` means the basis at the final α is already built
+        basis_current = FLIP_ALPHA_POLISH[] && work.α_polish_work !== nothing && polish_flip_angle!(work)
+
         # Compute basis using optimized flip angles
-        final_decay_basis!(work)
+        basis_current || final_decay_basis!(work)
     end
 
+    return nothing
+end
+
+# Build the T2-stage decay basis at the current flip angle `work.α[]`.
+# Uses the exact cosine-series evaluation when it applies, and the exact EPG rebuild otherwise.
+function final_decay_basis!(work::FlipAngleOptimizationWorkspace)
+    α = work.α[]
+    if work.decay_basis_work !== nothing
+        epg_decay_basis!(work.decay_basis, work.decay_basis_work, α)
+    else
+        epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA[α])
+    end
     return nothing
 end
 
