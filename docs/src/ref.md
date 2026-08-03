@@ -31,6 +31,7 @@ lsqnonneg
 lsqnonneg_tikh
 lsqnonneg_gcv
 lsqnonneg_lcurve
+lsqnonneg_reginska
 lsqnonneg_chi2
 lsqnonneg_mdp
 lcurve_corner

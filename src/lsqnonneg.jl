@@ -582,14 +582,14 @@ end
 #### Chi2 method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSChi2RegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
+struct NNLSChi2RegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, W3, S}
     A::TA # decay basis matrix
     b::Tb # decay curve data
     m::Int # number of rows of A
     n::Int # number of columns of A
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
-    nnls_gram::NNLS.NNLSGram{T} # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
     nnls_prob_seed::S # warm-start source for the unregularized solve (an NNLS workspace whose active set seeds the solve, e.g. the flip-angle search of the same voxel), or nothing; if not nothing it is always used (a seed changes only the solve cost, never the solution)
 end
 function NNLSChi2RegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
@@ -807,14 +807,14 @@ end
 #### Morozov discrepency principle (MDP) method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSMDPRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
+struct NNLSMDPRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, W3, S}
     A::TA # decay basis matrix
     b::Tb # decay curve data
     m::Int # number of rows of A
     n::Int # number of columns of A
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
-    nnls_gram::NNLS.NNLSGram{T} # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
     nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
 end
 function NNLSMDPRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
@@ -923,14 +923,14 @@ end
 #### L-curve method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, C1, C2, S}
+struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, W3, C1, C2, S}
     A::TA # decay basis matrix
     b::Tb # decay curve data
     m::Int # number of rows of A
     n::Int # number of columns of A
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
-    nnls_gram::NNLS.NNLSGram{T} # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
     lsqnonneg_lcurve_fun_cache::C1 # cache of (log res², log ‖x‖²) points on the L-curve
     lcurve_corner_caches::C2 # corner-search point and state caches (see `lcurve_corner`)
     nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
@@ -1255,10 +1255,119 @@ kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(P�
 =#
 
 ####
+#### Reginska (minimum-product) method for choosing the Tikhonov regularization parameter
+####
+
+struct NNLSReginskaRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, W3, S}
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
+    nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
+end
+function NNLSReginskaRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
+    m, n = size(A)
+    nnls_prob = NNLSProblem(A, b)
+    nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
+    nnls_gram = NNLS.NNLSGram(A, b)
+    return NNLSReginskaRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_gram, nnls_prob_seed)
+end
+
+@inline solution(work::NNLSReginskaRegProblem) = solution(work.nnls_prob_smooth_cache[])
+@inline ncomponents(work::NNLSReginskaRegProblem) = ncomponents(work.nnls_prob_smooth_cache[])
+
+@doc raw"""
+    lsqnonneg_reginska(A::AbstractMatrix, b::AbstractVector)
+
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+
+```math
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
+```
+
+where ``\mu`` is chosen by Regińska's minimum-product criterion[1]:
+
+```math
+\mu = \underset{\nu > 0}{\operatorname{argmin}}\; \Psi(\nu) = ||AX_{\nu} - b||_2^2 \, ||X_{\nu}||_2^2,
+```
+
+taking the smallest local minimizer of ``\Psi``. Stationarity of ``\Psi`` is equivalent to the log-log L-curve tangent slope equalling ``-1``, so the selected ``\mu`` is the balance point ``||AX_{\mu} - b|| = \mu ||X_{\mu}||`` nearest the L-curve corner; unlike curvature maximization the criterion is parameter-free and cannot collapse into the near-vertical ``\mu \to 0`` tail. The smallest local minimizer is required because ``\Psi \to 0`` trivially as ``\mu \to \infty`` (``X_{\mu} \to 0``); if ``\Psi`` has no interior local minimum on the search window (degenerate voxels), the unregularized solution is returned with ``\mu = 0``.
+
+# Arguments
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
+
+# Outputs
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\mu = 0`` solution
+
+# References
+
+  1. T. Regińska, "A Regularization Parameter in Discrete Ill-Posed Problems". SIAM Journal on Scientific Computing, 17(3), 740-749, 1996, https://doi.org/10.1137/S1064827593252672.
+"""
+function lsqnonneg_reginska(A::AbstractMatrix, b::AbstractVector; kwargs...)
+    work = lsqnonneg_reginska_work(A, b)
+    return lsqnonneg_reginska!(work; kwargs...)
+end
+lsqnonneg_reginska_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSReginskaRegProblem(A, b, nnls_prob_seed)
+
+function lsqnonneg_reginska!(
+    work::NNLSReginskaRegProblem{T}; bounds = (-8.0, 2.0), atol = 1e-4, ngrid::Int = 21, # ngrid sets the scan resolution h = (logμ₊ - logμ₋)/(ngrid - 1); the leap scan certifies the leftmost crossing at this resolution with far fewer than ngrid evaluations
+) where {T}
+    logμ₋, logμ₊ = T.(bounds)
+    reset_cache!(work.nnls_prob_smooth_cache)
+
+    # Evaluations run on the Gram fast path (one warm-chained μ-solve yields both ‖Ax-b‖² and ‖x‖²); the final solution is recomputed exactly at the selected μ
+    solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
+    x_unreg = solution(work.nnls_prob)
+    res²_min = resnorm_sq(work.nnls_prob)
+    if res²_min == 0 || ncomponents(work.nnls_prob) == 0
+        return (; x = x_unreg, mu = zero(T), chi2 = one(T))
+    end
+    nnls_gram_setup!(work)
+
+    # g(logμ) = log|S| = log res² − log ‖x‖² − 2 logμ, the log-log L-curve tangent slope magnitude (continuous in μ; derivative-free from one Gram evaluation).
+    # Ψ = res²·‖x‖² satisfies dlogΨ/dlogμ = ξ'·(1 + S) with ξ' ≥ 0, so the smallest local minimizer of Ψ is exactly the leftmost downward crossing g = 0, i.e. the balance point |S| = 1.
+    function g(logμ)
+        res², η² = nnls_gram_losses!(work, exp(logμ))
+        return η² == 0 ? T(+Inf) : log(res²) - log(η²) - 2 * logμ
+    end
+
+    # |S| → ∞ at BOTH ends (μ → 0: μ²‖x‖² → 0 with res² → res²_min > 0; μ → ∞: ‖x‖² ~ C/μ⁴), so |S| = 1 generically has an even number of crossings and the leftmost one must be certified by a left-to-right scan (early-exit at the first sign change; each evaluation is one cheap warm-chained Gram solve).
+    # Monotonicity of res²(μ) (nondecreasing) and ‖x‖² (nonincreasing) gives g(b) ≥ g(a) − 2(b − a) for b > a with no smoothness assumption, so from a point with g(a) > 0 the first crossing lies at or beyond a + g(a)/2: the scan leaps by max(h, g(a)/2) - the same crossing-detection resolution h as a uniform scan where g is small, exponentially fewer evaluations where g is large (g ≈ −2 logμ + O(1) as μ → 0).
+    # No crossing by the right edge, or |S| ≤ 1 already at the left edge (flat degenerate voxels), means no balance point exists: return the unregularized solution.
+    h = (logμ₊ - logμ₋) / (ngrid - 1)
+    a, ga = logμ₋, g(logμ₋)
+    ga <= 0 && return (; x = x_unreg, mu = zero(T), chi2 = one(T))
+    b, gb = a, ga
+    while b < logμ₊
+        b = min(a + max(h, ga / 2), logμ₊)
+        gb = g(b)
+        gb <= 0 && break
+        a, ga = b, gb
+    end
+    gb > 0 && return (; x = x_unreg, mu = zero(T), chi2 = one(T))
+
+    logmu_final, _ = brent_root(g, a, b, ga, gb; xatol = T(atol), xrtol = T(0), ftol = T(0), maxiters = 100)
+
+    mu_final = exp(logmu_final)
+    x_final = nnls_gram_polish_solve!(work, mu_final)
+    chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / res²_min
+
+    return (; x = x_final, mu = mu_final, chi2 = chi2_final)
+end
+
+####
 #### GCV method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2, S}
+struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2, W3, S}
     A::TA # decay basis matrix
     b::Tb # decay curve data
     m::Int # number of rows of A
@@ -1267,7 +1376,7 @@ struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0
     svd_work::W0 # workspace for computing the singular values of A
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
-    nnls_gram::NNLS.NNLSGram{T} # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
     nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
 end
 function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}

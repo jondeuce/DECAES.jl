@@ -405,6 +405,84 @@ end
     end
 end
 
+function lsqnonneg_reginska_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.lsqnonneg_reginska_work(A, b)
+
+    (; x, mu, chi2) = @inferred DECAES.lsqnonneg_reginska!(work)
+    @test all(>=(0), x)
+    @test isfinite(mu) && mu >= 0
+    if mu > 0
+        # Self-consistency: the returned solution is the exact Tikhonov-NNLS solution at the returned μ
+        @test x ≈ DECAES.lsqnonneg_tikh(A, b, mu) rtol = 1e-8 atol = 1e-12 * norm(b)
+
+        # Stationarity of the minimum-product criterion: at the selected μ the log-log L-curve tangent slope is -1, i.e. the balance point res² = μ²‖x‖² holds with |log S| ≤ (local slope of g) × (brent xatol = 1e-4 on logμ).
+        S = sum(abs2, A * x - b) / (sum(abs2, x) * mu^2)
+        @test 0.9999 < S < 1.0001
+        @test chi2 >= 1
+    else
+        @test chi2 == 1
+    end
+end
+
+@testset "lsqnonneg_reginska" begin
+    for (m, n) in NNLS_SIZES
+        lsqnonneg_reginska_tests(m, n)
+    end
+end
+
+# Reginska selects the *leftmost* balance point |S| = 1 (smallest local minimizer of Ψ = res²·‖x‖²), certified by the leap scan.
+# Verified against a brute-force reference: the returned μ must equal the leftmost downward crossing of g(logμ) = log res² − log‖x‖² − 2logμ.
+# Multi-bend near-collinear exponential-decay bases (the T2 regime) reliably produce an interior crossing, unlike the strictly-positive random data above (which mostly returns μ = 0).
+function reginska_expdecay_data(m, n)
+    t = range(0, 2; length = m)
+    τ = exp10.(range(-1.5, 0.5; length = n))
+    A = [exp(-tᵢ / τⱼ) for tᵢ in t, τⱼ in τ]
+    x = zeros(n)
+    for _ in 1:3
+        x[rand(1:n)] += rand()
+    end
+    return A, A * x .+ 1e-3 .* randn(m)
+end
+
+function reginska_g(A, b, logμ)
+    x = DECAES.lsqnonneg_tikh(A, b, exp(logμ))
+    res², η² = sum(abs2, A * x - b), sum(abs2, x)
+    return η² == 0 ? Inf : log(res²) - log(η²) - 2 * logμ
+end
+
+function reginska_leftmost_downcrossing(A, b; grid = range(-8, 2; length = 1000))
+    prevpos, prevl = false, first(grid)
+    for logμ in grid
+        g = reginska_g(A, b, logμ)
+        prevpos && g <= 0 && return (prevl + logμ) / 2
+        prevpos, prevl = g > 0, logμ
+    end
+    return NaN
+end
+
+@testset "lsqnonneg_reginska leftmost crossing" begin
+    for (m, n) in ((32, 40), (48, 40), (32, 60), (48, 32), (24, 48)), _ in 1:3
+        A, b = reginska_expdecay_data(m, n)
+        (; mu) = DECAES.lsqnonneg_reginska!(DECAES.lsqnonneg_reginska_work(A, b))
+        mu > 0 || continue
+        lc = reginska_leftmost_downcrossing(A, b)
+        @test !isnan(lc) # an interior balance point exists
+        @test abs(log(mu) - lc) < 0.05 # the leap scan lands on the leftmost crossing
+    end
+end
+
+@testset "lsqnonneg_reginska degenerate (μ = 0)" begin
+    # b = 0: res²_min = 0, no balance point ⇒ unregularized (μ = 0, chi2 = 1)
+    r0 = DECAES.lsqnonneg_reginska!(DECAES.lsqnonneg_reginska_work(rand(8, 6), zeros(8)))
+    @test r0.mu == 0 && r0.chi2 == 1 && all(==(0), r0.x)
+
+    # b ∈ -cone(A): x_unreg = 0 (no active columns) ⇒ no balance point ⇒ μ = 0
+    A = rand(8, 6)
+    rc = DECAES.lsqnonneg_reginska!(DECAES.lsqnonneg_reginska_work(A, -A * rand(6)))
+    @test rc.mu == 0 && rc.chi2 == 1
+end
+
 function lsqnonneg_chi2_tests(m, n)
     A, b = rand_NNLS_data(m, n)
     work = DECAES.lsqnonneg_chi2_work(A, b)

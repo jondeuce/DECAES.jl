@@ -260,8 +260,8 @@ function run_cli_tests()
         (:MinRefAngle .=> [55.0],),
         (:RefConAngle .=> [172.0],),
         (
-            :Reg       .=> ["none", "gcv", "lcurve", "chi2", "mdp"],
-            :RegParams .=> [nothing, nothing, nothing, 1.025, 3e-4],
+            :Reg       .=> ["none", "gcv", "lcurve", "reginska", "chi2", "mdp"],
+            :RegParams .=> [nothing, nothing, nothing, nothing, 1.025, 3e-4],
         ),
         (:SPWin .=> [(13e-3, 37e-3)],),
         (:SaveResidualNorm .=> [true],),
