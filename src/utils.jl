@@ -133,6 +133,69 @@ for (gesdd, elty) in ((:dgesdd_, :Float64), (:sgesdd_, :Float32))
     end
 end
 
+#### Squared singular values by symmetric eigendecomposition of the Gram matrix
+
+# Squared singular values of a real matrix, via the eigenvalues of the min(m, n)-square Gram matrix.
+# `syrk!` forms one triangle of AᵀA, or AAᵀ when m < n, which is all `syevr` reads, so this does fewer flops than an SVD of A.
+struct GramEigvalsWorkspace{elty <: BlasRealFloat}
+    m::Int
+    n::Int
+    k::Int                       # min(m, n)
+    G::Matrix{elty}              # k×k Gram matrix; only the upper triangle is referenced
+    γ²::Vector{elty}             # eigenvalues of G, i.e. the squared singular values of A, ascending
+    Z::Matrix{elty}              # eigenvector storage, empty since `jobz = 'N'`
+    isuppz::Vector{BlasInt}
+    work::Vector{elty}
+    lwork::Base.RefValue{BlasInt}
+    iwork::Vector{BlasInt}
+    liwork::Base.RefValue{BlasInt}
+    nfound::Base.RefValue{BlasInt}
+    info::Base.RefValue{BlasInt}
+end
+
+function GramEigvalsWorkspace(A::AbstractMatrix{elty}) where {elty <: BlasRealFloat}
+    m, n = size(A)
+    k = min(m, n)
+    return GramEigvalsWorkspace(
+        m, n, k, zeros(elty, k, k), zeros(elty, k), zeros(elty, k, 0), zeros(BlasInt, 2k),
+        Vector{elty}(undef, 1), Ref(BlasInt(-1)), Vector{BlasInt}(undef, 1), Ref(BlasInt(-1)),
+        Ref(BlasInt(0)), Ref(BlasInt(0)),
+    )
+end
+
+# See: https://netlib.org/lapack/explore-html/d1/d56/group__heevr.html
+for (syevr, elty) in ((:dsyevr_, :Float64), (:ssyevr_, :Float32))
+    #    SUBROUTINE DSYEVR( JOBZ, RANGE, UPLO, N, A, LDA, VL, VU, IL, IU, ABSTOL, M, W, Z, LDZ, ISUPPZ, WORK, LWORK, IWORK, LIWORK, INFO )
+    @eval function LinearAlgebra.eigvals!(ws::GramEigvalsWorkspace{$elty}, A::AbstractMatrix{$elty})
+        (; m, n, k, G, γ², Z, isuppz, work, lwork, iwork, liwork, nfound, info) = ws
+        Base.require_one_based_indexing(A)
+        @assert size(A) == (m, n)
+        BLAS.syrk!('U', m >= n ? 'T' : 'N', one($elty), A, zero($elty), G) # G = AᵀA, or AAᵀ when m < n
+        for i in 1:2
+            i == 1 && lwork[] != BlasInt(-1) && continue # skip the workspace query after the first call
+            ccall((@blasfunc($syevr), libblastrampoline), Cvoid,
+                (Ref{UInt8}, Ref{UInt8}, Ref{UInt8}, Ref{BlasInt}, Ptr{$elty},
+                    Ref{BlasInt}, Ref{$elty}, Ref{$elty}, Ref{BlasInt}, Ref{BlasInt},
+                    Ref{$elty}, Ptr{BlasInt}, Ptr{$elty}, Ptr{$elty}, Ref{BlasInt},
+                    Ptr{BlasInt}, Ptr{$elty}, Ref{BlasInt}, Ptr{BlasInt}, Ref{BlasInt},
+                    Ptr{BlasInt}, Clong, Clong, Clong),
+                'N', 'A', 'U', k, G,
+                max(1, stride(G, 2)), zero($elty), zero($elty), BlasInt(1), BlasInt(k),
+                zero($elty), nfound, γ², Z, max(1, stride(Z, 2)),
+                isuppz, work, lwork[], iwork, liwork[],
+                info, 1, 1, 1)
+            chklapackerror(info[])
+            if i == 1
+                lwork[] = round(BlasInt, work[1])
+                resize!(work, lwork[])
+                liwork[] = iwork[1]
+                resize!(iwork, liwork[])
+            end
+        end
+        return γ²
+    end
+end
+
 # Cache of the squared singular spectrum of a parameterized matrix family A(α) on a grid of α values, together with its spectral α-derivatives.
 # Consumers interpolate a smooth spectral function between the two bracketing grid slices rather than interpolating the singular values themselves; see `gcv_dof_interp` for the GCV dof(μ, α).
 # Grid slices are computed lazily, once per workspace lifetime; when the family depends only on grid parameters (never on per-solve data, e.g. the flip-angle decay bases), the cost amortizes to zero across solves.

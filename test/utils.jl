@@ -102,6 +102,33 @@ end
     end
 end
 
+@testset "GramEigvalsWorkspace" begin
+    for (m, n) in Iterators.product(2:6, 2:6)
+        A = randn(m, n)
+        work = DECAES.GramEigvalsWorkspace(A)
+
+        γ² = @inferred LinearAlgebra.eigvals!(work, A)
+        @test length(γ²) == min(m, n)
+        @test issorted(γ²) # `syevr` returns ascending eigenvalues
+        @test γ² ≈ sort(svdvals(A) .^ 2) rtol = 1e-10 atol = 1e-12 * max(1, sum(abs2, A))
+
+        γ²′ = @inferred LinearAlgebra.eigvals!(work, A)
+        @test γ²′ === γ² # returns the same internal buffer
+        @test @allocations(LinearAlgebra.eigvals!(work, A)) == 0 # LAPACK workspace is preallocated and reused
+    end
+
+    # The accuracy is absolute, not relative: forming the Gram matrix squares the condition number, so only |γᵢ² − σᵢ²| = O(eps·‖A‖²_F) holds, and the small γᵢ² can come out negative.
+    for A in (
+        (B = randn(6, 4); B[:, 4] = B[:, 3] .+ 1e-8 .* randn(6); B),           # nearly duplicated columns
+        (B = randn(6, 4); B[:, 4] = B[:, 3]; B[:, 1] .*= 1e8; B),              # duplicated columns, badly scaled
+        Matrix(Diagonal([1.0, 1e-4, 1e-8, 1e-12])),                            # graded spectrum
+    )
+        γ² = LinearAlgebra.eigvals!(DECAES.GramEigvalsWorkspace(A), A)
+        @test issorted(γ²)
+        @test maximum(abs, γ² .- sort(svdvals(A) .^ 2)) <= 8 * eps() * sum(abs2, A)
+    end
+end
+
 @testset "GriddedSpectrumInterpolator" begin
     # Smooth matrix family A(α) = A0 + α·A1 + α²·A2 with exact ∂A/∂α = A1 + 2α·A2, over a grid in α; covers both m ≥ n and m < n
     for (m, n) in ((6, 4), (4, 6), (5, 5))

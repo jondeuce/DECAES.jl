@@ -75,9 +75,9 @@ function solve!(
     return NNLS.unsafe_nnls!(work.nnls_work, A; kwargs..., init_dual = false)
 end
 
-# Warm-started unregularized solve: seeds the passive set with the original column indices idx0[1:nsetp0] (e.g. `NNLS.components` saved from a solve against a nearby matrix, such as an adjacent flip angle's decay basis in the surrogate search).
+# Warm-started unregularized solve: seeds the passive set with the original column indices idx0[1:nsetp0], e.g. `NNLS.components` saved from a solve against a nearby matrix, such as an adjacent flip angle's decay basis in the surrogate search.
 # Seeds are stashed in hpos, entered without the positivity check, and a feasibility pass drops any that come out non-positive, so the result satisfies the same KKT conditions as a cold solve regardless of seed quality.
-# The initial dual is recomputed from the seeded residual (`init_dual = true`), so no dual preload is needed here.
+# The initial dual is recomputed from the seeded residual, so no dual preload is needed here.
 function solve!(
     work::NNLSProblem{T},
     A::AbstractMatrix{T},
@@ -184,9 +184,9 @@ function solve!(
     return NNLS.unsafe_nnls!(work.nnls_work, A0, μ; kwargs..., init_dual = false)
 end
 
-# Warm-started Tikhonov solve: like `solve!(work, A, b, μ)` above, but seeds the passive set with the original column indices `idx0[1:nsetp0]` (e.g. saved via `NNLS.components` from a solve at a nearby μ).
+# Warm-started Tikhonov solve: like `solve!(work, A, b, μ)` above, but seeds the passive set with the original column indices `idx0[1:nsetp0]`, e.g. saved via `NNLS.components` from a solve at a nearby μ.
 # Seeding follows the same protocol as `NNLS.nnls!(work, A, b, λ, idx0, nsetp0)`: seeds are stashed in `hpos`, entered without the positivity check, and a feasibility pass drops any that come out non-positive, so the result satisfies the same KKT conditions as a cold solve regardless of seed quality.
-# The initial dual is recomputed from the seeded residual (`init_dual = true`), so no dual preload is needed here.
+# The initial dual is recomputed from the seeded residual, so no dual preload is needed here.
 function solve!(
     work::NNLSProblem{T},
     A::AbstractMatrix{T},
