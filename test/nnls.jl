@@ -48,7 +48,7 @@ function verify_NNLS(m₀, n, μ = 0.0)
     work.w .= randn(n)
     work.zz .= randn(m)
     work.idx .= rand(Int, n)
-    work.diag .= rand(Bool, n)
+    work.diag .= rand(0:n, n)
     work.rnorm[] = rand()
     work.mode[] = rand(1:100)
     work.nsetp[] = rand(0:min(m, n))
@@ -341,9 +341,8 @@ end
     end
 end
 
-# Direct workspace calling convention, as used by lsqnonneg.jl: initialize the workspace manually, preload the initial dual w,
-# and call `unsafe_nnls!` with `init_dual = false`.
-# The solver must use the preloaded w and derive all other internal state from the workspace fields and the pristine matrix alone.
+# Direct workspace calling convention: load the workspace manually, preload the initial dual w, and call `unsafe_nnls!` with `init_dual = false`.
+# The solver must use the preloaded w and derive all other internal state from the loaded workspace fields (A, b, x, idx, diag) alone.
 @testset "NNLS direct workspace API" begin
     for (m, n) in NNLS_SIZES, μ in [0.0, 1e-2]
         A0, b0 = rand_NNLS_data(m, n)
@@ -357,6 +356,88 @@ end
         μ > 0 ? NNLS.unsafe_nnls!(work, A0, μ; init_dual = false) : NNLS.unsafe_nnls!(work, A0; init_dual = false)
         @test NNLS.solution(work) ≈ x_ref atol = 1e-12 rtol = 1e-8
         @test all(isfinite, NNLS.solution(work))
+    end
+end
+
+####
+#### Adversarial NNLS problems
+####
+
+# Test NNLS on ill-conditioned or degenerate problems: near-collinear columns, duplicated columns, zero columns, rank deficiency, degenerate right-hand sides.
+# Solutions may be non-unique and active-set duals may vanish, so instead of the strict sign checks of `verify_NNLS` the solutions are verified with a tolerance-based global optimality certificate:
+# NNLS is convex, so x ≥ 0 together with w = A'(b - Ax) ≤ ε and |x ⋅ w| ≤ ε (evaluated in Double64) certifies optimality regardless of conditioning or uniqueness.
+
+# Multi-exponential decay basis: smooth strictly positive columns with near-collinear neighbours, sparse nonnegative spectrum
+function expdecay_NNLS_data(m, n)
+    t = range(0, 2; length = m)
+    τ = exp10.(range(-1.5, 0.5; length = n))
+    A = [exp(-tᵢ / τⱼ) for tᵢ in t, τⱼ in τ]
+    x = zeros(n)
+    for _ in 1:3
+        x[rand(1:n)] += rand()
+    end
+    b = A * x + 1e-3 .* randn(m)
+    return A, b
+end
+
+adversarial_NNLS_generators() = [
+    "expdecay" => expdecay_NNLS_data,
+    "hilbert" => (m, n) -> (A = [1 / (i + j - 1) for i in 1:m, j in 1:n]; (A, A * randn(n))),
+    "duplicates" => (m, n) -> (A = rand(m, cld(n, 2))[:, mod1.(1:n, cld(n, 2))]; (A, A * randn(n))),
+    "zerocols" => (m, n) -> (A = rand(m, n); A[:, rand(1:n, cld(n, 4))] .= 0; (A, rand(m))),
+    "rankdeficient" => (m, n) -> (A = rand(m, max(1, min(m, n) ÷ 2)) * rand(max(1, min(m, n) ÷ 2), n); (A, A * randn(n))),
+    "zerorhs" => (m, n) -> (rand(m, n), zeros(m)),
+    "negcone" => (m, n) -> (A = rand(m, n); (A, -A * rand(n))), # b in -cone(A): x = 0 is optimal
+]
+
+function verify_NNLS_adversarial(A0, b0, μ = 0.0)
+    D64 = Double64
+    n = size(A0, 2)
+    A, b = maybe_pad_NNLS_data(A0, b0, μ)
+    work = NNLS.NNLSWorkspace(A, b)
+
+    modes = μ > 0 ? [:direct, :shuffle, :fullseed] : [:direct]
+    for mode in modes
+        if mode === :direct && μ == 0
+            @inferred NNLS.nnls!(work, A, b)
+        elseif mode === :direct
+            @inferred NNLS.nnls!(work, A, b, μ)
+        elseif mode === :shuffle
+            @inferred NNLS.nnls!(work, A, b, μ, Random.randperm(n), rand(0:n))
+        else # seed with the full column set
+            @inferred NNLS.nnls!(work, A, b, μ, collect(1:n), n)
+        end
+        @test work.mode[] == 0 # success
+
+        x = NNLS.solution(work)
+        i₊ = NNLS.components(work)
+
+        # Primal feasibility and support partitioning
+        @test all(isfinite, x)
+        @test all(>=(0), x)
+        @test all(>(0), x[i₊])
+        @test all(==(0), x[setdiff(1:n, i₊)])
+        @test isperm(work.idx)
+        @test isperm(work.invidx)
+
+        # Reported dual is nonpositive (exact termination invariant), and the reported residual norm matches the definition
+        @test all(<=(0), NNLS.dual(work))
+        @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-10 atol = 1e-12 * max(1, norm(b))
+
+        # Global optimality certificate at the computed solution
+        w64 = D64.(A)' * (D64.(b) - D64.(A) * D64.(x))
+        εw = 1e-10 * max(1, norm(D64.(A)' * D64.(b)))
+        @test all(<=(εw), w64) # dual feasibility
+        @test maximum(abs, x .* w64; init = zero(D64)) <= εw * max(1, maximum(x; init = 0.0)) # complementary slackness
+    end
+
+    return work
+end
+
+@testset "Adversarial NNLS ($name)" for (name, data) in adversarial_NNLS_generators()
+    for (m, n) in [(8, 16), (16, 8), (16, 16), (32, 64), (48, 40)], μ in [0.0, 1e-6, 1e-2, 10.0]
+        A0, b0 = data(m, n)
+        verify_NNLS_adversarial(A0, b0, μ)
     end
 end
 
@@ -396,7 +477,21 @@ function lsqnonneg_lcurve_tests(m, n)
     #TODO: # Test allocations
     # @test @allocated(DECAES.lsqnonneg_lcurve!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
 
-    @inferred DECAES.lsqnonneg_lcurve!(work)
+    (; x, mu, chi2) = @inferred DECAES.lsqnonneg_lcurve!(work)
+    @test all(>=(0), x)
+    @test isfinite(mu) && mu >= 0
+    if mu > 0
+        # Self-consistency: the returned solution is the exact Tikhonov-NNLS solution at the returned μ
+        @test x ≈ DECAES.lsqnonneg_tikh(A, b, mu) rtol = 1e-8 atol = 1e-12 * norm(b)
+        @test chi2 >= 1 - √eps() # res²(μ)/res²(0) ≥ 1 up to roundoff between the two evaluation paths
+
+        # Slope-collapse guard invariant: the accepted corner never sits in the near-vertical μ → 0 tail:
+        # log-log tangent slope |S| = res²/(‖x‖²μ²) ≤ (1 + ϵ) * slope_max.
+        η² = sum(abs2, x)
+        @test η² == 0 || sum(abs2, A * x - b) / (η² * mu^2) < 1.01 * DECAES.LCURVE_SLOPE_MAX[]
+    else
+        @test chi2 == 1
+    end
 end
 
 @testset "lsqnonneg_lcurve" begin
@@ -431,9 +526,8 @@ end
     end
 end
 
-# Reginska selects the *leftmost* balance point |S| = 1 (smallest local minimizer of Ψ = res²·‖x‖²), certified by the leap scan.
+# Reginska selects the *leftmost* balance point |S| = 1, the smallest local minimizer of Ψ = res²·‖x‖², certified by the leap scan.
 # Verified against a brute-force reference: the returned μ must equal the leftmost downward crossing of g(logμ) = log res² − log‖x‖² − 2logμ.
-# Multi-bend near-collinear exponential-decay bases (the T2 regime) reliably produce an interior crossing, unlike the strictly-positive random data above (which mostly returns μ = 0).
 function reginska_expdecay_data(m, n)
     t = range(0, 2; length = m)
     τ = exp10.(range(-1.5, 0.5; length = n))
@@ -509,6 +603,7 @@ function lsqnonneg_chi2_tests(m, n)
     for (method, rtol) in [
         :bisect => 0.01,
         :brent => 0.001,
+        :brent_gram => 0.001,
     ]
         (; x, mu, chi2) = DECAES.lsqnonneg_chi2!(work, chi2_target; method)
 
@@ -859,5 +954,36 @@ end
 @testset "NNLSTikhonovRegProblemCache" begin
     for (m, n) in NNLS_SIZES
         NNLSTikhonovRegProblemCache_tests(m, n)
+    end
+end
+
+# The μ-selection methods on adversarial (ill-conditioned / rank-deficient / degenerate) inputs.
+# Each method's Gram fast path has conditioning/iteration guards that fall back to the exact QR solve; those guards fire only on ill-conditioned inputs, which the strictly-positive random data of the per-method testsets above never produces.
+# The regularized (μ > 0) returns are certified: the returned x must be KKT-optimal for the Tikhonov problem min_{x≥0} ‖Ax−b‖² + μ²‖x‖² at the returned μ. By strong convexity, the Double64 dual/complementarity certificate is sufficient. This exercises the guarded Gram path + exact-QR final solve.
+function verify_reg_kkt_regularized(A0, b0, x, mu)
+    D64 = Double64
+    A, b, x = D64.(A0), D64.(b0), D64.(x)
+    w = A' * (b - A * x) .- D64(mu)^2 .* x # dual (negative half-gradient) of the Tikhonov objective
+    ε = 1e-8 * max(1, norm(A' * b))
+    @test all(>=(-1e-10), x) # primal feasibility
+    @test all(<=(ε), w) # dual feasibility
+    @test maximum(abs, x .* w; init = zero(D64)) <= ε * max(1, maximum(x; init = 0.0)) # complementary slackness
+end
+
+@testset "Adversarial regularized NNLS ($name)" for (name, data) in adversarial_NNLS_generators()
+    for (m, n) in [(16, 8), (16, 16), (32, 24)]
+        A, b = data(m, n)
+        runs = Any[
+            DECAES.lsqnonneg_lcurve!(DECAES.lsqnonneg_lcurve_work(A, b)),
+            DECAES.lsqnonneg_gcv!(DECAES.lsqnonneg_gcv_work(A, b)),
+            DECAES.lsqnonneg_reginska!(DECAES.lsqnonneg_reginska_work(A, b)),
+            DECAES.lsqnonneg_chi2!(DECAES.lsqnonneg_chi2_work(A, b), 1.02),
+        ]
+        norm(b) > 0 && push!(runs, DECAES.lsqnonneg_mdp!(DECAES.lsqnonneg_mdp_work(A, b), 0.5 * norm(b)))
+        for (; x, mu) in runs
+            @test all(isfinite, x)
+            @test all(>=(0), x)
+            isfinite(mu) && mu > 0 && verify_reg_kkt_regularized(A, b, x, mu)
+        end
     end
 end
