@@ -133,6 +133,38 @@ for (gesdd, elty) in ((:dgesdd_, :Float64), (:sgesdd_, :Float32))
     end
 end
 
+# Cache of the squared singular spectrum of a parameterized matrix family A(α) on a grid of α values, together with its spectral α-derivatives.
+# Consumers interpolate a smooth spectral function between the two bracketing grid slices rather than interpolating the singular values themselves; see `gcv_dof_interp` for the GCV dof(μ, α).
+# Grid slices are computed lazily, once per workspace lifetime; when the family depends only on grid parameters (never on per-solve data, e.g. the flip-angle decay bases), the cost amortizes to zero across solves.
+struct GriddedSpectrumInterpolator{T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}}
+    As::TA              # M×N×ngrid matrix family
+    ∇As::TdA            # M×N×D×ngrid α-derivative bases; [:, :, 1, i] is ∂A(αᵢ)/∂α (D = 1)
+    αs::Vector{T}       # grid parameter values, sorted ascending
+    γ²::Matrix{T}       # min(M,N)×ngrid squared singular values (lazily filled)
+    dγ²::Matrix{T}      # min(M,N)×ngrid spectral derivatives dγ²/dα (lazily filled)
+    ready::Vector{Bool} # whether slice i of γ² and dγ² has been filled
+end
+function GriddedSpectrumInterpolator(As::AbstractArray{T, 3}, ∇As::AbstractArray{T, 4}, αs::AbstractVector{T}) where {T}
+    M, N, ngrid = size(As)
+    @assert length(αs) == ngrid >= 2 && issorted(αs)
+    @assert size(∇As, 1) == M && size(∇As, 2) == N && size(∇As, 3) >= 1 && size(∇As, 4) == ngrid
+    return GriddedSpectrumInterpolator(As, ∇As, collect(αs), zeros(T, min(M, N), ngrid), zeros(T, min(M, N), ngrid), fill(false, ngrid))
+end
+
+# Fill grid slice `i`: squared singular values γᵢ² and the analytic spectral α-derivative dγᵢ²/dα = 2σᵢ·uᵢᵀ(∂A/∂α)vᵢ.
+# The derivative needs the singular vectors, so this takes a full SVD; it is lazy and cached, at most once per slice per interpolator, so the cost is a one-time warmup amortized over all voxels.
+function gridded_spectrum_slice!(interp::GriddedSpectrumInterpolator, i::Int)
+    F = svd(@views interp.As[:, :, i])
+    ∂A = @views interp.∇As[:, :, 1, i]
+    UᵀdAV = F.U' * ∂A * F.V # k×k; its diagonal is uᵢᵀ(∂A/∂α)vᵢ
+    @inbounds for l in eachindex(F.S)
+        interp.γ²[l, i] = F.S[l] ^ 2
+        interp.dγ²[l, i] = 2 * F.S[l] * UᵀdAV[l, l]
+    end
+    interp.ready[i] = true
+    return interp
+end
+
 ####
 #### Dynamically sized caches
 ####

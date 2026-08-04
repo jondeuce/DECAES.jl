@@ -102,6 +102,50 @@ end
     end
 end
 
+@testset "GriddedSpectrumInterpolator" begin
+    # Smooth matrix family A(α) = A0 + α·A1 + α²·A2 with exact ∂A/∂α = A1 + 2α·A2, over a grid in α; covers both m ≥ n and m < n
+    for (m, n) in ((6, 4), (4, 6), (5, 5))
+        A0, A1, A2 = randn(m, n), randn(m, n), randn(m, n)
+        Aα(α) = A0 .+ α .* A1 .+ α^2 .* A2
+        ∂Aα(α) = A1 .+ 2α .* A2
+        αs = collect(range(0.5, 2.0; length = 9))
+        As = cat((Aα(α) for α in αs)...; dims = 3)
+        ∇As = reshape(cat((∂Aα(α) for α in αs)...; dims = 3), m, n, 1, length(αs))
+        interp = DECAES.GriddedSpectrumInterpolator(As, ∇As, αs)
+
+        for μ in (1e-2, 1e-1, 1.0)
+            # Exact at grid nodes: Hermite passes through the endpoint values
+            for (i, α) in enumerate(αs)
+                @test DECAES.gcv_dof_interp(interp, α, m, n, μ) ≈ DECAES.gcv_dof(Aα(α), μ) rtol = 1e-12
+            end
+
+            # Between nodes: cubic Hermite is a loose-bounded approximation and beats linear interp of dof on the same grid
+            herr, lerr = 0.0, 0.0
+            for α in range(αs[1], αs[end]; length = 40)
+                d_exact = DECAES.gcv_dof(Aα(α), μ)
+                d_herm = DECAES.gcv_dof_interp(interp, α, m, n, μ)
+                i = clamp(searchsortedlast(αs, α), 1, length(αs) - 1)
+                θ = (α - αs[i]) / (αs[i+1] - αs[i])
+                d_lin = (1 - θ) * DECAES.gcv_dof(Aα(αs[i]), μ) + θ * DECAES.gcv_dof(Aα(αs[i+1]), μ)
+                herr = max(herr, abs(d_herm - d_exact))
+                lerr = max(lerr, abs(d_lin - d_exact))
+            end
+
+            # Cubic Hermite is meaningfully more accurate than linear interp of dof
+            @test herr < lerr
+        end
+
+        # Spectral derivative dγ²/dα = 2σ·uᵀ(∂A/∂α)v matches finite differences of γ² at an interior node
+        i = 5
+        h = 1e-6
+        γ₊, γ₋ = svdvals(Aα(αs[i] + h)), svdvals(Aα(αs[i] - h))
+        dγ²_fd = @. (γ₊ - γ₋) * (γ₊ + γ₋) / 2h
+        DECAES.gridded_spectrum_slice!(interp, i)
+        dγ²_int = interp.dγ²[:, i]
+        @test dγ²_int ≈ dγ²_fd rtol = 1e-6 atol = 1e-6
+    end
+end
+
 @testset "split_indices" begin
     function test_valid_partition(p, len)
         @test first(first(p)) == 1

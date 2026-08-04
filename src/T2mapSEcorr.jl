@@ -561,13 +561,12 @@ function regularization_method(o::T2mapOptions)
     return reg
 end
 
-# The flip-search seed and gcv svdvals source are stored in the reg workspace itself, in the `nnls_prob_seed` and `svdvals_source` fields of the NNLS*RegProblem structs. Methods that do not use them ignore the extra arguments.
-nnls_workspace(::NoRegularization, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed) where {T} = lsqnonneg_work(decay_basis, decay_data)
-nnls_workspace(::LCurve, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed) where {T} = lsqnonneg_lcurve_work(decay_basis, decay_data, nnls_prob_seed)
-nnls_workspace(::GCV, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed) where {T} = lsqnonneg_gcv_work(decay_basis, decay_data, nnls_prob_seed)
-nnls_workspace(::Reginska, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed) where {T} = lsqnonneg_reginska_work(decay_basis, decay_data, nnls_prob_seed)
-nnls_workspace(::ChiSquared, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed) where {T} = lsqnonneg_chi2_work(decay_basis, decay_data, nnls_prob_seed)
-nnls_workspace(::MDP, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed) where {T} = lsqnonneg_mdp_work(decay_basis, decay_data, nnls_prob_seed)
+nnls_workspace(::NoRegularization, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, args...) where {T} = lsqnonneg_work(decay_basis, decay_data)
+nnls_workspace(::LCurve, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_lcurve_work(decay_basis, decay_data, nnls_prob_seed)
+nnls_workspace(::GCV, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, dof_interpolator) where {T} = lsqnonneg_gcv_work(decay_basis, decay_data, nnls_prob_seed, dof_interpolator)
+nnls_workspace(::Reginska, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_reginska_work(decay_basis, decay_data, nnls_prob_seed)
+nnls_workspace(::ChiSquared, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_chi2_work(decay_basis, decay_data, nnls_prob_seed)
+nnls_workspace(::MDP, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_mdp_work(decay_basis, decay_data, nnls_prob_seed)
 
 struct T2DistWorkspace{Reg, T, W}
     reg::Reg
@@ -579,12 +578,12 @@ struct T2DistWorkspace{Reg, T, W}
     χ²fact::Base.RefValue{T}
 end
 
-function T2DistWorkspace(reg::RegularizationMethod, decay_basis::Matrix{T}, decay_data::Vector{T}, decay_scale::Base.RefValue{T}; nnls_prob_seed = nothing) where {T}
+function T2DistWorkspace(reg::RegularizationMethod, decay_basis::Matrix{T}, decay_data::Vector{T}, decay_scale::Base.RefValue{T}, nnls_prob_seed = nothing, dof_interpolator = nothing) where {T}
     # Note: `T2_distribution!(::T2DistWorkspace)` methods defined below assume that references to the EPG decay bases `A::AbstractMatrix` and the MSE signal `b::AbstractVector`
     # are stored in the `nnls_work` workspace field and that `A` and `b` have been populated with the appropriate data.
-    # The flip-search seed, or nothing, is stored inside `nnls_work` rather than threaded per solve.
+    # The flip-search seed and dof-interpolation source (or nothing) are stored inside `nnls_work` rather than threaded per solve.
     μ, χ²fact = Ref(T(NaN)), Ref(T(NaN))
-    nnls_work = nnls_workspace(reg, decay_basis, decay_data, nnls_prob_seed)
+    nnls_work = nnls_workspace(reg, decay_basis, decay_data, nnls_prob_seed, dof_interpolator)
     return T2DistWorkspace(reg, nnls_work, decay_basis, decay_data, decay_scale, μ, χ²fact)
 end
 
@@ -722,6 +721,7 @@ function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = nothing) where 
     flip_angle_work = FlipAngleOptimizationWorkspace(o, decay_basis, decay_data, global_buffer === nothing ? nothing : global_buffer.decay_basis_work)
     ensemble = flip_angle_work.decay_basis_set_ensemble
     nnls_prob_seed = ensemble === nothing ? nothing : ensemble.nnls_search_prob.nnls_work.nnls_work
+    dof_interpolator = ensemble === nothing || !(regularization_method(o) isa GCV) ? nothing : (GriddedSpectrumInterpolator(ensemble.decay_basis_set, ensemble.∇decay_basis_set, flip_angles(o)), flip_angle_work.α)
     return (;
         T2_times         = logrange(o.T2Range..., o.nT2),
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
@@ -734,7 +734,7 @@ function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = nothing) where 
         residuals        = zeros(T, o.nTE),
         decay_curve_work = EPGdecaycurve_work(default_epg_parameters(o)),
         flip_angle_work  = flip_angle_work,
-        T2_dist_work     = T2DistWorkspace(regularization_method(o), decay_basis, decay_data, decay_scale; nnls_prob_seed),
+        T2_dist_work     = T2DistWorkspace(regularization_method(o), decay_basis, decay_data, decay_scale, nnls_prob_seed, dof_interpolator),
     )
 end
 

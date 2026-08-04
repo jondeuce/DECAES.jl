@@ -4,7 +4,7 @@ const VERSION = v"0.6.1"
 
 # Standard libraries
 using Dates: Dates
-using LinearAlgebra: LinearAlgebra, BLAS, LAPACK, axpy!, cholesky!, dot, mul!, norm, svdvals, svdvals!, ×, ⋅
+using LinearAlgebra: LinearAlgebra, BLAS, LAPACK, cholesky!, dot, mul!, norm, svd, svdvals, svdvals!, ×, ⋅
 using LinearAlgebra.BLAS: @blasfunc, BlasInt, libblastrampoline
 using LinearAlgebra.LAPACK: chklapackerror
 using Logging: Logging, ConsoleLogger, with_logger

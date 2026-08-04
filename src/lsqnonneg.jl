@@ -19,14 +19,10 @@ end
 solve!(work::NNLSProblem, args...; kwargs...) = solve!(work, work.A, work.b, args...; kwargs...)
 # solve!(work::NNLSProblem, A::AbstractMatrix, b::AbstractVector, args...; kwargs...) = NNLS.nnls!(work.nnls_work, A, b, args...; kwargs...)
 
-# The nnls algorithm selects candidate x[j] based on the largest negative gradient
-# of ||Ax - b||, i.e. j = argmax_j w[j] where w = -A'(Ax - b) is the dual vector.
-# In DECAES, the initial dual vector w_0 = A'b is sorted because A[i, j], b[j] >= 0
-# and A[i, j+1] > A[i, j], and thus the last column of A will always be chosen first.
-# Thence j = n and we can bypass the first iteration and initialize the gradient with
-# x_0 = [0; x[n]], where x[n] >= 0 due to the nonnegativity of A, b.
-#   NOTE: This will not fail even for generic A and b, it just forces NNLS to start
-#         with column j = n. From there, it may remove the column if necessary.
+# The nnls algorithm selects candidate x[j] based on the largest negative gradient of ||Ax - b||, i.e. j = argmax_j w[j] where w = -A'(Ax - b) is the dual vector.
+# In DECAES, the initial dual vector w_0 = A'b is sorted because A[i, j], b[j] >= 0 and A[i, j+1] > A[i, j], and thus the last column of A will always be chosen first.
+# Thence j = n and we can bypass the first iteration and initialize the gradient with x_0 = [0; x[n]], where x[n] >= 0 due to the nonnegativity of A, b.
+#   NOTE: This will not fail even for generic A and b, it just forces NNLS to start with column j = n. From there, it may remove the column if necessary.
 function solve!(
     work::NNLSProblem{T},
     A::AbstractMatrix{T},
@@ -555,8 +551,8 @@ function nnls_gram_setup!(work)
     return gp
 end
 
-# Evaluate (‖Ax(μ)-b‖², ‖x(μ)‖²) via the Gram fast path, warm-chained across μ, falling back to the exact QR solver (and reseeding the Gram context from its active set) if the Gram path fails a conditioning/iteration guard.
-# Used by the gcv and lcurve μ-searches (see `lsqnonneg_gcv!`, `lsqnonneg_lcurve!`); the selected μ is then recomputed with an exact final solve, so the fast path affects the search decisions only within the search tolerance.
+# Evaluate (‖Ax(μ)-b‖², ‖x(μ)‖²) via the Gram fast path, warm-chained across μ, falling back to the exact QR solver if the Gram path fails a conditioning/iteration guard.
+# Used by the gcv and lcurve μ-searches (see `lsqnonneg_gcv!`, `lsqnonneg_lcurve!`); the selected μ is then recomputed with an exact final solve.
 function nnls_gram_losses!(work, μ::T) where {T}
     gp = work.nnls_gram
     res² = NNLS.solve!(gp, work.A, work.b, μ)
@@ -640,8 +636,8 @@ end
 lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSChi2RegProblem(A, b, nnls_prob_seed)
 
 function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :brent_gram) where {T}
-    # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present.
-    # :brent_gram solves the same χ²(μ) = target root problem to the same tolerance as :brent, using the Gram fast path for the search evaluations and an exact final solve.
+    # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present: `method === :brent_gram` solves the same χ²(μ) = target root problem to the same tolerance as :brent, using the Gram fast path for search evaluations and an exact final solve.
+    # On voxels where the χ²(μ) curve is flat the selected μ is reproducible only within the root-tolerance band; use :brent for an evaluation-path identical to the reference implementation.
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
@@ -702,6 +698,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         end
 
     elseif method === :brent
+        # Search evaluations use the exact QR solver via the μ-cache (identical evaluation path to the reference implementation, so the selected μ tracks it to solver roundoff; solves are warm-started across μ, which perturbs only the QR roundoff, not the active set)
         function f_brent(logμ)
             solve!(work.nnls_prob_smooth_cache, exp(logμ))
             return chi2_relerr!(work.nnls_prob_smooth_cache[], res²_target, logμ)
@@ -726,10 +723,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         end
 
     elseif method === :brent_gram
-        # Fast variant: search evaluations use the Gram fast path, warm-chained across μ, with KKT verification and an exact-solver fallback.
-        # Only the residual norm feeds the root finder and the final solution is recomputed with the exact QR solver below,
-        # so the fast path affects the selected μ only within the root-finding tolerance.
-        # The residual curve is flat near the root for high-SNR voxels, so within that band the selected μ can differ noticeably from `:brent`.
+        # Fast variant: search evaluations use the Gram fast path, warm-chained across μ. Only the residual norm feeds the root finder, and the final solution is recomputed with the exact QR solver below.
         nnls_gram_setup!(work) # seed the Gram fast path from the unregularized active set
         function f_brent_gram(logμ)
             res², _ = nnls_gram_losses!(work, exp(logμ))
@@ -888,8 +882,7 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
         return (; x = x_final, mu = T(Inf), chi2 = res²_max / res²_min)
     end
 
-    # Prepare to solve.
-    # The residual-norm root ‖Ax(μ)-b‖² = δ² is found with the Gram fast path for the search evaluations, seeded by the unregularized solve above, and an exact final solve.
+    # Prepare to solve. The residual-norm root ‖Ax(μ)-b‖² = δ² is found with the Gram fast path for search evaluations, seeded by the unregularized solve.
     reset_cache!(work.nnls_prob_smooth_cache)
     nnls_gram_setup!(work)
 
@@ -995,8 +988,7 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
     # Compute the regularization using the L-curve method
     reset_cache!(work.nnls_prob_smooth_cache)
 
-    # The corner search's (ξ, η) points are evaluated through the Gram fast path, which yields both ‖Ax-b‖² and ‖x‖² from one warm-chained μ-solve.
-    # The corner curvature is computed from these cached points and the final solution is recomputed exactly, so the fast path affects only the corner-search decisions, within its tolerance.
+    # The corner search's (ξ, η) points are evaluated through the Gram fast path. The corner curvature is computed from these cached points and the final solution is recomputed via `nnls_gram_polish_solve!`.
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
     nnls_gram_setup!(work)
 
@@ -1367,31 +1359,36 @@ end
 #### GCV method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2, W3, S}
+struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2, W3, V, S}
     A::TA # decay basis matrix
     b::Tb # decay curve data
     m::Int # number of rows of A
     n::Int # number of columns of A
-    γ::Vector{T} # singular values of A; reference into `svd_work`
-    svd_work::W0 # workspace for computing the singular values of A
+    γ²::Vector{T} # squared singular values of A, filled by `spectrum!`
+    spectrum_work::W0 # workspace for computing the singular values of A
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
+    dof_interpolator::V # 2-tuple (GriddedSpectrumInterpolator over the α-grid decay bases, flip-angle Ref) or nothing: the source for the opt-in interpolated dof(μ), see `GCV_INTERP_DOF`
     nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
 end
-function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
+function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing, dof_interpolator::Union{Nothing, Tuple{GriddedSpectrumInterpolator{T}, Base.RefValue{T}}} = nothing) where {T}
     m, n = size(A)
-    svd_work = SVDValsWorkspace(A) # workspace for computing singular values
+    spectrum_work = SVDValsWorkspace(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
     nnls_gram = NNLS.NNLSGram(A, b)
-    γ = svd_work.S # store reference to (generalized) singular values for convenience
-    return NNLSGCVRegProblem(A, b, m, n, γ, svd_work, nnls_prob, nnls_prob_smooth_cache, nnls_gram, nnls_prob_seed)
+    γ² = similar(spectrum_work.S)
+    return NNLSGCVRegProblem(A, b, m, n, γ², spectrum_work, nnls_prob, nnls_prob_smooth_cache, nnls_gram, dof_interpolator, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSGCVRegProblem) = solution(work.nnls_prob_smooth_cache[])
 @inline ncomponents(work::NNLSGCVRegProblem) = ncomponents(work.nnls_prob_smooth_cache[])
-@inline LinearAlgebra.svdvals!(work::NNLSGCVRegProblem, A = work.A) = svdvals!(work.svd_work, A)
+@inline function spectrum!(work::NNLSGCVRegProblem, A = work.A)
+    γ = svdvals!(work.spectrum_work, A)
+    work.γ² .= abs2.(γ)
+    return work.γ²
+end
 
 @doc raw"""
     lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector)
@@ -1435,7 +1432,11 @@ function lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector; kwargs...)
     work = lsqnonneg_gcv_work(A, b)
     return lsqnonneg_gcv!(work; kwargs...)
 end
-lsqnonneg_gcv_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSGCVRegProblem(A, b, nnls_prob_seed)
+lsqnonneg_gcv_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing, dof_interpolator = nothing) = NNLSGCVRegProblem(A, b, nnls_prob_seed, dof_interpolator)
+
+# Runtime toggle for approximating dof(μ) by cubic-Hermite interpolation across the α-grid spectral slices, when a `dof_interpolator` is supplied.
+# Off by default: the exact per-voxel spectrum costs one SVD, and the interpolant's error grows as μ → 0, where dof stiffens in α.
+const GCV_INTERP_DOF = Ref(false)
 
 function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0, bounds = (-8.0, 2.0), rtol = 0.0, atol = 1e-4, maxiters = 20) where {T}
     # Find μ by minimizing the function G(μ) (GCV method)
@@ -1443,14 +1444,15 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
     logμ₋, logμ₊ = T.(bounds)
     logμ₀ = T(init)
 
-    # Precompute singular values for GCV computation
-    svdvals!(work)
+    # Precompute the squared singular values, which are all dof(μ) needs; the opt-in alternative interpolates dof across the α-grid slices per evaluation instead (see `gcv_dof_interp`)
+    dof_interpolator = work.dof_interpolator
+    use_dof_interp = dof_interpolator !== nothing && GCV_INTERP_DOF[] && method === :brent
+    use_dof_interp || spectrum!(work)
 
     # Non-zero lower bound for GCV to avoid log(0) in the objective function
     gcv_low = gcv_lower_bound(work)
 
-    # The gradient-free search, method = :brent and the default, evaluates the GCV objective 𝒢(μ) = ‖Ax(μ)-b‖² / dof(μ)² through the Gram fast path;
-    # dof is cheap in μ given the singular values, so only the residual needs an NNLS solve.
+    # The gradient-free search (:brent, the default) evaluates the GCV objective 𝒢(μ) = ‖Ax(μ)-b‖² / dof(μ)² through the Gram fast path (dof is μ-cheap from the singular values; only the residual needs an NNLS solve).
     # The gradient-based methods keep the exact μ-cache solves, since ∇resnorm_sq needs the QR triangular factor.
     # The final solution is always recomputed exactly.
     use_gram = method === :brent
@@ -1463,7 +1465,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         if use_gram
             μ = exp(logμ)
             res², _ = nnls_gram_losses!(work, μ)
-            dof = gcv_dof(work.m, work.n, work.γ, μ)
+            dof = use_dof_interp ? gcv_dof_interp(dof_interpolator[1], dof_interpolator[2][], work.m, work.n, μ) : gcv_dof(work.m, work.n, work.γ², μ)
             𝒢 = res² / dof^2
         else
             𝒢 = gcv!(work, logμ)
@@ -1532,8 +1534,8 @@ end
 # where here L = Id and λ = μ.
 function gcv!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
-    #   NOTE: assumes `svdvals!(work)` has been called and that the singular values `work.γ` are ready
-    (; m, n, γ) = work
+    #   NOTE: assumes `spectrum!(work)` has been called and that `work.γ²` is ready
+    (; m, n, γ²) = work
 
     # Solve regularized NNLS problem
     μ = exp(logμ)
@@ -1542,7 +1544,7 @@ function gcv!(work::NNLSGCVRegProblem, logμ)
 
     # Compute GCV
     res² = resnorm_sq(cache) # squared residual norm ||A * x(μ) - b||^2
-    dof = gcv_dof(m, n, γ, μ) # degrees of freedom; γ are (generalized) singular values
+    dof = gcv_dof(m, n, γ², μ) # degrees of freedom
     gcv = res² / dof^2
 
     return gcv
@@ -1550,8 +1552,8 @@ end
 
 function gcv_and_∇gcv!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
-    #   NOTE: assumes `svdvals!(work)` has been called and that the singular values `work.γ` are ready
-    (; m, n, γ) = work
+    #   NOTE: assumes `spectrum!(work)` has been called and that `work.γ²` is ready
+    (; m, n, γ²) = work
 
     # Solve regularized NNLS problem
     μ = exp(logμ)
@@ -1560,12 +1562,12 @@ function gcv_and_∇gcv!(work::NNLSGCVRegProblem, logμ)
 
     # Compute primal
     res² = resnorm_sq(cache) # squared residual norm ||A * x(μ) - b||^2
-    dof = gcv_dof(m, n, γ, μ) # degrees of freedom; γ are (generalized) singular values
+    dof = gcv_dof(m, n, γ², μ) # degrees of freedom
     gcv = res² / dof^2
 
     # Compute derivative: ∂/∂λ [resnorm_sq(λ) / dof(λ)^2] = ∇resnorm_sq(λ) / dof(λ)^2 - 2 * resnorm_sq(λ) * ∇dof(λ) / dof(λ)^3
     ∇res² = ∇resnorm_sq(cache)
-    ∇dof = ∇gcv_dof(m, n, γ, μ)
+    ∇dof = ∇gcv_dof(m, n, γ², μ)
     ∇gcv = (∇res² - 2 * res² * ∇dof / dof) / dof^2
 
     return gcv, ∇gcv
@@ -1630,33 +1632,54 @@ function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(fa
 end
 =#
 
-# Equation (27) from Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115),
-# specialized for L = identity:
+# Equation (27) from Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115), specialized for L = identity:
 #
 #   tr(I_m - A * (A'A + λ^2 * L'L)⁻¹ * A') = m - n + sum_i λ^2 / (γ_i^2 + λ^2)
 #
-# where γ_i are the generalized singular values, which are equivalent to ordinary
-# singular values when L = identity, and size(A) = (m, n).
+# where γ_i are the generalized singular values, which are equivalent to ordinary singular values when L = identity, and size(A) = (m, n).
 # Can be considered as the "degrees of freedom".
-function gcv_dof(m::Int, n::Int, γ::AbstractVector{T}, λ::T) where {T}
+function gcv_dof(m::Int, n::Int, γ²::AbstractVector{T}, λ::T) where {T}
     dof = T(max(m - n, 0)) # handle underdetermined systems (m < n)
     λ² = abs2(λ)
-    @simd for γᵢ in γ
-        γᵢ² = abs2(γᵢ)
+    @simd for γᵢ² in γ²
         dof += λ² / (γᵢ² + λ²)
     end
     return dof
 end
-gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = gcv_dof(size(A)..., svdvals(A), λ)
+gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = gcv_dof(size(A)..., svdvals(A) .^ 2, λ)
+
+# DOF derivative w.r.t. the flip angle α: dof = max(m−n, 0) + Σᵢ λ²/(γᵢ²+λ²) and so ∂dof/∂α = Σᵢ [−λ²/(γᵢ²+λ²)²]·dγᵢ²/dα, where dγᵢ²/dα = 2σᵢ·uᵢᵀ(∂A/∂α)vᵢ is the analytic α-derivative of the squared singular values supplied by `dγ²`.
+# The derivative ∂dof/∂α is smooth through branch crossings, since dof is a symmetric spectral function.
+function gcv_ddof_dα(m::Int, n::Int, γ²::AbstractVector{T}, dγ²::AbstractVector{T}, λ::T) where {T}
+    ∂dof = zero(T)
+    λ² = abs2(λ)
+    @simd for i in eachindex(γ², dγ²)
+        ∂dof -= λ² / (γ²[i] + λ²)^2 * dγ²[i]
+    end
+    return ∂dof
+end
+
+# GCV dof(μ) at flip angle α, cubic-Hermite interpolated in α between the bracketing grid slices of `interp`, clamped to the grid range.
+# The dof is interpolated directly: sorted singular value curves σᵢ(α) kink (C⁰) where branches cross, so interpolating γ caps the accuracy at the kink scale.
+# The dof itself, dof(μ, α) = max(m − n, 0) + μ²·tr((A(α)ᵀA(α) + μ²I)⁻¹), is a symmetric function of the spectrum and hence analytic in α, so cubic Hermite with the analytic ∂dof/∂α (`gcv_ddof_dα`) is kink-free and O(h⁴) accurate.
+function gcv_dof_interp(interp::GriddedSpectrumInterpolator{T}, α::T, m::Int, n::Int, μ::T) where {T}
+    (; αs, γ², dγ², ready) = interp
+    i = clamp(searchsortedlast(αs, α), 1, length(αs) - 1)
+    ready[i] || gridded_spectrum_slice!(interp, i)
+    ready[i+1] || gridded_spectrum_slice!(interp, i + 1)
+    γl, γr = view(γ², :, i), view(γ², :, i + 1)
+    dl, dr = view(dγ², :, i), view(dγ², :, i + 1)
+    spl = CubicHermiteInterpolator(αs[i], αs[i+1], gcv_dof(m, n, γl, μ), gcv_dof(m, n, γr, μ), gcv_ddof_dα(m, n, γl, dl, μ), gcv_ddof_dα(m, n, γr, dr, μ))
+    return spl(α, Val(:nearest)) # clamp to the bracketing cell
+end
 
 # DOF derivative: ∂/∂λ gcv_dof(m, n, γ, λ)
-function ∇gcv_dof(m::Int, n::Int, γ::AbstractVector{T}, λ::T) where {T}
+function ∇gcv_dof(m::Int, n::Int, γ²::AbstractVector{T}, λ::T) where {T}
     ∇dof = zero(T)
     λ² = abs2(λ)
-    @simd for γᵢ in γ
-        γᵢ² = abs2(γᵢ)
+    @simd for γᵢ² in γ²
         ∇dof += 2 * λ * γᵢ² / (γᵢ² + λ²)^2
     end
     return ∇dof
 end
-∇gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = ∇gcv_dof(size(A)..., svdvals(A), λ)
+∇gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = ∇gcv_dof(size(A)..., svdvals(A) .^ 2, λ)

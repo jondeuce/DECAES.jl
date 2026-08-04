@@ -549,9 +549,9 @@ function test_lsqnonneg_gcv(m, n)
     logμ = randn()
     μ = exp(logμ)
 
-    # Precompute singular values for GCV (also resizes an internal buffer)
-    svdvals!(work.svd_work, A)
-    @test work.γ == svdvals(A) # should match exactly (same underlying LAPACK call)
+    # Precompute the squared singular values for GCV
+    DECAES.spectrum!(work)
+    @test work.γ² == svdvals(A) .^ 2
 
     # Test GCV degrees of freedom
     @test DECAES.gcv_dof(A, μ) ≈ tr(I - A * ((A' * A + μ^2 * I) \ A')) # "degrees of freedom" of normal equation matrix
@@ -589,6 +589,62 @@ end
         test_lsqnonneg_gcv(m, n)
     end
 end
+
+# Integration test for the gridded GCV dof interpolation. `lsqnonneg_gcv!` with a `GriddedSpectrumInterpolator` interpolates dof(μ) at the voxel's α instead of computing a per-voxel SVD;
+# verify the μ-selection matches the exact per-call-SVD path. The decay bases and analytic ∂A/∂α are the real EPG ensemble used by the pipeline.
+function test_gcv_gridded_interp()
+    o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 32, nT2 = 24, Silent = true)
+    θ = DECAES.default_epg_parameters(o)
+    T2t = DECAES.T2_component_times(o)
+    Aα(α) = DECAES.epg_decay_basis(DECAES.restructure(θ, (; α)), T2t)
+    M, N = o.nTE, o.nT2
+    flip_angle_work = DECAES.FlipAngleOptimizationWorkspace(o, zeros(M, N), zeros(M))
+    ensemble = flip_angle_work.decay_basis_set_ensemble
+    interp = DECAES.GriddedSpectrumInterpolator(ensemble.decay_basis_set, ensemble.∇decay_basis_set, DECAES.flip_angles(o))
+    αs = interp.αs
+
+    function mock_signal(α)
+        A = Aα(α)
+        x = zeros(N)
+        for _ in 1:3
+            x[rand(1:N)] += rand()
+        end
+        b = A * x .+ 1e-3 .* randn(M)
+        b ./= maximum(b)
+        return b
+    end
+
+    CURR_GCV_INTERP_DOF = DECAES.GCV_INTERP_DOF[]
+    DECAES.GCV_INTERP_DOF[] = true # the interpolated path is opt-in; the exact spectrum is the default
+    try
+        for trial in 1:20
+            b = mock_signal(αs[1] + (αs[end] - αs[1]) * rand())
+
+            # At a grid node the Hermite interpolant reproduces its endpoint data, so the interpolated dof equals the exact dof to roundoff
+            αnode = αs[5+(trial%4)]
+            γ²node = svdvals(Aα(αnode)) .^ 2
+            for μ in (1e-3, 1e-2, 1e-1, 1.0)
+                @test DECAES.gcv_dof_interp(interp, αnode, M, N, μ) ≈ DECAES.gcv_dof(M, N, γ²node, μ) rtol = 1e-12
+            end
+
+            # The selected μ then agrees only to the search tolerance: the exact path reaches the spectrum through `svdvals` and the interpolator's slices through `svd`, and a roundoff-level dof difference can move the Brent result by up to `atol` on a flat objective
+            r_node_exact = DECAES.lsqnonneg_gcv!(DECAES.NNLSGCVRegProblem(Aα(αnode), b); method = :brent)
+            r_node_interp = DECAES.lsqnonneg_gcv!(DECAES.NNLSGCVRegProblem(Aα(αnode), b, nothing, (interp, Ref(αnode))); method = :brent)
+            @test r_node_exact.mu ≈ r_node_interp.mu rtol = 1e-3
+            @test r_node_interp.x ≈ r_node_exact.x rtol = 1e-3 atol = 1e-8
+
+            # At an interior α the interpolated dof carries the cubic-Hermite error, so the selected μ agrees only within a band
+            αint = (αs[6] + αs[7]) / 2
+            r_int_exact = DECAES.lsqnonneg_gcv!(DECAES.NNLSGCVRegProblem(Aα(αint), b); method = :brent)
+            r_int_interp = DECAES.lsqnonneg_gcv!(DECAES.NNLSGCVRegProblem(Aα(αint), b, nothing, (interp, Ref(αint))); method = :brent)
+            @test r_int_exact.mu ≈ r_int_interp.mu rtol = 1e-3
+        end
+    finally
+        DECAES.GCV_INTERP_DOF[] = CURR_GCV_INTERP_DOF
+    end
+end
+
+@testset "lsqnonneg_gcv gridded interpolation" test_gcv_gridded_interp()
 
 function lsqnonneg_mdp_tests(m, n)
     A, b = rand_NNLS_data(m, n)
