@@ -22,15 +22,15 @@ Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f 
 Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
 
 function T2Maps(opts::T2mapOptions{T}) where {T}
-    thread_buffer = thread_buffer_maker(opts)
+    θ = default_epg_parameters(opts)
+    T2_times = T2_component_times(opts)
+    decay_basis_set = opts.SetFlipAngle === nothing ? epg_grid_model(opts, θ).As : epg_decay_basis(restructure(θ, (; α = T(opts.SetFlipAngle))), T2_times)
     return T2Maps(;
         # Misc. processing parameters
-        echotimes     = convert(Array{T}, copy(opts.TE .* (1:opts.nTE))),
-        t2times       = convert(Array{T}, copy(thread_buffer.T2_times)),
-        refangleset   = opts.SetFlipAngle === nothing ? convert(Array{T}, copy(thread_buffer.flip_angles)) : T(opts.SetFlipAngle),
-        decaybasisset = opts.SetFlipAngle === nothing ?
-        convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis_set_ensemble.decay_basis_set)) :
-        convert(Array{T}, copy(thread_buffer.flip_angle_work.decay_basis)),
+        echotimes     = convert(Array{T}, opts.TE .* (1:opts.nTE)),
+        t2times       = convert(Array{T}, T2_times),
+        refangleset   = opts.SetFlipAngle === nothing ? convert(Array{T}, flip_angles(opts)) : T(opts.SetFlipAngle),
+        decaybasisset = decay_basis_set,
 
         # Default output maps
         gdn = tfill(T(NaN), opts.MatrixSize...),
@@ -47,9 +47,7 @@ function T2Maps(opts::T2mapOptions{T}) where {T}
         mu         = !opts.SaveRegParam ? nothing : tfill(T(NaN), opts.MatrixSize...),
         chi2factor = !opts.SaveRegParam ? nothing : tfill(T(NaN), opts.MatrixSize...),
         decaybasis = !opts.SaveNNLSBasis ? nothing :
-        opts.SetFlipAngle === nothing ?
-        tfill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) : # unique decay basis set for each voxel
-        convert(Array{T}, copy(thread_buffer.decay_basis)), # single decay basis set used for all voxels
+        opts.SetFlipAngle === nothing ? tfill(T(NaN), opts.MatrixSize..., opts.nTE, opts.nT2) : copy(decay_basis_set), # per voxel or global decay basis set
     )
 end
 
@@ -203,7 +201,7 @@ end
 # Resetting makes each block's result a function of its own voxels alone, at the cost of one cold-started voxel per block.
 function reset_voxel_chains!(thread_buffer)
     (; flip_angle_work) = thread_buffer
-    flip_angle_work.decay_basis_set_ensemble !== nothing && reset_warmstart!(flip_angle_work.decay_basis_set_ensemble.nnls_search_prob)
+    flip_angle_work.nnls_search_prob !== nothing && reset_warmstart!(flip_angle_work.nnls_search_prob)
     return nothing
 end
 
@@ -329,69 +327,26 @@ function ∇epg_decay_basis(θ::EPGParameterization{T}, T2_times::AbstractVector
 end
 
 # =========================================================
-# Ensemble of EPG decay basis sets for discrete parameter search
+# Shared grid model for the discrete flip-angle search
 # =========================================================
-struct EPGBasisSetEnsemble{
-    D,
-    T,
-    ETL,
-    opt_vars,
-    D1, # D1 = D + 2
-    D2, # D2 = D + 3
-    F <: EPGBasisSetFunctor{T, ETL, opt_vars},
-    P <: NNLSDiscreteSurrogateSearch{D, T},
-}
-    opt_vars::Val{opt_vars} #TODO: SymbolVector{opt_vars}?
-    decay_basis_set::Array{T, D1}
-    ∇decay_basis_set::Array{T, D2}
-    epg_basis_functor!::F
-    nnls_search_prob::P
-end
 
-function EPGBasisSetEnsemble(o::T2mapOptions{T}, θ::EPGParameterization{T}, opt_vars::Val, decay_data::AbstractVector{T}) where {T}
-    @assert opt_vars === Val((:α,)) "Optimization variable must be the flip angle :α" #TODO: generalize?
-    D = 1 # D = length(opt_vars) #TODO: generalize?
-    opt_ranges = (flip_angles(o),)
-    decay_basis_set = zeros(T, o.nTE, o.nT2, length.(opt_ranges)...)
-    ∇decay_basis_set = zeros(T, o.nTE, o.nT2, D, length.(opt_ranges)...)
-    epg_basis_functor! = EPGBasisSetFunctor(o, θ, opt_vars)
-    nnls_search_prob = NNLSDiscreteSurrogateSearch(decay_basis_set, ∇decay_basis_set, opt_ranges, decay_data; legacy = o.legacy)
-    return EPGBasisSetEnsemble(opt_vars, decay_basis_set, ∇decay_basis_set, epg_basis_functor!, nnls_search_prob)
-end
-
-function epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, θ::EPGParameterization{T}) where {D, T}
-    @inbounds for I in CartesianIndices(work.nnls_search_prob.αs)
-        x = work.nnls_search_prob.αs[I]
-        θ = restructure(θ, x, work.opt_vars)
-        decay_basis = uview(work.decay_basis_set, :, :, I)
-        epg_decay_basis!(work.epg_basis_functor!, decay_basis, θ)
+# Decay bases, their α-derivatives, and Gram matrices at every grid angle. None depends on the signal or the worker, so one read-only copy is built per run and shared by every thread-local buffer.
+function epg_grid_model(o::T2mapOptions{T}, θ::EPGParameterization{T}) where {T}
+    αs = flip_angles(o)
+    basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
+    As, ∇As, Gs = zeros(T, o.nTE, o.nT2, length(αs)), zeros(T, o.nTE, o.nT2, 1, length(αs)), zeros(T, o.nT2, o.nT2, length(αs))
+    @views for (i, α) in enumerate(αs)
+        A = As[:, :, i] # bound once so that `mul!` sees `A' === A` and takes the symmetric rank-k path, making the Gram exactly symmetric
+        ∇epg_decay_basis!(basis_set, ∇As[:, :, :, i], A, restructure(θ, (; α)))
+        mul!(Gs[:, :, i], A', A)
     end
-    return work
+    return (; As, ∇As, Gs)
 end
-epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}, opt_vars::Val) where {D, T} = epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, opt_vars))
-epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}) where {D, T} = epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, work.opt_vars))
 
-function ∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, θ::EPGParameterization{T}) where {D, T}
-    @inbounds for I in CartesianIndices(work.nnls_search_prob.αs)
-        x = work.nnls_search_prob.αs[I]
-        θ = restructure(θ, x, work.opt_vars)
-        decay_basis = uview(work.decay_basis_set, :, :, I)
-        ∇decay_basis = uview(work.∇decay_basis_set, :, :, :, I)
-        ∇epg_decay_basis!(work.epg_basis_functor!, ∇decay_basis, decay_basis, θ)
-    end
-    return work
-end
-∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}, opt_vars::Val) where {D, T} = ∇epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, opt_vars))
-∇epg_decay_basis!(work::EPGBasisSetEnsemble{D, T}, x::SVector{D, T}) where {D, T} = ∇epg_decay_basis!(work, restructure(work.epg_basis_functor!.θ, x, work.opt_vars))
-
-# Internal runtime toggle: after the discrete surrogate search, refine the continuous minimizer α* with one true (f, f′) evaluation via the cosine-series basis and a sub-bracket cubic-Hermite re-minimization.
-# Costs one extra basis build and NNLS solve per voxel in exchange for the accuracy gain.
-const FLIP_ALPHA_POLISH = Ref(true)
-
-# Scratch for the α-polish: the NNLS problem at α₀ plus the two columns written by the single-column derivative kernel.
+# Scratch for the α-polish: the NNLS problem at the polish point, plus the value and derivative columns written one support column at a time.
 struct AlphaPolishWorkspace{T, P}
-    prob::P # NNLSProblem workspace at α₀
-    Acol::Vector{T} # ETL, value column written by `epg_decay_basis_∂α_col!` and discarded
+    prob::P
+    Acol::Vector{T} # ETL, value column, discarded
     ∂col::Vector{T} # ETL, α-derivative column
 end
 function AlphaPolishWorkspace(decay_basis::Matrix{T}, decay_data::Vector{T}) where {T}
@@ -406,15 +361,15 @@ struct FlipAngleOptimizationWorkspace{T, B, E, S, R, C, P}
     decay_basis::Matrix{T} # decay basis at the current flip angle `α`
     decay_data::Vector{T} # decay curve data
     decay_basis_set::B # B <: EPGBasisSetFunctor{T, ETL}
-    decay_basis_set_ensemble::E # E <: Union{Nothing, EPGBasisSetEnsemble{1, T, ETL}}
+    nnls_search_prob::E # E <: Union{Nothing, NNLSDiscreteSurrogateSearch{1, T}}; reads the shared grid model, owns the per-voxel solve state
     α::Base.RefValue{T} # current flip angle, in degrees
     α_surrogate::S # S <: Union{Nothing, AbstractSurrogate{1, T}}
     α_searcher::R # R <: Union{Nothing, DiscreteSurrogateSearcher{1, T}}; reused across voxels
     decay_basis_work::C # C <: Union{Nothing, EPGCosineSeriesBasis{T}}; evaluates the decay basis at arbitrary α, or nothing when the cosine representation does not apply
-    α_polish_work::P # P <: Union{Nothing, AlphaPolishWorkspace{T}}; loss/gradient evaluation at the continuous surrogate minimizer (see FLIP_ALPHA_POLISH)
+    α_polish_work::P # P <: Union{Nothing, AlphaPolishWorkspace{T}}; loss/gradient evaluation at the continuous surrogate minimizer, see `polish_flip_angle!`
 end
 
-function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{T}, decay_data::Vector{T}, shared_decay_basis_work::Union{Nothing, EPGCosineSeriesBasis{T}} = nothing) where {T}
+function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{T}, decay_data::Vector{T}, global_buffer = global_buffer_maker(o)) where {T}
     α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
     θ = default_epg_parameters(o)
     decay_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
@@ -422,82 +377,133 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{
     if o.SetFlipAngle !== nothing
         # Compute basis for fixed `SetFlipAngle`
         epg_decay_basis!(decay_basis_set, decay_basis, SA{T}[α[]])
-        decay_basis_set_ensemble = nothing
+        nnls_search_prob = nothing
         α_surrogate = nothing
         α_searcher = nothing
     else
-        # Compute basis for each angle
-        decay_basis_set_ensemble = EPGBasisSetEnsemble(o, θ, Val((:α,)), decay_data)
-        ∇epg_decay_basis!(decay_basis_set_ensemble, θ)
-        α_surrogate = o.legacy ?
-                      CubicSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob; legacy = true) :
-                      CubicHermiteSplineSurrogate(decay_basis_set_ensemble.nnls_search_prob)
+        (; As, ∇As, Gs) = global_buffer.grid_model
+        nnls_search_prob = NNLSDiscreteSurrogateSearch(As, ∇As, Gs, (flip_angles(o),), decay_data; legacy = o.legacy)
+        α_surrogate = o.legacy ? CubicSplineSurrogate(nnls_search_prob; legacy = true) : CubicHermiteSplineSurrogate(nnls_search_prob)
         α_searcher = DiscreteSurrogateSearcher(α_surrogate.grid) # reused per voxel; see `optimize_flip_angle!`
     end
 
-    decay_basis_work = shared_decay_basis_work !== nothing ? EPGCosineSeriesBasis(shared_decay_basis_work) :
-                       !o.legacy && o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ?
-                       EPGCosineSeriesBasis(θ, decay_basis_set.T2_times) : nothing
+    # Each worker wraps the shared read-only cosine coefficients in its own evaluation scratch
+    decay_basis_work = global_buffer.decay_basis_work === nothing ? nothing : EPGCosineSeriesBasis(global_buffer.decay_basis_work)
 
-    # α-polish needs the exact continuous-α basis (cosine series) and the gradient-carrying surrogate
-    α_polish_work = decay_basis_work !== nothing && α_surrogate isa CubicHermiteSplineSurrogate ? AlphaPolishWorkspace(decay_basis, decay_data) : nothing
+    # α-polish needs the gradient-carrying surrogate. The continuous-α basis is the cosine series when `RefConAngle == 180`, and the EPG recurrence with AD derivative columns otherwise.
+    α_polish_work = α_surrogate isa CubicHermiteSplineSurrogate ? AlphaPolishWorkspace(decay_basis, decay_data) : nothing
 
-    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, decay_basis_set_ensemble, α, α_surrogate, α_searcher, decay_basis_work, α_polish_work)
+    return FlipAngleOptimizationWorkspace(decay_basis, decay_data, decay_basis_set, nnls_search_prob, α, α_surrogate, α_searcher, decay_basis_work, α_polish_work)
 end
 
-# One refinement of the surrogate minimizer: the discrete search only ever evaluates the true loss f(α) = min_{x≥0} ‖A(α)x − b‖² at grid nodes, so the returned continuous α* carries the cubic-Hermite interpolation error of the final grid cell, O(h⁴) in the cell width.
-# The cosine-series basis makes a true off-grid evaluation cheap: build A(α*), solve NNLS, form the envelope gradient g* = 2·(∂A/∂α·x)ᵀ(Ax − b), then re-minimize the cubic Hermite on the sub-bracket [αₗ, α*] or [α*, αᵣ] selected by sign(g*), whose endpoint data are true (f, f′) values.
+# One refinement of the surrogate minimizer, followed by a certificate. The discrete search evaluates the true loss f(α) = min_{x≥0} ‖A(α)x − b‖² only at grid nodes, so its continuous minimizer α₀ carries the cubic-Hermite interpolation error of the enclosing cell.
+# A true off-grid evaluation builds A(α₀), solves NNLS, and forms the envelope gradient g₀ = -2·rᵀA′(α₀)x. Minimizing both adjacent cubics then proposes one candidate α₁.
+# The returned angle is the lex-minimum of true losses over the best evaluated node, α₀, and α₁, so f(α̂) ≤ min_{j evaluated} f(αⱼ) holds regardless of how badly the interpolant misbehaves. The surrogate proposes; it never certifies.
 # Returns `true` iff `work.decay_basis` already holds the exact basis at the final `work.α[]`, letting the caller skip the final rebuild.
 function polish_flip_angle!(work::FlipAngleOptimizationWorkspace{T}) where {T}
     (; grid, seen, u, ∇u) = work.α_surrogate
     α₀ = work.α[]
+    jstar = best_seen_index(work.α_surrogate)
 
-    # Refine only when α₀ lies strictly between grid nodes; landing on a node needs no refinement, since the loss there is already a true evaluation.
+    # Landing on a node leaves nothing to refine, since every candidate would then be a value the search already has.
     i = searchsortedlast(grid, SA{T}[α₀]; by = first)
-    (1 <= i < length(grid) && first(grid[i]) < α₀) || return false
-
-    # Bracket α₀ by the nearest evaluated node on either side, since `u` and `∇u` hold true (f, f′) data only where the search evaluated.
-    il, ir = i, i + 1
-    while il >= 1 && !seen[il]
-        il -= 1
+    if !(1 <= i < length(grid) && first(grid[i]) < α₀)
+        work.α[] = first(grid[jstar])
+        seed_downstream_from_node!(work, jstar)
+        return false
     end
-    while ir <= length(grid) && !seen[ir]
-        ir += 1
-    end
-    (il >= 1 && ir <= length(grid)) || return false
+    # `bisection_search` returns either a resolved proposal or an exhausted budget, and the budget equals the grid length, so exhausting it evaluates every node and resolves every cell. Either way the Hermite data below are true evaluations.
+    @assert seen[i] && seen[i+1] "bisection_search returned an unresolved proposal"
 
     # True loss and envelope gradient at α₀
     f₀, g₀ = polish_loss_grad!(work, α₀)
 
-    # Re-minimize the cubic Hermite on the sub-bracket containing the descent direction
-    spl = g₀ > 0 ? CubicHermiteInterpolator(first(grid[il]), α₀, u[il], f₀, first(∇u[il]), g₀) :
-          CubicHermiteInterpolator(α₀, first(grid[ir]), f₀, u[ir], g₀, first(∇u[ir]))
-    αnew, _ = minimize(spl)
+    # Minimize both adjacent cubics and take the lower prediction. Ties break toward the candidate nearer α₀ and then the larger angle, hence the negated sort key.
+    αl, ũl = minimize(CubicHermiteInterpolator(first(grid[i]), α₀, u[i], f₀, first(∇u[i]), g₀))
+    αr, ũr = minimize(CubicHermiteInterpolator(α₀, first(grid[i+1]), f₀, u[i+1], g₀, first(∇u[i+1])))
+    α₁ = -min((ũl, abs(αl - α₀), -αl), (ũr, abs(αr - α₀), -αr))[3]
 
-    # If the refinement returns α₀, let the caller skip the final rebuild
-    αnew == α₀ && return true
-    work.α[] = αnew
-    return false
+    # One true evaluation at the proposal. A candidate that returns α₀ or lands on a bracket endpoint already has an exact loss, so it costs no basis build and no solve.
+    f₁, solved_at_α₁ = α₁ == α₀ ? (f₀, false) :
+                       α₁ == first(grid[i]) ? (u[i], false) :
+                       α₁ == first(grid[i+1]) ? (u[i+1], false) :
+                       (polish_loss!(work, α₁), true)
+
+    # Certify against true losses only, with the same tie-breaking as above
+    αstar = first(grid[jstar])
+    α̂ = -min((u[jstar], abs(αstar - α₀), -αstar), (f₀, zero(T), -α₀), (f₁, abs(α₁ - α₀), -α₁))[3]
+    work.α[] = α̂
+
+    # The winner is the angle of the last solve exactly when the basis needs no rebuild, in which case the polish workspace is left solved at α̂ and the T2 stage adopts it.
+    # A grid winner instead seeds that solve from the support the search stored for its node.
+    basis_current = α̂ == (solved_at_α₁ ? α₁ : α₀)
+    !basis_current && α̂ == αstar && seed_downstream_from_node!(work, jstar)
+    return basis_current
 end
 
-# Polish evaluation: build the basis A(α₀), solve NNLS warm-started from the search's final active set, which is the exact support at α₀, then accumulate the residual and envelope gradient over the support columns.
-function polish_loss_grad!(work::FlipAngleOptimizationWorkspace{T}, α₀::T) where {T}
-    (; decay_basis, decay_basis_set_ensemble, decay_basis_work, α_polish_work) = work
-    epg_decay_basis!(decay_basis, decay_basis_work, α₀) # basis at α₀; leaves `c` current
-    solve_unreg!(α_polish_work.prob, decay_basis_set_ensemble.nnls_search_prob.nnls_work.nnls_work)
-    x = NNLS.solution(α_polish_work.prob.nnls_work)
+# Build A(α) into `work.decay_basis`. At `RefConAngle == 180` the finite cosine series evaluates the basis exactly and cheaply; otherwise the EPG recurrence evaluates the same model directly, which is slower but not an approximation.
+polish_basis!(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCosineSeriesBasis{T}, α::T) where {T} = epg_decay_basis!(work.decay_basis, cosine, α) # leaves `c` current for `cosine_∂α_features!`
+polish_basis!(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T) where {T} = epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA{T}[α])
 
-    # The solve left r = b − A_P x_P current, so f₀ = ‖r‖² and the envelope gradient 2·(∂A_P x_P)ᵀ(A_P x_P − b) is −2·Σ_j x_j⟨∂A[:, j], r⟩, one dot product per support column.
-    wk = α_polish_work.prob.nnls_work
-    r = NNLS.residual(wk)
-    (; Acol, ∂col) = α_polish_work # `Acol` is discarded; the value column is already in `decay_basis`
-    cosine_∂α_features!(decay_basis_work, α₀)
-    g₀ = zero(T)
-    @inbounds for j in NNLS.components(wk) # the support is already known; scanning all n columns for positivity would rediscover it
-        epg_decay_basis_∂α_col!(Acol, ∂col, decay_basis_work, α₀, j)
-        g₀ = muladd(x[j], dot(∂col, r), g₀)
+# Envelope gradient −2·Σ_j x_j⟨∂A[:, j], r⟩, over the support only: a full derivative tensor is never needed off grid.
+function polish_grad(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCosineSeriesBasis{T}, α::T, x, r, support) where {T}
+    (; Acol, ∂col) = work.α_polish_work # `Acol` is discarded; the value column is already in `decay_basis`
+    cosine_∂α_features!(cosine, α)
+    g = zero(T)
+    @inbounds for j in support
+        epg_decay_basis_∂α_col!(Acol, ∂col, cosine, α, j)
+        g = muladd(x[j], dot(∂col, r), g)
     end
-    return dot(r, r), -2 * g₀
+    return -2 * g
+end
+
+function polish_grad(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T, x, r, support) where {T}
+    (; decay_basis_set, α_polish_work) = work
+    (; Acol, ∂col) = α_polish_work
+    θα, ∇col = restructure(decay_basis_set.θ, (; α)), reshape(∂col, :, 1) # the Jacobian writes a matrix, which `∂col` supplies without a second buffer
+    g = zero(T)
+    @inbounds for j in support
+        decay_basis_set.epg_jac_functor!(∇col, Acol, restructure(θα, (; T2 = decay_basis_set.T2_times[j])))
+        g = muladd(x[j], dot(∂col, r), g)
+    end
+    return -2 * g
+end
+
+# Polish evaluation: build the basis A(α), solve NNLS warm-started from the search's final active set, which is the exact support at the search's minimizer, and return the true loss ‖A(α)x − b‖².
+# Leaves `work.decay_basis` holding A(α) and the solve's residual current, so `polish_loss_grad!` can extend it with the envelope gradient.
+function polish_loss!(work::FlipAngleOptimizationWorkspace{T}, α::T) where {T}
+    (; nnls_search_prob, decay_basis_work, α_polish_work) = work
+    polish_basis!(work, decay_basis_work, α)
+    solve_unreg!(α_polish_work.prob, nnls_search_prob.nnls_work.nnls_work)
+    r = NNLS.residual(α_polish_work.prob.nnls_work)
+    return dot(r, r)
+end
+
+# Polish evaluation with the envelope-theorem derivative, for the bracket endpoint the Hermite step interpolates from.
+function polish_loss_grad!(work::FlipAngleOptimizationWorkspace{T}, α₀::T) where {T}
+    f₀ = polish_loss!(work, α₀)
+
+    # The solve left r = b − A_P x_P current, so the support is already known; scanning all n columns for positivity would rediscover it.
+    wk = work.α_polish_work.prob.nnls_work
+    x, r = NNLS.solution(wk), NNLS.residual(wk)
+    return f₀, polish_grad(work, work.decay_basis_work, α₀, x, r, NNLS.components(wk))
+end
+
+# Source the T2 stage draws its unregularized solve from; see `NNLSUnregSource`.
+# The polish problem shares `decay_basis` and `decay_data` with that stage and is the only one ever solved at an off-grid α, so it is preferred; the search workspace can only seed.
+unreg_source(work::FlipAngleOptimizationWorkspace) = work.α_polish_work === nothing ? work.nnls_search_prob.nnls_work.nnls_work : work.α_polish_work.prob
+
+# Seed the T2-stage solve from the support the search stored for grid node `j`, which is exact at αⱼ.
+# Only `idx` and `nsetp` are read from an unsolved source, so the rest of the workspace may be stale.
+# Every caller reaches here through the Hermite surrogate, which is constructed together with the polish workspace.
+function seed_downstream_from_node!(work::FlipAngleOptimizationWorkspace, j::Int)
+    (; seen_idx, seen_nsetp) = work.nnls_search_prob
+    wk = work.α_polish_work.prob.nnls_work
+    @inbounds for t in 1:seen_nsetp[j]
+        wk.idx[t] = seen_idx[t, j]
+    end
+    wk.nsetp[] = seen_nsetp[j]
+    return nothing
 end
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
@@ -505,14 +511,15 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
     if o.SetFlipAngle === nothing
         # Find optimal flip angle
         empty!(work.α_surrogate)
-        advance_warmstart!(work.decay_basis_set_ensemble.nnls_search_prob) # cross-voxel NNLS warm starting
+        advance_warmstart!(work.nnls_search_prob) # cross-voxel NNLS warm starting
         reset!(work.α_searcher) # reuse the searcher's buffers instead of allocating one per voxel
         initialize!(work.α_surrogate, work.α_searcher; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
         α_opt, _ = bisection_search(work.α_surrogate, work.α_searcher; maxeval = o.nRefAngles)
         work.α[] = α_opt[1]
 
-        # Refine the surrogate minimizer against a true off-grid loss evaluation; `true` means the basis at the final α is already built
-        basis_current = FLIP_ALPHA_POLISH[] && work.α_polish_work !== nothing && polish_flip_angle!(work)
+        # Refine the surrogate minimizer against true off-grid loss evaluations; `true` means the basis at the final α is already built.
+        # The legacy cubic-spline surrogate has no polish workspace: it carries no envelope derivatives, and its returned angle is the MATLAB-compatible reference.
+        basis_current = work.α_polish_work !== nothing && polish_flip_angle!(work)
 
         # Compute basis using optimized flip angles
         basis_current || final_decay_basis!(work)
@@ -523,6 +530,7 @@ end
 
 # Build the T2-stage decay basis at the current flip angle `work.α[]`.
 # Uses the exact cosine-series evaluation when it applies, and the exact EPG rebuild otherwise.
+# Overwriting the basis invalidates the polish problem's solution against it; see `issolved`.
 function final_decay_basis!(work::FlipAngleOptimizationWorkspace)
     α = work.α[]
     if work.decay_basis_work !== nothing
@@ -530,6 +538,7 @@ function final_decay_basis!(work::FlipAngleOptimizationWorkspace)
     else
         epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA[α])
     end
+    work.α_polish_work !== nothing && (work.α_polish_work.prob.nnls_work.solved[] = false)
     return nothing
 end
 
@@ -714,14 +723,14 @@ end
 # =========================================================
 # Utility functions
 # =========================================================
-function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = nothing) where {T}
+function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = global_buffer_maker(o)) where {T}
     decay_basis = zeros(T, o.nTE, o.nT2)
     decay_data = zeros(T, o.nTE)
     decay_scale = Ref(one(T))
-    flip_angle_work = FlipAngleOptimizationWorkspace(o, decay_basis, decay_data, global_buffer === nothing ? nothing : global_buffer.decay_basis_work)
-    ensemble = flip_angle_work.decay_basis_set_ensemble
-    nnls_prob_seed = ensemble === nothing ? nothing : ensemble.nnls_search_prob.nnls_work.nnls_work
-    dof_interpolator = ensemble === nothing || !(regularization_method(o) isa GCV) ? nothing : (GriddedSpectrumInterpolator(ensemble.decay_basis_set, ensemble.∇decay_basis_set, flip_angles(o)), flip_angle_work.α)
+    flip_angle_work = FlipAngleOptimizationWorkspace(o, decay_basis, decay_data, global_buffer)
+    search_prob = flip_angle_work.nnls_search_prob
+    nnls_prob_seed = search_prob === nothing ? nothing : unreg_source(flip_angle_work)
+    dof_interpolator = search_prob === nothing || !(regularization_method(o) isa GCV) ? nothing : (GriddedSpectrumInterpolator(search_prob.As, search_prob.∇As, flip_angles(o)), flip_angle_work.α)
     return (;
         T2_times         = logrange(o.T2Range..., o.nT2),
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
@@ -738,16 +747,18 @@ function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = nothing) where 
     )
 end
 
-# Master decay basis workspace for the current options, or `nothing` when the cosine representation does not apply, namely in legacy mode, for a fixed flip angle, or for a non-constant flip angle.
-# The coefficient tensor is voxel- and thread-independent, so one instance is built here and its read-only coefficients are shared by every worker's buffer instead of each holding a private copy.
+# Everything the workers share read-only: the cosine coefficient tensor, and the decay bases, α-derivatives, and Gram matrices over the flip-angle grid.
+# All are voxel- and thread-independent, so one instance is built per run and every worker reads it.
+# `decay_basis_work` is `nothing` when the cosine representation does not apply, namely in legacy mode, for a fixed flip angle, or for a non-constant flip angle; `grid_model` is `nothing` when there is no flip-angle grid to search.
 function global_buffer_maker(o::T2mapOptions{T}) where {T}
     θ = default_epg_parameters(o)
     decay_basis_work = !o.legacy && o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ? EPGCosineSeriesBasis(θ, T2_component_times(o)) : nothing
-    return (; decay_basis_work)
+    grid_model = o.SetFlipAngle === nothing ? epg_grid_model(o, θ) : nothing
+    return (; decay_basis_work, grid_model)
 end
 
 function default_epg_parameters(o::T2mapOptions{T}) where {T}
     return o.RefConAngle == 180 ?
-        EPGConstantFlipAngleOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1)) :
-        EPGOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle))
+           EPGConstantFlipAngleOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1)) :
+           EPGOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle))
 end

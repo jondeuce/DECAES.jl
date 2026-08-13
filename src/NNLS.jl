@@ -62,28 +62,29 @@ Pass it to [`nnls!`](@ref), then read the results with [`solution`](@ref), [`dua
 The Tikhonov-regularized problem is solved by passing `A = [A₀; λI]` and `b = [b₀; 0]`, in which case the workspace must be sized for the padded system.
 """
 struct NNLSWorkspace{T}
-    A::Matrix{T}               # factor storage; A[1:nsetp, 1:nsetp] holds the upper triangular factor of the passive columns
-    b::Vector{T}               # transformed right-hand side Q'b
-    x::Vector{T}               # solution, indexed by original column
-    w::Vector{T}               # dual, indexed by position; see `dual` for the original-column view
-    zz::Vector{T}              # trial solution of the current round, doubling as the candidate column buffer
-    idx::Vector{Int}           # column permutation; idx[1:nsetp] is the passive set, idx[nsetp+1:n] the active set
-    invidx::Vector{Int}        # inverse permutation of idx
-    diag::Vector{Int}          # activation row of each column's λ row; 0 means not yet activated
-    b0::Vector{T}              # original right-hand side, the reference for residual and dual computations
-    r::Vector{T}               # residual buffer r = b0 - A0[:, idx[1:nsetp]] * x₊
-    H::Matrix{T}               # append-only panel of scaled Householder vector tails
-    htau::Vector{T}            # Householder scalar factors
-    hpos::Vector{Int}          # pivot row of each stored Householder
-    hm1::Vector{Int}           # last row of each stored Householder
-    hlen::Base.RefValue{Int}   # number of stored Householders
-    gc::Vector{T}              # Givens cosines
-    gs::Vector{T}              # Givens sines
-    gi::Vector{Int}            # Givens row indices; rotation g acts on rows (gi[g]-1, gi[g])
-    transforms::Vector{Int}    # transform order: +t = Householder t, -g = Givens g
-    rnorm::Base.RefValue{T}    # residual norm at the solution
-    mode::Base.RefValue{Int}   # termination status; 0 on success
-    nsetp::Base.RefValue{Int}  # passive-set size
+    A::Matrix{T}                # factor storage; A[1:nsetp, 1:nsetp] holds the upper triangular factor of the passive columns
+    b::Vector{T}                # transformed right-hand side Q'b
+    x::Vector{T}                # solution, indexed by original column
+    w::Vector{T}                # dual, indexed by position; see `dual` for the original-column view
+    zz::Vector{T}               # trial solution of the current round, doubling as the candidate column buffer
+    idx::Vector{Int}            # column permutation; idx[1:nsetp] is the passive set, idx[nsetp+1:n] the active set
+    invidx::Vector{Int}         # inverse permutation of idx
+    diag::Vector{Int}           # activation row of each column's λ row; 0 means not yet activated
+    b0::Vector{T}               # original right-hand side, the reference for residual and dual computations
+    r::Vector{T}                # residual buffer r = b0 - A0[:, idx[1:nsetp]] * x₊
+    H::Matrix{T}                # append-only panel of scaled Householder vector tails
+    htau::Vector{T}             # Householder scalar factors
+    hpos::Vector{Int}           # pivot row of each stored Householder
+    hm1::Vector{Int}            # last row of each stored Householder
+    hlen::Base.RefValue{Int}    # number of stored Householders
+    gc::Vector{T}               # Givens cosines
+    gs::Vector{T}               # Givens sines
+    gi::Vector{Int}             # Givens row indices; rotation g acts on rows (gi[g]-1, gi[g])
+    transforms::Vector{Int}     # transform order: +t = Householder t, -g = Givens g
+    rnorm::Base.RefValue{T}     # residual norm at the solution
+    mode::Base.RefValue{Int}    # termination status; 0 on success
+    nsetp::Base.RefValue{Int}   # passive-set size
+    solved::Base.RefValue{Bool} # see `issolved`
 end
 
 """
@@ -132,13 +133,21 @@ Original column indices of the positive components in the solution of the last s
 """
 @inline components(work::NNLSWorkspace) = @views work.idx[1:ncomponents(work)]
 
+"""
+    issolved(work::NNLSWorkspace)
+
+Whether [`solution`](@ref), [`residual`](@ref), [`residualnorm`](@ref) and [`components`](@ref) hold the solution of the `A` and `b` most recently passed to a solve.
+Every solve sets it. Callers that overwrite the `A` they solved against must clear it, since the workspace keeps no reference to `A` and cannot detect the write.
+"""
+@inline issolved(work::NNLSWorkspace) = work.solved[]
+
 @inline positive_solution(work::NNLSWorkspace) = @views solution(work)[components(work)]
 @inline positive_solution!(work::NNLSWorkspace, x::AbstractVector) = copyto!(x, positive_solution(work))
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:U}) = @views UpperTriangular(work.A[1:ncomponents(work), 1:ncomponents(work)])
 @inline choleskyfactor(work::NNLSWorkspace, ::Val{:L}) = choleskyfactor(work, Val(:U))'
 
 function Base.show(io::IO, ::MIME"text/plain", work::NNLSWorkspace)
-    (; A, b, x, w, zz, idx, invidx, diag, rnorm, mode, nsetp) = work
+    (; A, b, x, w, zz, idx, invidx, diag, rnorm, mode, nsetp, solved) = work
     m, n = size(A)
     println(io, "NNLSWorkspace(m = $m, n = $n)")
     println(io, "  A        :: $(typeof(A)) size $(size(A))")
@@ -152,6 +161,7 @@ function Base.show(io::IO, ::MIME"text/plain", work::NNLSWorkspace)
     println(io, "  rnorm[]  :: $(typeof(rnorm[])) = $(rnorm[])")
     println(io, "  mode[]   :: $(typeof(mode[])) = $(mode[])")
     println(io, "  nsetp[]  :: $(typeof(nsetp[])) = $(nsetp[])")
+    println(io, "  solved[] :: $(typeof(solved[])) = $(solved[])")
     return nothing
 end
 
@@ -186,6 +196,7 @@ function NNLSWorkspace(::Type{T}, m::Int, n::Int) where {T}
         Ref(zero(T)),         # rnorm
         Ref(0),               # mode
         Ref(0),               # nsetp
+        Ref(false),           # solved
     )
 end
 
@@ -213,6 +224,7 @@ function Base.copy(w::NNLSWorkspace)
         Ref(w.rnorm[]),
         Ref(w.mode[]),
         Ref(w.nsetp[]),
+        Ref(w.solved[]),
     )
 end
 
@@ -1092,6 +1104,7 @@ function unsafe_nnls!(
 
     work.rnorm[] = sqrt(sm)
     work.nsetp[] = nsetp
+    work.solved[] = true
     return work.x
 end
 
@@ -1421,6 +1434,7 @@ function unsafe_nnls!(
 
     work.rnorm[] = sqrt(sm)
     work.nsetp[] = nsetp
+    work.solved[] = true
     return work.x
 end
 
@@ -1743,12 +1757,10 @@ end
 ####
 
 # Precomputed-Gram fast path for unregularized NNLS solves against a fixed set of bases.
-# The bases depend only on the grid parameters, never on the signal b, so the Gram matrices Gᵢ = AᵢᵀAᵢ are signal-independent: each evaluated grid point's Gram is filled once per workspace lifetime (lazily, ~n²m flops) and amortizes to zero cost across signals.
-# Each evaluation then costs one GEMV c = Aᵢᵀb plus an active-set iteration entirely in Gram space: a resumable p×p Cholesky of G_P, feasibility drops, and the KKT dual w = c − G[:, P]x_P at n·p flops - the m·n dual GEMV per round of the QR solver disappears.
+# The bases depend only on the grid parameters, never on the signal b, so the Gram matrices Gᵢ = AᵢᵀAᵢ are signal-independent and are supplied by the caller from shared read-only storage; this workspace holds only the mutable solve scratch.
+# Each evaluation costs one GEMV c = Aᵢᵀb plus an active-set iteration entirely in Gram space: a resumable p×p Cholesky of G_P, feasibility drops, and the KKT dual w = c − G[:, P]x_P at n·p flops - the m·n dual GEMV per round of the QR solver disappears.
 # Unlike `NNLSGram` there is no μ² diagonal shift to condition the normal equations, so a tiny or non-positive Cholesky pivot, a full active set, or an exhausted iteration budget returns `false` and the caller falls back to the exact QR solver.
 struct NNLSGridGram{T}
-    G::Vector{Matrix{T}}     # per-grid-point n×n Gram matrices (allocated + filled lazily on first evaluation)
-    Gready::Vector{Bool}     # whether G[i] has been allocated and filled
     c::Vector{T}             # Aᵢᵀb for the current evaluation
     cscale::Base.RefValue{T} # maximum(abs, c); scale for the dual tolerance
     P::Vector{Int}           # active set (original column indices) in P[1:np]
@@ -1764,25 +1776,11 @@ struct NNLSGridGram{T}
     w::Vector{T}             # dual c − G[:, P]x_P
 end
 
-function NNLSGridGram(::Type{T}, n::Int, ngrid::Int) where {T}
+function NNLSGridGram(::Type{T}, n::Int) where {T}
     return NNLSGridGram(
-        [Matrix{T}(undef, 0, 0) for _ in 1:ngrid], fill(false, ngrid),
         zeros(T, n), Ref(zero(T)), zeros(Int, n), fill(false, n), fill(false, n), Ref(0),
         zeros(T, n, n), zeros(T, n, n), zeros(T, n), zeros(T, n), zeros(T, n), zeros(T, n), zeros(T, n),
     )
-end
-
-# Fill and cache the Gram matrix of the grid point with linear index `lin`
-function fill_gram!(gp::NNLSGridGram{T}, A::AbstractMatrix{T}, lin::Int) where {T}
-    m, n = size(A)
-    G = gp.G[lin] = Matrix{T}(undef, n, n)
-    @inbounds for t in 1:n, s in 1:t
-        g = coldot(A, s, t, m)
-        G[s, t] = g
-        G[t, s] = g
-    end
-    gp.Gready[lin] = true
-    return G
 end
 
 # Load the signal-dependent right-hand side data c = Aᵀb, once per grid point per signal.
@@ -1820,7 +1818,7 @@ function load!(gp::NNLSGridGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) 
 end
 
 # Set the active set to idx0[1:np0] and gather its Gram block
-function set_active!(gp::NNLSGridGram{T}, G::Matrix{T}, idx0, np0::Int) where {T}
+function set_active!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, idx0, np0::Int) where {T}
     (; P, inP, rejected, GP) = gp
     fill!(inP, false)
     fill!(rejected, false)
@@ -1838,7 +1836,7 @@ function set_active!(gp::NNLSGridGram{T}, G::Matrix{T}, idx0, np0::Int) where {T
     return gp
 end
 
-@inline function add_active!(gp::NNLSGridGram{T}, G::Matrix{T}, j::Int) where {T}
+@inline function add_active!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, j::Int) where {T}
     (; P, inP, GP, np) = gp
     p = np[] + 1
     @inbounds begin
@@ -1881,7 +1879,7 @@ end
 #   - infeasible solves run the classic secondary-loop interpolation toward the last feasible iterate, so the objective strictly decreases and add→drop cycling cannot occur;
 #   - candidates that fail the pre-check or come out infeasible immediately after entry are rejected for the remainder of the solve (their attainable improvement is at the dual tolerance level), mirroring the exact solver's `w[pos] = 0` handling.
 # Returns `true` with the solution in xp[1:np] on P[1:np], or `false` on a conditioning/iteration guard (caller falls back to the exact QR solver).
-function solve!(gp::NNLSGridGram{T}, G::Matrix{T}, m::Int) where {T}
+function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
     (; c, P, inP, rejected, np, GP, L, dinv, xp, xcur, u, w) = gp
     n = size(G, 1)
 

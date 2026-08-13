@@ -103,14 +103,14 @@ end
 end
 
 @testset "GramEigvalsWorkspace" begin
-    for (m, n) in Iterators.product(2:6, 2:6)
-        A = randn(m, n)
+    for T in (Float32, Float64), (m, n) in Iterators.product(2:6, 2:6)
+        A = randn(T, m, n)
         work = DECAES.GramEigvalsWorkspace(A)
 
         γ² = @inferred LinearAlgebra.eigvals!(work, A)
         @test length(γ²) == min(m, n)
         @test issorted(γ²) # `syevr` returns ascending eigenvalues
-        @test γ² ≈ sort(svdvals(A) .^ 2) rtol = 1e-10 atol = 1e-12 * max(1, sum(abs2, A))
+        @test γ² ≈ sort(svdvals(A) .^ 2) rtol = √eps(T) atol = 10 * eps(T) * max(1, sum(abs2, A))
 
         γ²′ = @inferred LinearAlgebra.eigvals!(work, A)
         @test γ²′ === γ² # returns the same internal buffer

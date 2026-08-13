@@ -541,6 +541,10 @@ function Base.empty!(surr::CubicHermiteSplineSurrogate{T}) where {T}
     return surr
 end
 
+# Best evaluated node. Its loss is a true NNLS evaluation, so it is the incumbent the final selection certifies against.
+# `idx` is sorted by angle and `argmin` keeps the first minimizer, so scanning in reverse resolves ties toward the largest angle, where refocusing flip angles concentrate.
+best_seen_index(surr::CubicHermiteSplineSurrogate) = argmin(I -> surr.u[I], view(surr.idx, surr.npts[]:-1:1))
+
 function suggest_point(surr::CubicHermiteSplineSurrogate{T}) where {T}
     @assert length(surr.grid) >= 2 "Grid must have at least 2 points"
     @assert surr.npts[] >= 1 "No points have been added to the surrogate"
@@ -726,9 +730,28 @@ function reset!(state::DiscreteSurrogateSearcher)
 end
 
 function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}; mineval::Int, maxeval::Int) where {D}
-    # Evaluate at least `mineval` points by repeatedly bisecting the grid in a breadth-first manner. The points are first planned by the same recursion, recording only indices, and then evaluated in ascending grid order.
     # Neighbouring gridpoints have similar loss-function state, for instance nearby decay bases in the NNLS surrogate search, so evaluating in sorted order lets warm starts chain through small parameter jumps instead of bouncing across the grid.
-    # The planned point set is identical to the set the unsorted recursion would evaluate; only the evaluation order differs, which perturbs warm-started solves at roundoff level.
+    planned = plan_initialize!(state; mineval, maxeval)
+    for I in planned
+        update!(surr, state, I; maxeval)
+    end
+    return state
+end
+
+# One dimension admits the endpoint-inclusive design with the smallest attainable maximum gap directly, with no recursion: `K₀` indices whose gaps are ⌊(K−1)/(K₀−1)⌋ or ⌈(K−1)/(K₀−1)⌉.
+# At the flip-angle defaults K = `nRefAngles` = 64 and K₀ = `nRefAnglesMin` = 5 this is {1, 16, 32, 48, 64}, which is also what the recursive plan below yields.
+function plan_initialize!(state::DiscreteSurrogateSearcher{1}; mineval::Int, maxeval::Int)
+    K = length(state.grid)
+    K₀ = clamp(mineval, 2, K)
+    planned = empty!(state.plan)
+    for q in 1:K₀
+        push!(planned, CartesianIndex(1 + ((q - 1) * (K - 1)) ÷ (K₀ - 1)))
+    end
+    return planned
+end
+
+# Higher dimensions use a recursive dyadic design, planned by index only and then evaluated in ascending grid order.
+function plan_initialize!(state::DiscreteSurrogateSearcher{D}; mineval::Int, maxeval::Int) where {D}
     box = BoundingBox(size(state.grid))
     planned = empty!(state.plan)
     for depth in 1:mineval # should never reach `mineval` depth, this is just to ensure the loop terminates in case `mineval` is greater than the number of gridpoints
@@ -736,10 +759,7 @@ function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearche
         length(planned) >= mineval && break
     end
     sort!(planned) # `CartesianIndex` sorts in column-major order, matching the grid layout; `sort!` on a sized buffer allocates nothing
-    for I in planned
-        update!(surr, state, I; maxeval)
-    end
-    return state
+    return planned
 end
 
 # Dry-run mirror of the recursive initialization, recording the indices that `evaluate_box!` and `update!` would evaluate, without evaluating anything; membership in `planned` plays the role of `state.seen` and `state.numeval`.
@@ -793,7 +813,7 @@ function bisection_search(
         box = minimal_bounding_box(state, x)
         evaluate_box!(surr, state, box, x; maxeval)
         x, u = suggest_point(surr)
-        if state.numeval[] ≥ maxeval || converged(state, box)
+        if state.numeval[] ≥ maxeval || is_resolved(state, x)
             return x, u
         end
     end
@@ -847,6 +867,15 @@ end
 function converged(::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D}
     # Convergence is defined as: bounding box has at least one side of length <= 1
     return any(widths(box) .<= 1)
+end
+
+# A proposal is resolved when the surrogate data bracketing it are true evaluations: either it coincides with an evaluated node, or it lies in a cell whose corners are all evaluated.
+# `minimal_bounding_box` descends only through fully evaluated splittable boxes, so the box it returns is evaluated exactly when it is the unit cell around `x` and every corner is known.
+# The search must test this on the freshly recomputed proposal. Testing the box built for the preceding proposal lets the search return a point that moved into another unresolved cell, leaving the polish to interpolate from data it never evaluated.
+function is_resolved(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T}
+    box = minimal_bounding_box(state, x)
+    is_evaluated(state, box) && return true
+    return any(I -> @inbounds(state.seen[I] && state.grid[I] == x), corners(box))
 end
 
 function centre(state::DiscreteSurrogateSearcher{D, T}, box::BoundingBox{D}) where {D, T}
@@ -1003,6 +1032,7 @@ const SURROGATE_USE_FAST_GRAM = Ref(true)
 struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tb <: AbstractVector{T}, W, WG}
     As::TA # decay bases over the parameter grid; As[:, :, I] is A(αs[I])
     ∇As::TdA # parameter derivatives of the grid bases; ∇As[:, :, d, I] is ∂A(αs[I])/∂αs[I][d]
+    Gs::Array{T, 3} # Gram matrices of the grid bases, by linear grid index; Gs[:, :, lin] is AᵀA there
     αs::Array{SVector{D, T}, D} # parameter grid
     b::Tb # decay curve data
     u::Array{T, D} # loss values at the evaluated grid points
@@ -1019,6 +1049,7 @@ end
 function NNLSDiscreteSurrogateSearch(
     As::AbstractArray{T},  # size(As)  = (M, N, P1..., PD)
     ∇As::AbstractArray{T}, # size(∇As) = (M, N, D, P1..., PD)
+    Gs::Array{T, 3},       # size(Gs)  = (N, N, prod(P1..., PD))
     αs::NTuple{D},         # size(αs)  = (P1..., PD)
     b::AbstractVector{T};  # size(b)   = (M,)
     legacy::Bool = false,
@@ -1027,17 +1058,17 @@ function NNLSDiscreteSurrogateSearch(
     @assert ndims(As) == 2 + D && ndims(∇As) == 3 + D # ∇As has extra dimension for parameter gradients
     @assert size(∇As)[1:3] == (M, N, D) # matrix dimensions must match, and gradient dimension must equal number of parameters
     @assert size(As)[3:end] == size(∇As)[4:end] == length.(αs) # dimension size must match parameters lengths
+    @assert size(Gs) == (N, N, prod(length.(αs)))
     @assert size(b) == (M,)
 
     αs = meshgrid(SVector{D, T}, αs...)
     u = zeros(T, size(αs))
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
-    nnls_gram = NNLS.NNLSGridGram(T, N, length(αs))
     seen_pts = sizehint!(CartesianIndex{D}[], length(αs))
     seen_idx = zeros(Int, N, length(αs))
     seen_nsetp = zeros(Int, length(αs))
     seen_stamp = zeros(Int, length(αs))
-    return NNLSDiscreteSurrogateSearch(As, ∇As, αs, b, u, nnls_work, nnls_gram, seen_pts, seen_idx, seen_nsetp, seen_stamp, Ref(1), legacy)
+    return NNLSDiscreteSurrogateSearch(As, ∇As, Gs, αs, b, u, nnls_work, NNLS.NNLSGridGram(T, N), seen_pts, seen_idx, seen_nsetp, seen_stamp, Ref(1), legacy)
 end
 
 load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T} = copyto!(prob.b, b)
@@ -1131,10 +1162,9 @@ end
 # Evaluate the loss at grid point I via the precomputed-Gram fast path, seeded with the active set idx0[1:np0] (np0 = 0 solves cold).
 # On success the solution, active set, and exact residual norm are written into the NNLS workspace - the quantities every downstream consumer reads (`∇loss!`, the warm-start records in `loss!`, and the chi2-stage seed) - and `true` is returned; `false` means the caller must run the exact QR solver instead.
 function loss_gram!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}, lin::Int, idx0, np0::Int) where {D, T}
-    (; As, b, nnls_work, nnls_gram) = prob
-    A = view(As, :, :, I)
+    (; As, Gs, b, nnls_work, nnls_gram) = prob
+    A, G = view(As, :, :, I), view(Gs, :, :, lin)
     m = size(A, 1)
-    G = nnls_gram.Gready[lin] ? nnls_gram.G[lin] : NNLS.fill_gram!(nnls_gram, A, lin)
     NNLS.load!(nnls_gram, A, b)
     NNLS.set_active!(nnls_gram, G, idx0, np0)
     NNLS.solve!(nnls_gram, G, m) || return false
@@ -1176,6 +1206,7 @@ function loss_gram!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D
     wk.rnorm[] = sqrt(res²)
     wk.nsetp[] = p
     wk.mode[] = 0
+    wk.solved[] = true
     return true
 end
 
@@ -1266,7 +1297,12 @@ function mock_surrogate_search_problem(
         end
     end
 
-    return NNLSDiscreteSurrogateSearch(As, ∇As, opt_ranges, b)
+    Gs = zeros(T, opts.nT2, opts.nT2, prod(length.(opt_ranges)))
+    @views for (lin, Iαs) in enumerate(Rαs)
+        mul!(Gs[:, :, lin], As[:, :, Iαs]', As[:, :, Iαs])
+    end
+
+    return NNLSDiscreteSurrogateSearch(As, ∇As, Gs, opt_ranges, b)
 end
 function mock_surrogate_search_problem(::Val{D}, ::Val{ETL}, opts = mock_t2map_opts(; MatrixSize = (1, 1, 1), nTE = ETL); kwargs...) where {D, ETL}
     b = vec(mock_image(opts; kwargs...))

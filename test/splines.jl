@@ -444,6 +444,55 @@ function test_discrete_searcher()
     @test DECAES.minimal_bounding_box(state, SA[4.5, 8.5]) == DECAES.BoundingBox(((1, 5), (7, 10)))
 end
 
+# The 1D initialization plans `K₀` endpoint-inclusive nodes directly rather than by dyadic recursion.
+# No endpoint-inclusive design with `K₀` nodes has a smaller maximum gap, and at the flip-angle defaults the two planners agree exactly.
+function test_initialization_plan()
+    plan(K, K₀) = DECAES.plan_initialize!(DECAES.DiscreteSurrogateSearcher([SVector{1, Float64}(k) for k in 1:K]); mineval = K₀, maxeval = K)
+    dyadic(K, K₀) = (state = DECAES.DiscreteSurrogateSearcher([SVector{1, Float64}(k) for k in 1:K]); p = empty!(state.plan); for d in 1:K₀
+        DECAES.plan_initialize!(p, DECAES.BoundingBox((K,)), d; mineval = K₀, maxeval = K)
+        length(p) >= K₀ && break
+    end; sort!(p))
+
+    @test first.(Tuple.(plan(64, 5))) == [1, 16, 32, 48, 64] # flip-angle defaults: nRefAngles = 64, nRefAnglesMin = 5
+    @test plan(64, 5) == dyadic(64, 5)
+
+    for K in 2:40, K₀ in 2:K
+        j = first.(Tuple.(plan(K, K₀)))
+        @test length(j) == K₀ && allunique(j)
+        @test j[1] == 1 && j[end] == K # endpoints included
+        @test issorted(j)
+        @test maximum(diff(j)) <= cld(K - 1, K₀ - 1) # no endpoint-inclusive design can do better
+    end
+end
+
+# `bisection_search` may return only a resolved proposal: one that coincides with an evaluated node or lies in a cell whose endpoints are both evaluated.
+# Testing the box built for the previous proposal admits a return whose minimizer moved into an unevaluated cell, which leaves the polish interpolating from data the search never evaluated.
+function test_search_resolution_invariant()
+    grid = [SVector{1, Float64}(α) for α in range(50.0, 180.0; length = 64)]
+
+    # Multi-well objectives whose minimizer migrates between cells as nodes are added
+    for trial in 1:200
+        c = 50.0 .+ 130.0 .* rand(3)
+        w = 0.05 .+ 0.5 .* rand(3)
+        a = 0.2 .+ rand(3)
+        f(α) = -sum(a[k] * exp(-((α - c[k]) / (10 * w[k]))^2) for k in 1:3)
+        df(α) = sum(2 * a[k] * (α - c[k]) / (10 * w[k])^2 * exp(-((α - c[k]) / (10 * w[k]))^2) for k in 1:3)
+
+        surr = DECAES.CubicHermiteSplineSurrogate(I -> (f(grid[I][1]), SVector{1, Float64}(df(grid[I][1]))), grid)
+        state = DECAES.DiscreteSurrogateSearcher(surr; mineval = 5, maxeval = length(grid))
+        x, _ = DECAES.bisection_search(surr, state; maxeval = length(grid))
+
+        @test DECAES.is_resolved(state, x) || state.numeval[] >= length(grid)
+        @test state.numeval[] <= length(grid) # evaluation bound |E| <= K
+
+        # A resolved proposal has true endpoint data on both sides, which is what the polish assumes
+        i = searchsortedlast(grid, x; by = first)
+        if 1 <= i < length(grid) && grid[i][1] < x[1]
+            @test state.seen[i] && state.seen[i+1]
+        end
+    end
+end
+
 @testset "Splines" begin
     @testset "poly" begin
         @testset "basics" test_poly()
@@ -467,5 +516,11 @@ end
     @testset "bounding box" begin
         @testset "basics" test_bounding_box()
         @testset "discrete searcher" test_discrete_searcher()
+    end
+    @testset "initialization plan" begin
+        test_initialization_plan()
+    end
+    @testset "search resolution invariant" begin
+        test_search_resolution_invariant()
     end
 end

@@ -694,8 +694,8 @@ function test_gcv_gridded_interp()
     Aα(α) = DECAES.epg_decay_basis(DECAES.restructure(θ, (; α)), T2t)
     M, N = o.nTE, o.nT2
     flip_angle_work = DECAES.FlipAngleOptimizationWorkspace(o, zeros(M, N), zeros(M))
-    ensemble = flip_angle_work.decay_basis_set_ensemble
-    interp = DECAES.GriddedSpectrumInterpolator(ensemble.decay_basis_set, ensemble.∇decay_basis_set, DECAES.flip_angles(o))
+    search_prob = flip_angle_work.nnls_search_prob
+    interp = DECAES.GriddedSpectrumInterpolator(search_prob.As, search_prob.∇As, DECAES.flip_angles(o))
     αs = interp.αs
 
     function mock_signal(α)
@@ -959,8 +959,8 @@ end
 
 # The μ-selection methods on adversarial (ill-conditioned / rank-deficient / degenerate) inputs.
 # Each method's Gram fast path has conditioning/iteration guards that fall back to the exact QR solve; those guards fire only on ill-conditioned inputs, which the strictly-positive random data of the per-method testsets above never produces.
-# The regularized (μ > 0) returns are certified: the returned x must be KKT-optimal for the Tikhonov problem min_{x≥0} ‖Ax−b‖² + μ²‖x‖² at the returned μ. By strong convexity, the Double64 dual/complementarity certificate is sufficient. This exercises the guarded Gram path + exact-QR final solve.
-function verify_reg_kkt_regularized(A0, b0, x, mu)
+# Returns are certified: the returned x must be KKT-optimal for the Tikhonov problem min_{x≥0} ‖Ax−b‖² + μ²‖x‖² at the returned μ, which at μ = 0 is the unregularized problem. By strong convexity, the Double64 dual/complementarity certificate is sufficient. This exercises the guarded Gram path + exact-QR final solve.
+function verify_reg_kkt(A0, b0, x, mu)
     D64 = Double64
     A, b, x = D64.(A0), D64.(b0), D64.(x)
     w = A' * (b - A * x) .- D64(mu)^2 .* x # dual (negative half-gradient) of the Tikhonov objective
@@ -983,7 +983,8 @@ end
         for (; x, mu) in runs
             @test all(isfinite, x)
             @test all(>=(0), x)
-            isfinite(mu) && mu > 0 && verify_reg_kkt_regularized(A, b, x, mu)
+            @test isfinite(mu) && mu >= 0
+            verify_reg_kkt(A, b, x, mu)
         end
     end
 end

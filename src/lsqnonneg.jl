@@ -42,9 +42,12 @@ function solve!(
         den += A[i, n] * A[i, n]
     end
 
+    # An exactly zero last column leaves den = 0; x[n] = 0 is then optimal for it, and the dual below reduces to the cold A'b.
     xj = zero(T)
-    @inbounds @simd for i in 1:m
-        xj += (A[i, n] / den) * b[i]
+    if den > 0
+        @inbounds @simd for i in 1:m
+            xj += (A[i, n] / den) * b[i]
+        end
     end
 
     # w = -A'*(Ax - b)
@@ -240,9 +243,28 @@ function solve!(
     return NNLS.unsafe_nnls!(work.nnls_work, A0, μ; kwargs..., nwarm = nsetp0)
 end
 
-# Unregularized solve, optionally warm-started from another workspace's active set (e.g. the flip-angle surrogate search solve of the same voxel); a seed changes only the solve cost, never the solution
-solve_unreg!(prob::NNLSProblem, nnls_prob_seed::Nothing) = solve!(prob)
-solve_unreg!(prob::NNLSProblem, nnls_prob_seed::NNLS.NNLSWorkspace) = solve!(prob, prob.A, prob.b, nnls_prob_seed.idx, NNLS.ncomponents(nnls_prob_seed))
+# Source for the unregularized solve that each μ-selection method starts from.
+# A bare workspace only seeds: its passive set warm-starts the solve, changing the cost but never the solution.
+# A problem over the same `A` and `b`, which the flip-angle polish leaves solved at the fitted angle, also lets a solved state be used outright.
+const NNLSUnregSource{T} = Union{Nothing, NNLS.NNLSWorkspace{T}, NNLSProblem{T}}
+
+solve_unreg!(prob::NNLSProblem, ::Nothing) = solve!(prob)
+solve_unreg!(prob::NNLSProblem, seed::NNLS.NNLSWorkspace) = solve!(prob, prob.A, prob.b, seed.idx, NNLS.ncomponents(seed))
+solve_unreg!(prob::NNLSProblem, src::NNLSProblem) = NNLS.issolved(src.nnls_work) ? adopt_solution!(prob, src.nnls_work) : solve_unreg!(prob, src.nnls_work)
+
+# Consumers read the solution, residual, residual norm, and passive set, never the triangular factor, so an O(m + n) transfer of those replaces the solve.
+# Kept out of line so that `solve_unreg!` stays small enough to inline into its callers.
+function adopt_solution!(prob::NNLSProblem, src::NNLS.NNLSWorkspace)
+    dst = prob.nnls_work
+    copyto!(dst.x, src.x)
+    copyto!(dst.r, src.r)
+    copyto!(dst.idx, src.idx)
+    dst.rnorm[] = src.rnorm[]
+    dst.mode[] = src.mode[]
+    dst.nsetp[] = src.nsetp[]
+    dst.solved[] = true
+    return prob
+end
 
 @inline solution(work::NNLSProblem) = NNLS.solution(work.nnls_work)
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
@@ -586,9 +608,9 @@ struct NNLSChi2RegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
-    nnls_prob_seed::S # warm-start source for the unregularized solve (an NNLS workspace whose active set seeds the solve, e.g. the flip-angle search of the same voxel), or nothing; if not nothing it is always used (a seed changes only the solve cost, never the solution)
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
 end
-function NNLSChi2RegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
+function NNLSChi2RegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
@@ -809,9 +831,9 @@ struct NNLSMDPRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
-    nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
 end
-function NNLSMDPRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
+function NNLSMDPRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
@@ -926,9 +948,9 @@ struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T},
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
     lsqnonneg_lcurve_fun_cache::C1 # cache of (log res², log ‖x‖²) points on the L-curve
     lcurve_corner_caches::C2 # corner-search point and state caches (see `lcurve_corner`)
-    nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
 end
-function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
+function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
@@ -1258,9 +1280,9 @@ struct NNLSReginskaRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
-    nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
 end
-function NNLSReginskaRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing) where {T}
+function NNLSReginskaRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
     m, n = size(A)
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
@@ -1370,9 +1392,9 @@ struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
     dof_interpolator::V # 2-tuple (GriddedSpectrumInterpolator over the α-grid decay bases, flip-angle Ref) or nothing: the source for the opt-in interpolated dof(μ), see `GCV_INTERP_DOF`
-    nnls_prob_seed::S # warm-start source for the unregularized solve (see NNLSChi2RegProblem), or nothing
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
 end
-function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::Union{Nothing, NNLS.NNLSWorkspace{T}} = nothing, dof_interpolator::Union{Nothing, Tuple{GriddedSpectrumInterpolator{T}, Base.RefValue{T}}} = nothing) where {T}
+function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing, dof_interpolator::Union{Nothing, Tuple{GriddedSpectrumInterpolator{T}, Base.RefValue{T}}} = nothing) where {T}
     m, n = size(A)
     spectrum_work = SVDValsWorkspace(A)
     nnls_prob = NNLSProblem(A, b)
