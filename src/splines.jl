@@ -739,7 +739,7 @@ function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearche
 end
 
 # One dimension admits the endpoint-inclusive design with the smallest attainable maximum gap directly, with no recursion: `K₀` indices whose gaps are ⌊(K−1)/(K₀−1)⌋ or ⌈(K−1)/(K₀−1)⌉.
-# At the flip-angle defaults K = `nRefAngles` = 64 and K₀ = `nRefAnglesMin` = 5 this is {1, 16, 32, 48, 64}, which is also what the recursive plan below yields.
+# At the flip-angle defaults K = `nRefAngles` = 64 and K₀ = `nRefAnglesMin` = 9 this is {1, 8, 16, 24, 32, 40, 48, 56, 64}, which is also what the recursive plan below yields.
 function plan_initialize!(state::DiscreteSurrogateSearcher{1}; mineval::Int, maxeval::Int)
     K = length(state.grid)
     K₀ = clamp(mineval, 2, K)

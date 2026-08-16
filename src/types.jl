@@ -60,7 +60,7 @@ See also:
     @assert nRefAngles >= 2 "Maximum number of angles to check during flip angle optimization must be at least 2, but nRefAngles = $nRefAngles."
 
     "Initial number of angles to check during flip angle optimization before refinement near likely optima. Setting `nRefAnglesMin` equal to `nRefAngles` forces all angles to be checked."
-    nRefAnglesMin::Int = !legacy ? min(5, nRefAngles) : nRefAngles
+    nRefAnglesMin::Int = !legacy ? min(9, nRefAngles) : nRefAngles
     @assert 2 <= nRefAnglesMin <= nRefAngles "Minimum number of angles to check during flip angle optimization must be in the range [2, nRefAngles], but nRefAngles = $nRefAngles and nRefAnglesMin = $nRefAnglesMin."
 
     "Regularization routine to use. One of \"gcv\", \"lcurve\", \"reginska\", \"chi2\", \"mdp\", or \"none\", representing the Generalized Cross-Validation method, the L-Curve method, Regińska's minimum-product criterion, `Chi2Factor`-based Tikhonov regularization, the Morozov discrepancy principle, or no regularization, respectively."

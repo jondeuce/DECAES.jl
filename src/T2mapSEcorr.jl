@@ -239,10 +239,10 @@ function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps{T}, dist::T2Dist
     end
 
     # Calculate T2 distribution and map parameters
-    T2_distribution!(T2_dist_work)
+    T2_dist = T2_distribution!(T2_dist_work)
 
     # Save loop results to outputs
-    save_results!(thread_buffer, maps, dist, opts, I)
+    save_results!(thread_buffer, maps, dist, T2_dist, opts, I)
 
     return nothing
 end
@@ -634,14 +634,11 @@ function T2_distribution!(t2work::T2DistWorkspace{MDP{T}, T}) where {T}
     return x
 end
 
-T2_distribution(t2work::T2DistWorkspace) = solution(t2work.nnls_work)
-
 # =========================================================
 # Save thread local results to output maps
 # =========================================================
-function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T}, o::T2mapOptions{T}, I::CartesianIndex) where {T}
+function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T}, T2_dist::AbstractVector{T}, o::T2mapOptions{T}, I::CartesianIndex) where {T}
     (; logT2_times, decay_basis, decay_data, decay_scale, decay_curvefit, residuals, flip_angle_work, T2_dist_work) = thread_buffer
-    T2_dist = T2_distribution(T2_dist_work)
 
     @inbounds begin
         # Rescale results to original signal scale

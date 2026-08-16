@@ -165,6 +165,78 @@ end
     @test ncertified > 0 # the adopted path must actually be reached
 end
 
+# Boundary paths return their selected solution directly rather than through the regularized cache, which they do not populate.
+@testset "regularization boundary solution propagation" begin
+    o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 16, nT2 = 8, SetFlipAngle = 180.0, Reg = "reginska", SaveRegParam = true, Threaded = false, Silent = true)
+    θ = DECAES.restructure(DECAES.default_epg_parameters(o), (; α = o.SetFlipAngle))
+    A = DECAES.epg_decay_basis(θ, DECAES.T2_component_times(o))
+    x = zeros(o.nT2)
+    x[3], x[6] = 0.4, 0.8
+    b = A * x
+    image = reshape(copy(b), 1, 1, 1, o.nTE)
+    maps, dist = DECAES.T2mapSEcorr(image, o)
+
+    @test maps["mu"][1] == 0
+    @test vec(dist) ≈ DECAES.lsqnonneg(A, b) rtol = 1e-10 atol = 1e-12
+end
+
+# The boundary returns are precisely the ones the regularized cache never writes, so the failure needs a reused workspace: a first voxel that populates the cache, then a second that must not read it.
+# Both boundaries here return a vector the cache does not own, μ = 0 the unregularized workspace and μ = ∞ the shared zero solution.
+@testset "regularization boundaries across a reused workspace" begin
+    boundary_opts(; kwargs...) = DECAES.mock_t2map_opts(Float64; MatrixSize = (2, 1, 1), nTE = 16, nT2 = 8, SetFlipAngle = 180.0, SaveRegParam = true, Threaded = false, Silent = true, kwargs...)
+    basis(o) = DECAES.epg_decay_basis(DECAES.restructure(DECAES.default_epg_parameters(o), (; α = o.SetFlipAngle)), DECAES.T2_component_times(o))
+    function peaks(o, i, j, wi, wj)
+        x = zeros(o.nT2)
+        x[i], x[j] = wi, wj
+        return x
+    end
+
+    # Regińska: an exactly-fit second voxel returns μ = 0 after a noisy first voxel leaves a regularized solution in the cache.
+    let o = boundary_opts(; Reg = "reginska")
+        A = basis(o)
+        b₁ = A * peaks(o, 2, 7, 0.9, 0.3) .+ 1e-2 .* sin.(1:o.nTE)
+        b₂ = A * peaks(o, 3, 6, 0.4, 0.8)
+        image = zeros(2, 1, 1, o.nTE)
+        image[1, 1, 1, :], image[2, 1, 1, :] = b₁, b₂
+        maps, dist = DECAES.T2mapSEcorr(image, o)
+
+        @test maps["mu"][1] > 0 # the first voxel must actually populate the cache
+        @test maps["mu"][2] == 0
+        @test dist[2, 1, 1, :] ≈ DECAES.lsqnonneg(A, b₂) rtol = 1e-10 atol = 1e-12
+        @test !(dist[2, 1, 1, :] ≈ dist[1, 1, 1, :]) # the leak this guards against
+    end
+
+    # MDP: scaling the second voxel down raises δ = √m · NoiseLevel / decay_scale past ‖b‖, which returns the shared zero solution.
+    let o = boundary_opts(; Reg = "mdp", NoiseLevel = 1e-2)
+        A = basis(o)
+        b₁ = A * peaks(o, 2, 7, 0.9, 0.3)
+        b₂ = 1e-6 .* (A * peaks(o, 3, 6, 0.4, 0.8))
+        image = zeros(2, 1, 1, o.nTE)
+        image[1, 1, 1, :], image[2, 1, 1, :] = b₁, b₂
+        maps, dist = DECAES.T2mapSEcorr(image, o)
+
+        @test isfinite(maps["mu"][1]) && maps["mu"][1] > 0
+        @test maps["mu"][2] == Inf
+        @test all(iszero, dist[2, 1, 1, :])
+    end
+end
+
+# Determinism across blocks: `reset_voxel_chains!` exists so that the deterministic block partition, not the worker count, fixes every warm-start chain.
+# The voxel count must exceed `default_blocksize()`, since a single block cannot exercise a chain that spans one.
+@testset "pipeline determinism (multi-block, thread count)" begin
+    o = DECAES.mock_t2map_opts(Float64; MatrixSize = (5, 5, 4), nTE = 32, nT2 = 40, Silent = true)
+    @test prod(o.MatrixSize) > DECAES.default_blocksize() # more than one block, or this proves nothing
+    img = DECAES.mock_image(o)
+    mserial, dserial = DECAES.redirect_to_devnull() do
+        return T2mapSEcorr(copy(img), DECAES.mock_t2map_opts(Float64; MatrixSize = (5, 5, 4), nTE = 32, nT2 = 40, Silent = true, Threaded = false))
+    end
+    mthreaded, dthreaded = DECAES.redirect_to_devnull() do
+        return T2mapSEcorr(copy(img), o)
+    end
+    @test isequal(dserial, dthreaded)
+    @test all(k -> isequal(mserial[k], mthreaded[k]), keys(mserial))
+end
+
 # Determinism: cross-voxel warm-start chains reset at block boundaries, so the pipeline output is a pure function of the input, independent of run and thread scheduling.
 # The suppressed differences are near-tie reselections at the KKT tolerance, so a tolerance test would hide a real nondeterminism bug; equality must be bitwise.
 @testset "pipeline determinism (run-to-run)" begin

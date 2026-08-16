@@ -448,13 +448,19 @@ end
 # No endpoint-inclusive design with `K₀` nodes has a smaller maximum gap, and at the flip-angle defaults the two planners agree exactly.
 function test_initialization_plan()
     plan(K, K₀) = DECAES.plan_initialize!(DECAES.DiscreteSurrogateSearcher([SVector{1, Float64}(k) for k in 1:K]); mineval = K₀, maxeval = K)
-    dyadic(K, K₀) = (state = DECAES.DiscreteSurrogateSearcher([SVector{1, Float64}(k) for k in 1:K]); p = empty!(state.plan); for d in 1:K₀
-        DECAES.plan_initialize!(p, DECAES.BoundingBox((K,)), d; mineval = K₀, maxeval = K)
-        length(p) >= K₀ && break
-    end; sort!(p))
+    function dyadic(K, K₀)
+        state = DECAES.DiscreteSurrogateSearcher([SVector{1, Float64}(k) for k in 1:K])
+        p = empty!(state.plan)
+        for d in 1:K₀
+            DECAES.plan_initialize!(p, DECAES.BoundingBox((K,)), d; mineval = K₀, maxeval = K)
+            length(p) >= K₀ && break
+        end
+        return sort!(p)
+    end
 
-    @test first.(Tuple.(plan(64, 5))) == [1, 16, 32, 48, 64] # flip-angle defaults: nRefAngles = 64, nRefAnglesMin = 5
+    @test first.(Tuple.(plan(64, 9))) == [1, 8, 16, 24, 32, 40, 48, 56, 64] # flip-angle defaults: nRefAngles = 64, nRefAnglesMin = 9
     @test plan(64, 5) == dyadic(64, 5)
+    @test plan(64, 9) == dyadic(64, 9)
 
     for K in 2:40, K₀ in 2:K
         j = first.(Tuple.(plan(K, K₀)))
