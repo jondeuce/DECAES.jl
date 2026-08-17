@@ -2,8 +2,8 @@ Random.seed!(0) # reproducible randomized tests
 
 # α-polish: the refinement of the flip-angle surrogate minimizer. The polish spends one true off-grid loss and gradient evaluation, minimizes both adjacent cubic Hermites, and returns the lex-minimum of true losses over the best evaluated node, α₀, and the candidate.
 # The gradient is the envelope-theorem derivative g = 2(∂A/∂α·x)ᵀ(Ax − b), valid because x is the NNLS minimizer at α.
-function alpha_polish_setup()
-    o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 48, nT2 = 40, nRefAngles = 16, nRefAnglesMin = 5, Silent = true)
+function alpha_polish_setup(::Type{T} = Float64) where {T}
+    o = DECAES.mock_t2map_opts(T; MatrixSize = (1, 1, 1), nTE = 48, nT2 = 40, nRefAngles = 16, nRefAnglesMin = 5, Silent = true)
     θ = DECAES.default_epg_parameters(o)
     T2t = DECAES.T2_component_times(o)
     function loss_true(α, b)
@@ -11,19 +11,19 @@ function alpha_polish_setup()
         x = DECAES.lsqnonneg(A, b)
         return sum(abs2, A * x - b)
     end
-    function make_signal(α_true, noise = 0.0)
+    function make_signal(α_true, noise = zero(T))
         A = DECAES.epg_decay_basis(DECAES.restructure(θ, (; α = α_true)), T2t)
-        x = zeros(o.nT2)
+        x = zeros(T, o.nT2)
         for _ in 1:rand(1:4)
-            x[rand(1:o.nT2)] += rand()
+            x[rand(1:o.nT2)] += rand(T)
         end
         b = A * x
         b ./= maximum(b)
-        noise > 0 && (b .= max.(b .+ noise .* randn(o.nTE), 0)) # noiseless signals never exercise the candidate-rejection path
+        noise > 0 && (b .= max.(b .+ T(noise) .* randn(T, o.nTE), 0)) # noiseless signals never exercise the candidate-rejection path
         return b
     end
     function build(b)
-        return DECAES.FlipAngleOptimizationWorkspace(o, zeros(o.nTE, o.nT2), copy(b))
+        return DECAES.FlipAngleOptimizationWorkspace(o, zeros(T, o.nTE, o.nT2), copy(b))
     end
     # The discrete search's own continuous proposal α₀, before any true off-grid evaluation. Mirrors the search prefix of `optimize_flip_angle!`.
     function surrogate_minimizer(w)
@@ -39,8 +39,9 @@ end
 
 function test_alpha_polish()
     o, loss_true, make_signal, build, surrogate_minimizer = alpha_polish_setup()
+    _, loss_true_D64, _, _, _ = alpha_polish_setup(Double64)
     for noise in (0.0, 0.02), _ in 1:20
-        b = make_signal(100.0 + 75.0 * rand(), noise)
+        b = make_signal(100 + 75 * rand(), noise)
 
         # The search is deterministic, so a fresh workspace reaching only the search prefix yields the α₀ the polished run started from
         α₀ = surrogate_minimizer(build(b))
@@ -55,16 +56,16 @@ function test_alpha_polish()
         @test loss_true(αp, b) <= (1 + 1e-10) * loss_true(α₀, b) + 1e-14
         @test 90 < αp <= 180 # noisy signals routinely minimize at the grid's upper endpoint
 
-        # Envelope-theorem soundness: the loss and gradient at α₀ match an independent NNLS solve and central differences of the true loss
-        if 100 < α₀ < 175
+        # Envelope-theorem soundness. Evaluated away from α₀ where f′ vanishes.
+        α = α₀ + rand((-1, 1)) * rand(1:5)
+        if 100 < α < 175
             wg = build(b)
             surrogate_minimizer(wg)
-            f₀, g₀ = DECAES.polish_loss_grad!(wg, α₀)
-            @test f₀ ≈ loss_true(α₀, b) rtol = 1e-6
+            f, g, _ = DECAES.polish_loss_grad!(wg, α)
+            @test f ≈ loss_true(α, b) rtol = 1e-6
 
-            h = 1e-4
-            g_fd = (loss_true(α₀ + h, b) - loss_true(α₀ - h, b)) / 2h
-            @test g₀ ≈ g_fd rtol = 5e-3 atol = 1e-6
+            h, b_D64 = Double64(1e-12), Double64.(b)
+            @test g ≈ (loss_true_D64(α + h, b_D64) - loss_true_D64(α - h, b_D64)) / 2h rtol = 1e-8
         end
     end
 end
@@ -94,7 +95,7 @@ end
 
 # At RefConAngle ≠ 180 the cosine series does not apply, so the polish builds A(α) by the EPG recurrence and takes derivative columns from the AD Jacobian on the support only.
 # That backend is a direct evaluation of the same model, so it must agree with central differences of the true loss and satisfy the same certificate.
-function test_alpha_polish_general_beta()
+function test_alpha_polish_general_refcon()
     for β in (120.0, 150.0, 175.0)
         o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 48, nT2 = 40, nRefAngles = 16, nRefAnglesMin = 5, RefConAngle = β, Silent = true)
         θ = DECAES.default_epg_parameters(o)
@@ -105,8 +106,16 @@ function test_alpha_polish_general_beta()
             return sum(abs2, A * DECAES.lsqnonneg(A, b) - b)
         end
 
+        # Differencing only, so the tolerance measures the AD gradient rather than the step size
+        o_D64 = DECAES.mock_t2map_opts(Double64; MatrixSize = (1, 1, 1), nTE = 48, nT2 = 40, nRefAngles = 16, nRefAnglesMin = 5, RefConAngle = β, Silent = true)
+        θ_D64, T2s_D64 = DECAES.default_epg_parameters(o_D64), DECAES.T2_component_times(o_D64)
+        function loss_true64(α, b)
+            A = DECAES.epg_decay_basis(DECAES.restructure(θ_D64, (; α)), T2s_D64)
+            return sum(abs2, A * DECAES.lsqnonneg(A, b) - b)
+        end
+
         for _ in 1:4
-            A = DECAES.epg_decay_basis(DECAES.restructure(θ, (; α = 100.0 + 75.0 * rand())), T2t)
+            A = DECAES.epg_decay_basis(DECAES.restructure(θ, (; α = 100 + 75 * rand())), T2t)
             x = zeros(o.nT2)
             for _ in 1:rand(1:4)
                 x[rand(1:o.nT2)] += rand()
@@ -123,21 +132,45 @@ function test_alpha_polish_general_beta()
             @test 90 < α̂ <= 180
             @test loss_true(α̂, b) <= (1 + 1e-10) * best_seen_loss(w) + 1e-14
 
-            # The AD envelope derivative matches central differences of the true loss
-            if 100 < α̂ < 175
-                f, g = DECAES.polish_loss_grad!(w, α̂)
-                @test f ≈ loss_true(α̂, b) rtol = 1e-6
-                h = 1e-4
-                @test g ≈ (loss_true(α̂ + h, b) - loss_true(α̂ - h, b)) / 2h rtol = 5e-3 atol = 1e-6
+            # The AD envelope derivative matches central differences of the true loss, evaluated away from α̂ where f′ does not vanish
+            α = α̂ + rand((-1, 1)) * rand(1:5)
+            if 100 < α < 175
+                f, g, _ = DECAES.polish_loss_grad!(w, α)
+                @test f ≈ loss_true(α, b) rtol = 1e-6
+                h, b_D64 = Double64(1e-12), Double64.(b)
+                @test g ≈ (loss_true64(α + h, b_D64) - loss_true64(α - h, b_D64)) / 2h rtol = 1e-8
             end
         end
     end
 end
 
+# The envelope second derivative comes from constrained variable projection, and its final −2qᵀG⁻¹q term is what distinguishes the profiled curvature from that of a frozen x.
+# Dropping that term would still pass a value/gradient check, so it is verified against central differences of the exact envelope gradient.
+function test_alpha_polish_hessian()
+    o, loss_true, make_signal, build, surrogate_minimizer = alpha_polish_setup()
+    _, _, _, build_D64, surrogate_minimizer_D64 = alpha_polish_setup(Double64)
+    for _ in 1:10
+        b = make_signal(100 + 75 * rand(), 0.02)
+        w = build(b)
+        α = surrogate_minimizer(w) + rand((-1, 1)) * rand(1:5) # away from the minimizer, where f′ and f″ are both order one
+        _, _, f″ = DECAES.polish_loss_grad!(w, α) # analytical, in Float64: this is the kernel under test
+
+        # Central difference of the exact gradient, which is itself an envelope quantity requiring a fresh solve at each point. Only the differencing runs in Double64.
+        h, b_D64 = Double64(1e-12), Double64.(b)
+        w⁺, w⁻ = build_D64(b_D64), build_D64(b_D64)
+        surrogate_minimizer_D64(w⁺)
+        surrogate_minimizer_D64(w⁻)
+        _, g⁺ = DECAES.polish_loss_grad!(w⁺, Double64(α) + h)
+        _, g⁻ = DECAES.polish_loss_grad!(w⁻, Double64(α) - h)
+        @test f″ ≈ (g⁺ - g⁻) / 2h rtol = 1e-8
+    end
+end
+
 @testset "α-polish" begin
     test_alpha_polish()
+    test_alpha_polish_hessian()
     test_alpha_polish_guard()
-    test_alpha_polish_general_beta()
+    test_alpha_polish_general_refcon()
 end
 
 # When the polish problem is already solved, the T2 stage skips its own unregularized solve and takes that state instead.
@@ -147,7 +180,7 @@ end
     θ, T2t = DECAES.default_epg_parameters(o), DECAES.T2_component_times(o)
     ncertified = 0
     for _ in 1:20
-        b = make_signal(100.0 + 75.0 * rand(), 0.02)
+        b = make_signal(100 + 75 * rand(), 0.02)
         w = build(b)
         DECAES.optimize_flip_angle!(w, o)
         DECAES.NNLS.issolved(w.α_polish_work.prob.nnls_work) || continue
@@ -165,8 +198,10 @@ end
     @test ncertified > 0 # the adopted path must actually be reached
 end
 
-# Boundary paths return their selected solution directly rather than through the regularized cache, which they do not populate.
-@testset "regularization boundary solution propagation" begin
+# The limiting returns μ = 0 and μ = ∞ carry their selected solution directly rather than through the regularized cache, which they never populate.
+# Here b = Ax lies exactly in the nonnegative span of A, so the unregularized fit is exact and Ψ = ‖Ax_μ − b‖²‖x_μ‖² already attains its global minimum of zero at μ = 0.
+# No positive balance point exists, and the selected solution is the unregularized one.
+@testset "limiting regularization solution propagation" begin
     o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 16, nT2 = 8, SetFlipAngle = 180.0, Reg = "reginska", SaveRegParam = true, Threaded = false, Silent = true)
     θ = DECAES.restructure(DECAES.default_epg_parameters(o), (; α = o.SetFlipAngle))
     A = DECAES.epg_decay_basis(θ, DECAES.T2_component_times(o))
@@ -180,10 +215,10 @@ end
     @test vec(dist) ≈ DECAES.lsqnonneg(A, b) rtol = 1e-10 atol = 1e-12
 end
 
-# The boundary returns are precisely the ones the regularized cache never writes, so the failure needs a reused workspace: a first voxel that populates the cache, then a second that must not read it.
-# Both boundaries here return a vector the cache does not own, μ = 0 the unregularized workspace and μ = ∞ the shared zero solution.
-@testset "regularization boundaries across a reused workspace" begin
-    boundary_opts(; kwargs...) = DECAES.mock_t2map_opts(Float64; MatrixSize = (2, 1, 1), nTE = 16, nT2 = 8, SetFlipAngle = 180.0, SaveRegParam = true, Threaded = false, Silent = true, kwargs...)
+# The limiting returns are precisely the ones the regularized cache never writes, so the failure needs a reused workspace: a first voxel that populates the cache, then a second that must not read it.
+# Each returns a vector the cache does not own, μ = 0 the unregularized workspace and μ = ∞ the shared zero solution.
+@testset "limiting regularization returns across a reused workspace" begin
+    limiting_opts(; kwargs...) = DECAES.mock_t2map_opts(Float64; MatrixSize = (2, 1, 1), nTE = 16, nT2 = 8, SetFlipAngle = 180.0, SaveRegParam = true, Threaded = false, Silent = true, kwargs...)
     basis(o) = DECAES.epg_decay_basis(DECAES.restructure(DECAES.default_epg_parameters(o), (; α = o.SetFlipAngle)), DECAES.T2_component_times(o))
     function peaks(o, i, j, wi, wj)
         x = zeros(o.nT2)
@@ -192,7 +227,7 @@ end
     end
 
     # Regińska: an exactly-fit second voxel returns μ = 0 after a noisy first voxel leaves a regularized solution in the cache.
-    let o = boundary_opts(; Reg = "reginska")
+    let o = limiting_opts(; Reg = "reginska")
         A = basis(o)
         b₁ = A * peaks(o, 2, 7, 0.9, 0.3) .+ 1e-2 .* sin.(1:o.nTE)
         b₂ = A * peaks(o, 3, 6, 0.4, 0.8)
@@ -207,7 +242,7 @@ end
     end
 
     # MDP: scaling the second voxel down raises δ = √m · NoiseLevel / decay_scale past ‖b‖, which returns the shared zero solution.
-    let o = boundary_opts(; Reg = "mdp", NoiseLevel = 1e-2)
+    let o = limiting_opts(; Reg = "mdp", NoiseLevel = 1e-2)
         A = basis(o)
         b₁ = A * peaks(o, 2, 7, 0.9, 0.3)
         b₂ = 1e-6 .* (A * peaks(o, 3, 6, 0.4, 0.8))

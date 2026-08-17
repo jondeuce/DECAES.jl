@@ -294,6 +294,16 @@ lsqnonneg_work(A::AbstractMatrix, b::AbstractVector) = NNLSProblem(A, b)
 lsqnonneg!(work::NNLSProblem) = solve!(work)
 lsqnonneg!(work::NNLSProblem{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T} = solve!(work, A, b)
 
+# Unregularized counterpart of the `NNLS*RegProblem` types: no μ to select, so the workspace carries only the problem and the source its solve may be seeded from or adopted whole.
+struct NNLSUnregProblem{T, W <: NNLSProblem{T}, S}
+    nnls_prob::W
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
+end
+NNLSUnregProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T} = NNLSUnregProblem(NNLSProblem(A, b), nnls_prob_seed)
+
+@inline solution(work::NNLSUnregProblem) = solution(work.nnls_prob)
+lsqnonneg!(work::NNLSUnregProblem) = (solve_unreg!(work.nnls_prob, work.nnls_prob_seed); solution(work))
+
 ####
 #### Lazy wrappers for LHS matrix and RHS vector for augmented Tikhonov-regularized NNLS problems
 ####
@@ -1377,7 +1387,7 @@ function lsqnonneg_reginska!(
     else
         b, gb = a, ga
         while true
-            b = a + max(h, ga / 2)
+            b = a + max(T(h), ga / 2)
             gb, res²_b = g_and_res²(b)
             gb <= 0 && break
             res²_b > res²_max && return (; x = x_unreg, mu = zero(T), chi2 = one(T)) # no balance point exists

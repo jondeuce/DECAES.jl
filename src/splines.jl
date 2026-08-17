@@ -869,10 +869,8 @@ function converged(::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D
     return any(widths(box) .<= 1)
 end
 
-# A proposal is resolved when the surrogate data bracketing it are true evaluations: either it coincides with an evaluated node, or it lies in a cell whose corners are all evaluated.
-# `minimal_bounding_box` descends only through fully evaluated splittable boxes, so the box it returns is evaluated exactly when it is the unit cell around `x` and every corner is known.
-# The search must test this on the freshly recomputed proposal. Testing the box built for the preceding proposal lets the search return a point that moved into another unresolved cell, leaving the polish to interpolate from data it never evaluated.
 function is_resolved(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T}
+    # Resolved is defined as: `x` is an evaluated node, or sits in a cell whose corners are all evaluated. `minimal_bounding_box` only searches the dyadic hierarchy, so it can miss a qualifying cell and call a resolved `x` unresolved, causing the search to evaluate more points than necessary.
     box = minimal_bounding_box(state, x)
     is_evaluated(state, box) && return true
     return any(I -> @inbounds(state.seen[I] && state.grid[I] == x), corners(box))

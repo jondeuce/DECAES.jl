@@ -210,19 +210,28 @@ function test_EPG_cosine_basis_gradient()
         θ = mock_θ(DECAES.EPGConstantFlipAngleOptions, T, ETL)
         T2_times = nT2 == 1 ? T[0.1] : exp10.(range(T(-2), T(0); length = nT2))
         decay_basis_work = DECAES.EPGCosineSeriesBasis(θ, T2_times)
-        Bp, Bm, B = zeros(T, ETL, nT2), zeros(T, ETL, nT2), zeros(T, ETL, nT2)
-        Acol, dAcol = zeros(T, ETL), zeros(T, ETL)
-        h = T(1e-5)
+        Acol, dAcol, ddAcol = zeros(T, ETL), zeros(T, ETL), zeros(T, ETL)
+
+        # The differencing alone runs in Double64, so the reference carries no cancellation error and the tolerance measures the Float64 kernel rather than the step size.
+        D64 = Double64
+        θ64 = mock_θ(DECAES.EPGConstantFlipAngleOptions, D64, ETL)
+        work64 = DECAES.EPGCosineSeriesBasis(θ64, D64.(T2_times))
+        B⁺, B⁻, B, B⁺₂, B⁻₂ = (zeros(D64, ETL, nT2) for _ in 1:5)
+        Bf = zeros(T, ETL, nT2)
+        h₁, h₂ = D64(1e-12), D64(1e-8)
         for α in T[91.3, 120.7, 150.2, 164.9, 179.1]
-            DECAES.epg_decay_basis!(Bp, decay_basis_work, α + h)
-            DECAES.epg_decay_basis!(Bm, decay_basis_work, α - h)
-            DECAES.epg_decay_basis!(B, decay_basis_work, α) # reference value basis; also leaves `c` current at α
-            DECAES.cosine_∂α_features!(decay_basis_work, α) # `sn` current at α (precondition of the single-column kernel)
+            α64 = D64(α)
+            DECAES.epg_decay_basis!(B⁺, work64, α64 + h₁)
+            DECAES.epg_decay_basis!(B⁻, work64, α64 - h₁)
+            DECAES.epg_decay_basis!(B⁺₂, work64, α64 + h₂)
+            DECAES.epg_decay_basis!(B⁻₂, work64, α64 - h₂)
+            DECAES.epg_decay_basis!(B, work64, α64)
+            DECAES.epg_decay_basis!(Bf, decay_basis_work, α) # Float64 value reference; also leaves `c`, `sn`, `cn` current at α for the column kernel
             for j in 1:nT2
-                DECAES.epg_decay_basis_∂α_col!(Acol, dAcol, decay_basis_work, α, j)
-                @test isapprox(Acol, B[:, j]; rtol = cbrt(eps(T))^2, atol = 10 * eps(T)) # value column matches the full-basis kernel
-                dfd = (Bp[:, j] .- Bm[:, j]) ./ (2h)
-                @test isapprox(dAcol, dfd; rtol = T(1e-5), atol = T(1e-8) * norm(dfd)) # derivative column matches finite differences
+                DECAES.epg_decay_basis_∂α_col!(Acol, dAcol, ddAcol, decay_basis_work, α, j)
+                @test isapprox(Acol, Bf[:, j]; rtol = 1e-14, atol = 10 * eps(T)) # value column matches the full-basis kernel
+                @test isapprox(dAcol, T.((B⁺[:, j] .- B⁻[:, j]) ./ 2h₁); rtol = 1e-10, atol = 1e-14) # derivative column
+                @test isapprox(ddAcol, T.((B⁺₂[:, j] .- 2 .* B[:, j] .+ B⁻₂[:, j]) ./ h₂^2); rtol = 1e-8, atol = 1e-12) # second-derivative column
             end
         end
     end

@@ -343,15 +343,19 @@ function epg_grid_model(o::T2mapOptions{T}, θ::EPGParameterization{T}) where {T
     return (; As, ∇As, Gs)
 end
 
-# Scratch for the α-polish: the NNLS problem at the polish point, plus the value and derivative columns written one support column at a time.
+# Scratch for the α-polish: the NNLS problem at the polish point, plus the columns and accumulators the envelope derivatives are assembled from one support column at a time.
 struct AlphaPolishWorkspace{T, P}
     prob::P
     Acol::Vector{T} # ETL, value column, discarded
-    ∂col::Vector{T} # ETL, α-derivative column
+    ∂Acol::Vector{T} # ETL, α-derivative column
+    ∂²Acol::Vector{T} # ETL, α-second-derivative column
+    ∂Ax::Vector{T} # ETL, Σ_j x_j ∂A[:, j]
+    ∂²Ax::Vector{T} # ETL, Σ_j x_j ∂²A[:, j]
+    q::Vector{T} # nT2, one entry per passive column; see `polish_grad_hess`
 end
 function AlphaPolishWorkspace(decay_basis::Matrix{T}, decay_data::Vector{T}) where {T}
-    ETL = size(decay_basis, 1)
-    return AlphaPolishWorkspace(NNLSProblem(decay_basis, decay_data), zeros(T, ETL), zeros(T, ETL))
+    ETL, nT2 = size(decay_basis)
+    return AlphaPolishWorkspace(NNLSProblem(decay_basis, decay_data), (zeros(T, ETL) for _ in 1:5)..., zeros(T, nT2))
 end
 
 # =========================================================
@@ -415,13 +419,20 @@ function polish_flip_angle!(work::FlipAngleOptimizationWorkspace{T}) where {T}
     # `bisection_search` returns either a resolved proposal or an exhausted budget, and the budget equals the grid length, so exhausting it evaluates every node and resolves every cell. Either way the Hermite data below are true evaluations.
     @assert seen[i] && seen[i+1] "bisection_search returned an unresolved proposal"
 
-    # True loss and envelope gradient at α₀
-    f₀, g₀ = polish_loss_grad!(work, α₀)
+    # True loss and envelope derivatives at α₀
+    f₀, g₀, f″₀ = polish_loss_grad!(work, α₀)
 
     # Minimize both adjacent cubics and take the lower prediction. Ties break toward the candidate nearer α₀ and then the larger angle, hence the negated sort key.
     αl, ũl = minimize(CubicHermiteInterpolator(first(grid[i]), α₀, u[i], f₀, first(∇u[i]), g₀))
     αr, ũr = minimize(CubicHermiteInterpolator(α₀, first(grid[i+1]), f₀, u[i+1], g₀, first(∇u[i+1])))
     α₁ = -min((ũl, abs(αl - α₀), -αl), (ũr, abs(αr - α₀), -αr))[3]
+
+    # A Newton step on the true loss uses only local data at α₀, so it is not limited by the cell width the cubics interpolate over. It is taken when the local model is a genuine minimum and stays in the cell; otherwise the cubic proposal stands.
+    # Either way the candidate is only a proposal: the selection below certifies it against true losses, so an overshoot is rejected rather than accepted.
+    if f″₀ > 0
+        αₙ = α₀ - g₀ / f″₀
+        first(grid[i]) < αₙ < first(grid[i+1]) && (α₁ = αₙ)
+    end
 
     # One true evaluation at the proposal. A candidate that returns α₀ or lands on a bracket endpoint already has an exact loss, so it costs no basis build and no solve.
     f₁, solved_at_α₁ = α₁ == α₀ ? (f₀, false) :
@@ -442,34 +453,57 @@ function polish_flip_angle!(work::FlipAngleOptimizationWorkspace{T}) where {T}
 end
 
 # Build A(α) into `work.decay_basis`. At `RefConAngle == 180` the finite cosine series evaluates the basis exactly and cheaply; otherwise the EPG recurrence evaluates the same model directly, which is slower but not an approximation.
-polish_basis!(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCosineSeriesBasis{T}, α::T) where {T} = epg_decay_basis!(work.decay_basis, cosine, α) # leaves `c` current for `cosine_∂α_features!`
+polish_basis!(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCosineSeriesBasis{T}, α::T) where {T} = epg_decay_basis!(work.decay_basis, cosine, α) # leaves the trigonometric features current at α
 polish_basis!(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T) where {T} = epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA{T}[α])
 
-# Envelope gradient −2·Σ_j x_j⟨∂A[:, j], r⟩, over the support only: a full derivative tensor is never needed off grid.
-function polish_grad(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCosineSeriesBasis{T}, α::T, x, r, support) where {T}
-    (; Acol, ∂col) = work.α_polish_work # `Acol` is discarded; the value column is already in `decay_basis`
-    cosine_∂α_features!(cosine, α)
+# Envelope derivatives of f(α) = min_{x≥0} ‖A(α)x − b‖², over the support only: a full derivative tensor is never needed off grid.
+# With r = b − Ax, ∂A and ∂²A the α-derivatives of the passive columns A_P, and G = A_PᵀA_P, constrained variable projection gives
+#   f′ = −2·rᵀ∂Ax,   f″ = 2‖∂Ax‖² − 2·rᵀ∂²Ax − 2·qᵀG⁻¹q,   q = A_Pᵀ(∂Ax) − ∂Aᵀr.
+# The final term is what distinguishes the profiled curvature from that of a frozen x, and it is available for the cost of one triangular solve: the NNLS solve already left the factor G = UᵀU, so qᵀG⁻¹q = ‖U⁻ᵀq‖².
+# Valid where the passive set and the response signs are constant, which is why the returned angle is certified against true losses rather than trusted.
+# Returns `f″ = NaN` when second derivatives are unavailable, which the caller reads as "no Newton candidate".
+function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCosineSeriesBasis{T}, α::T, x, r, idx) where {T}
+    (; decay_basis, α_polish_work) = work
+    (; Acol, ∂Acol, ∂²Acol, ∂Ax, ∂²Ax, q) = α_polish_work # `Acol` is discarded; the value column is already in `decay_basis`
+    wk = α_polish_work.prob.nnls_work
+    fill!(∂Ax, zero(T))
+    fill!(∂²Ax, zero(T))
     g = zero(T)
-    @inbounds for j in support
-        epg_decay_basis_∂α_col!(Acol, ∂col, cosine, α, j)
-        g = muladd(x[j], dot(∂col, r), g)
+    @inbounds for (t, j) in enumerate(idx)
+        epg_decay_basis_∂α_col!(Acol, ∂Acol, ∂²Acol, cosine, α, j)
+        xⱼ, dⱼ = x[j], zero(T)
+        @simd for i in eachindex(∂Ax)
+            ∂ᵢ = ∂Acol[i]
+            ∂Ax[i] = muladd(xⱼ, ∂ᵢ, ∂Ax[i])
+            ∂²Ax[i] = muladd(xⱼ, ∂²Acol[i], ∂²Ax[i])
+            dⱼ = muladd(∂ᵢ, r[i], dⱼ)
+        end
+        q[t] = -dⱼ # the A_Pᵀ(∂Ax) half needs the whole ∂Ax, so it is added in the second pass below
+        g = muladd(xⱼ, dⱼ, g)
     end
-    return -2 * g
+    p = length(idx) # A_Pᵀ(∂Ax) needs ∂Ax whole, so it cannot fuse into the pass above
+    @inbounds @views for (t, j) in enumerate(idx)
+        q[t] += dot(decay_basis[:, j], ∂Ax)
+    end
+    qₚ = @views q[1:p] # the solve is in place, and `q` is not read again
+    NNLS.solve_triangular_system!(qₚ, NNLS.choleskyfactor(wk, Val(:U)), p, Val(true))
+    return -2 * g, 2 * (dot(∂Ax, ∂Ax) - dot(r, ∂²Ax) - dot(qₚ, qₚ))
 end
 
-function polish_grad(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T, x, r, support) where {T}
+function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T, x, r, idx) where {T}
     (; decay_basis_set, α_polish_work) = work
-    (; Acol, ∂col) = α_polish_work
-    θα, ∇col = restructure(decay_basis_set.θ, (; α)), reshape(∂col, :, 1) # the Jacobian writes a matrix, which `∂col` supplies without a second buffer
+    (; Acol, ∂Acol) = α_polish_work
+    θα, ∇col = restructure(decay_basis_set.θ, (; α)), reshape(∂Acol, :, 1) # the Jacobian writes a matrix, which `∂Acol` supplies without a second buffer
     g = zero(T)
-    @inbounds for j in support
+    @inbounds for j in idx
         decay_basis_set.epg_jac_functor!(∇col, Acol, restructure(θα, (; T2 = decay_basis_set.T2_times[j])))
-        g = muladd(x[j], dot(∂col, r), g)
+        g = muladd(x[j], dot(∂Acol, r), g)
     end
-    return -2 * g
+    return -2 * g, T(NaN) # no curvature, so the caller keeps the Hermite proposal
+    #TODO Supply ∂²A here so general β also gets a Newton candidate. Nested AD over the EPG recurrence would work but a hand-written α-derivative would be far cheaper.
 end
 
-# Polish evaluation: build the basis A(α), solve NNLS warm-started from the search's final active set, which is the exact support at the search's minimizer, and return the true loss ‖A(α)x − b‖².
+# Polish evaluation: build the basis A(α), solve NNLS warm-started from the search's final active set, which is the support at the last grid node the search solved rather than at its continuous proposal, and return the true loss ‖A(α)x − b‖².
 # Leaves `work.decay_basis` holding A(α) and the solve's residual current, so `polish_loss_grad!` can extend it with the envelope gradient.
 function polish_loss!(work::FlipAngleOptimizationWorkspace{T}, α::T) where {T}
     (; nnls_search_prob, decay_basis_work, α_polish_work) = work
@@ -479,14 +513,15 @@ function polish_loss!(work::FlipAngleOptimizationWorkspace{T}, α::T) where {T}
     return dot(r, r)
 end
 
-# Polish evaluation with the envelope-theorem derivative, for the bracket endpoint the Hermite step interpolates from.
+# Polish evaluation with the envelope-theorem derivatives, for the bracket endpoint the Hermite step interpolates from.
 function polish_loss_grad!(work::FlipAngleOptimizationWorkspace{T}, α₀::T) where {T}
     f₀ = polish_loss!(work, α₀)
 
     # The solve left r = b − A_P x_P current, so the support is already known; scanning all n columns for positivity would rediscover it.
     wk = work.α_polish_work.prob.nnls_work
     x, r = NNLS.solution(wk), NNLS.residual(wk)
-    return f₀, polish_grad(work, work.decay_basis_work, α₀, x, r, NNLS.components(wk))
+    g₀, f″₀ = polish_grad_hess(work, work.decay_basis_work, α₀, x, r, NNLS.components(wk))
+    return f₀, g₀, f″₀
 end
 
 # Source the T2 stage draws its unregularized solve from; see `NNLSUnregSource`.
@@ -570,7 +605,7 @@ function regularization_method(o::T2mapOptions)
     return reg
 end
 
-nnls_workspace(::NoRegularization, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, args...) where {T} = lsqnonneg_work(decay_basis, decay_data)
+nnls_workspace(::NoRegularization, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = NNLSUnregProblem(decay_basis, decay_data, nnls_prob_seed)
 nnls_workspace(::LCurve, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_lcurve_work(decay_basis, decay_data, nnls_prob_seed)
 nnls_workspace(::GCV, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, dof_interpolator) where {T} = lsqnonneg_gcv_work(decay_basis, decay_data, nnls_prob_seed, dof_interpolator)
 nnls_workspace(::Reginska, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_reginska_work(decay_basis, decay_data, nnls_prob_seed)
