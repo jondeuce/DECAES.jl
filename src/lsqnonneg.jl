@@ -1308,7 +1308,7 @@ where ``\mu`` is chosen by Regińska's minimum-product criterion[1]:
 \mu = \underset{\nu > 0}{\operatorname{argmin}}\; \Psi(\nu) = ||AX_{\nu} - b||_2^2 \, ||X_{\nu}||_2^2,
 ```
 
-taking the smallest local minimizer of ``\Psi``. Stationarity of ``\Psi`` is equivalent to the log-log L-curve tangent slope equalling ``-1``, so the selected ``\mu`` is the balance point ``||AX_{\mu} - b|| = \mu ||X_{\mu}||`` nearest the L-curve corner; unlike curvature maximization the criterion is parameter-free and cannot collapse into the near-vertical ``\mu \to 0`` tail. The smallest local minimizer is required because ``\Psi \to 0`` trivially as ``\mu \to \infty`` (``X_{\mu} \to 0``); if ``\Psi`` has no interior local minimum on the search window (degenerate voxels), the unregularized solution is returned with ``\mu = 0``.
+taking the smallest local minimizer of ``\Psi``. Stationarity of ``\Psi`` is equivalent to the log-log L-curve tangent slope equalling ``-1``, so the selected ``\mu`` is the balance point ``||AX_{\mu} - b|| = \mu ||X_{\mu}||`` nearest the L-curve corner; unlike curvature maximization the criterion is parameter-free and cannot collapse into the near-vertical ``\mu \to 0`` tail. The smallest local minimizer is required because ``\Psi \to 0`` trivially as ``\mu \to \infty`` (``X_{\mu} \to 0``); if ``\Psi`` has no interior local minimum, the unregularized solution is returned with ``\mu = 0``.
 
 # Arguments
 
@@ -1332,43 +1332,59 @@ end
 lsqnonneg_reginska_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSReginskaRegProblem(A, b, nnls_prob_seed)
 
 function lsqnonneg_reginska!(
-    work::NNLSReginskaRegProblem{T}; bounds = (-8.0, 2.0), atol = 1e-4, ngrid::Int = 21, # ngrid sets the scan resolution h = (logμ₊ - logμ₋)/(ngrid - 1); the leap scan certifies the leftmost crossing at this resolution with far fewer than ngrid evaluations
+    work::NNLSReginskaRegProblem{T}; atol = 1e-4, h = 0.5, # h floors the leap, which both bounds the step count and sets the resolution at which a crossing pair can be stepped over; see the scan below
 ) where {T}
-    logμ₋, logμ₊ = T.(bounds)
     reset_cache!(work.nnls_prob_smooth_cache)
 
     # Evaluations run on the Gram fast path (one warm-chained μ-solve yields both ‖Ax-b‖² and ‖x‖²); the final solution is recomputed exactly at the selected μ
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
-    if res²_min == 0 || ncomponents(work.nnls_prob) == 0
+
+    # An exact unregularized fit makes the minimum-product criterion zero at μ = 0. The test must be relative, not res²_min == 0, since a computed exact fit leaves a residual at the roundoff level and Φ(0) would then be a ratio of noise.
+    # A consistent system solved in floating point leaves ‖r‖ ≲ ε·κ₂(A)·‖b‖, so res² ≤ eps(T)·‖b‖² admits relative residual norms up to √ε, which is that bound at κ₂(A) ≃ ε^(-1/2).
+    # The threshold is a conditioning assumption, not a free tolerance: a basis conditioned worse than ε^(-1/2) needs it loosened.
+    b_nrm² = sum(abs2, work.b)
+    if res²_min <= eps(T) * b_nrm² || ncomponents(work.nnls_prob) == 0
         return (; x = x_unreg, mu = zero(T), chi2 = one(T))
     end
+    η²_unreg = sum(abs2, x_unreg)
     nnls_gram_setup!(work)
 
     # g(logμ) = log|S| = log res² − log ‖x‖² − 2 logμ, the log-log L-curve tangent slope magnitude (continuous in μ; derivative-free from one Gram evaluation).
     # Ψ = res²·‖x‖² satisfies dlogΨ/dlogμ = ξ'·(1 + S) with ξ' ≥ 0, so the smallest local minimizer of Ψ is exactly the leftmost downward crossing g = 0, i.e. the balance point |S| = 1.
-    function g(logμ)
+    # `res²` is returned alongside, since it also certifies when the scan may stop; see below.
+    function g_and_res²(logμ)
         res², η² = nnls_gram_losses!(work, exp(logμ))
-        return η² == 0 ? T(+Inf) : log(res²) - log(η²) - 2 * logμ
+        return (η² == 0 ? T(+Inf) : log(res²) - log(η²) - 2 * logμ), res²
     end
+    g(logμ) = first(g_and_res²(logμ))
 
     # |S| → ∞ at BOTH ends (μ → 0: μ²‖x‖² → 0 with res² → res²_min > 0; μ → ∞: ‖x‖² ~ C/μ⁴), so |S| = 1 generically has an even number of crossings and the leftmost one must be certified by a left-to-right scan (early-exit at the first sign change; each evaluation is one cheap warm-chained Gram solve).
     # Monotonicity of res²(μ) (nondecreasing) and ‖x‖² (nonincreasing) gives g(b) ≥ g(a) − 2(b − a) for b > a with no smoothness assumption, so from a point with g(a) > 0 the first crossing lies at or beyond a + g(a)/2: the scan leaps by max(h, g(a)/2) - the same crossing-detection resolution h as a uniform scan where g is small, exponentially fewer evaluations where g is large (g ≈ −2 logμ + O(1) as μ → 0).
-    # No crossing by the right edge, or |S| ≤ 1 already at the left edge (flat degenerate voxels), means no balance point exists: return the unregularized solution.
-    h = (logμ₊ - logμ₋) / (ngrid - 1)
-    a, ga = logμ₋, g(logμ₋)
-    ga <= 0 && return (; x = x_unreg, mu = zero(T), chi2 = one(T))
-    b, gb = a, ga
-    while b < logμ₊
-        b = min(a + max(h, ga / 2), logμ₊)
-        gb = g(b)
-        gb <= 0 && break
-        a, ga = b, gb
-    end
-    gb > 0 && return (; x = x_unreg, mu = zero(T), chi2 = one(T))
+    # Φ(μ) = ‖Ax(μ) − b‖/‖x(μ)‖ is nondecreasing, since res² is nondecreasing and ‖x‖² nonincreasing, and the balance points are exactly its fixed points, so every one of them satisfies μ ≥ Φ(0): the scan starts there and needs no lower bound.
+    # Each leap logμ -> logμ + g/2 is one step of that same fixed-point map, so starting at Φ(0) is starting the iteration at its natural first iterate rather than climbing to it from an arbitrary constant.
+    # That map alone cannot bracket a crossing: g > 0 is Φ(μ) > μ, and applying the nondecreasing Φ gives Φ(Φ(μ)) ≥ Φ(μ), i.e. g ≥ 0 at every iterate, so the scan approaches the crossing from below and passes it only when g underflows.
+    # Flooring the leap at h advances logμ by at least h per step, bounding the scan at (logμ_cert − logμ₀)/h steps and handing Brent a genuine sign change. The overstep past the certified interval (a, a + g/2) is then at most h − g/2.
+    # It needs no upper bound either: complementarity gives bᵀr = res² + μ²‖x‖², which at a balance point reads bᵀr = 2·res², and Cauchy-Schwarz then bounds res² ≤ ‖b‖²/4 there.
+    # Since res² is nondecreasing, the first scan point exceeding ‖b‖²/4 proves no balance point lies at or beyond it, and res² → ‖b‖² guarantees that test eventually fires.
+    logμ₀ = (log(res²_min) - log(η²_unreg)) / 2
+    res²_max = b_nrm² / 4
 
-    logmu_final, _ = brent_root(g, a, b, ga, gb; xatol = T(atol), xrtol = T(0), ftol = T(0), maxiters = 100)
+    a, ga = logμ₀, g(logμ₀)
+    if ga <= 0
+        logmu_final = logμ₀ # Φ(0) is itself the balance point, to within the resolution of one Gram evaluation
+    else
+        b, gb = a, ga
+        while true
+            b = a + max(h, ga / 2)
+            gb, res²_b = g_and_res²(b)
+            gb <= 0 && break
+            res²_b > res²_max && return (; x = x_unreg, mu = zero(T), chi2 = one(T)) # no balance point exists
+            a, ga = b, gb
+        end
+        logmu_final, _ = brent_root(g, a, b, ga, gb; xatol = T(atol), xrtol = T(0), ftol = T(0), maxiters = 100)
+    end
 
     mu_final = exp(logmu_final)
     x_final = nnls_gram_polish_solve!(work, mu_final)
@@ -1386,7 +1402,7 @@ struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0
     b::Tb # decay curve data
     m::Int # number of rows of A
     n::Int # number of columns of A
-    γ²::Vector{T} # squared singular values of A, filled by `spectrum!`
+    γ²::Vector{T} # squared singular values of A, i.e. nonzero eigenvalues of A'A
     spectrum_work::W0 # workspace for computing the singular values of A
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
@@ -1406,7 +1422,7 @@ end
 
 @inline solution(work::NNLSGCVRegProblem) = solution(work.nnls_prob_smooth_cache[])
 @inline ncomponents(work::NNLSGCVRegProblem) = ncomponents(work.nnls_prob_smooth_cache[])
-@inline function spectrum!(work::NNLSGCVRegProblem, A = work.A)
+@inline function LinearAlgebra.eigvals!(work::NNLSGCVRegProblem, A = work.A)
     γ = svdvals!(work.spectrum_work, A)
     work.γ² .= abs2.(γ)
     return work.γ²
@@ -1469,13 +1485,11 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
     # Precompute the squared singular values, which are all dof(μ) needs; the opt-in alternative interpolates dof across the α-grid slices per evaluation instead (see `gcv_dof_interp`)
     dof_interpolator = work.dof_interpolator
     use_dof_interp = dof_interpolator !== nothing && GCV_INTERP_DOF[] && method === :brent
-    use_dof_interp || spectrum!(work)
-
-    # Non-zero lower bound for GCV to avoid log(0) in the objective function
-    gcv_low = gcv_lower_bound(work)
+    use_dof_interp || eigvals!(work)
 
     # The gradient-free search (:brent, the default) evaluates the GCV objective 𝒢(μ) = ‖Ax(μ)-b‖² / dof(μ)² through the Gram fast path (dof is μ-cheap from the singular values; only the residual needs an NNLS solve).
-    # The gradient-based methods keep the exact μ-cache solves, since ∇resnorm_sq needs the QR triangular factor.
+    # The gradient-based methods keep the exact μ-cache solves, since ∇resnorm_sq needs the QR triangular factor. Forfeiting the Gram fast path roughly doubles the cost per evaluation, which is why :brent is the default.
+    # Curvature would not repay it either, since 𝒢 is C¹ but not C²: dof is smooth in μ, and d‖x‖²/dμ = 2Σⱼ xⱼx'ⱼ survives a passive-set change because the component entering or leaving does so at xⱼ = 0, whereas d²‖x‖²/dμ² carries (x'ⱼ)² and jumps.
     # The final solution is always recomputed exactly.
     use_gram = method === :brent
     reset_cache!(work.nnls_prob_smooth_cache)
@@ -1483,23 +1497,15 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
         nnls_gram_setup!(work)
     end
-    function log𝒢(logμ)
-        if use_gram
-            μ = exp(logμ)
-            res², _ = nnls_gram_losses!(work, μ)
-            dof = use_dof_interp ? gcv_dof_interp(dof_interpolator[1], dof_interpolator[2][], work.m, work.n, μ) : gcv_dof(work.m, work.n, work.γ², μ)
-            𝒢 = res² / dof^2
-        else
-            𝒢 = gcv!(work, logμ)
-        end
-        𝒢 = max(𝒢, gcv_low)
-        return log(𝒢)
+    # 𝒢 is minimized directly. It is strictly positive for μ > 0 and b ≠ 0: KKT complementarity gives xᵀd = 0, hence (Ax)ᵀr = μ²‖x‖², and with Ax = b − r this is bᵀr = res² + μ²‖x‖², so res² = 0 would force x = 0 and then b = 0.
+    function 𝒢(logμ)
+        use_gram || return gcv!(work, logμ)
+        μ = exp(logμ)
+        res², _ = nnls_gram_losses!(work, μ)
+        dof = use_dof_interp ? gcv_dof_interp(dof_interpolator[1], dof_interpolator[2][], work.m, work.n, μ) : gcv_dof(work.m, work.n, work.γ², μ)
+        return res² / dof^2
     end
-    function log𝒢_and_∇log𝒢(logμ)
-        𝒢, ∇𝒢 = gcv_and_∇gcv!(work, logμ)
-        𝒢 = max(𝒢, gcv_low)
-        return log(𝒢), ∇𝒢 / 𝒢
-    end
+    𝒢_and_∇𝒢(logμ) = gcv_and_dgcv_dlogμ!(work, logμ)
 
     if method === :nlopt
         # alg = :LN_COBYLA # local, gradient-free, linear approximation of objective
@@ -1515,25 +1521,25 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         opt.xtol_rel      = Float64(rtol)
         opt.ftol_abs      = 0.0
         opt.ftol_rel      = 0.0
-        opt.min_objective = (logμ, ∇logμ) -> @inbounds Float64(log𝒢(T(logμ[1])))
+        opt.min_objective = (logμ, ∇logμ) -> @inbounds Float64(𝒢(T(logμ[1])))
         minf, minx, ret   = NLopt.optimize(opt, Float64[logμ₀])
         logmu_final       = @inbounds T(minx[1])
-        log𝒢_final        = T(minf)
+        𝒢_final           = T(minf)
     elseif method === :brent
         # Gradient-free golden-section/parabolic search over the full bounds. The GCV minimization is bracket-shrink bound (convergence needs the bracket width, not just a good point, to reach `atol`), so a warm start cannot speed it without narrowing the bounds a priori (sacrificing determinism, risking collapse).
-        logmu_final, log𝒢_final = brent_minimize(log𝒢, logμ₋, logμ₊; xrtol = T(rtol), xatol = T(atol), maxiters)
+        logmu_final, 𝒢_final = brent_minimize(𝒢, logμ₋, logμ₊; xrtol = T(rtol), xatol = T(atol), maxiters)
     elseif method === :brent_newton
-        log𝒢₋, ∇log𝒢₋ = log𝒢_and_∇log𝒢(logμ₋)
-        log𝒢₊, ∇log𝒢₊ = log𝒢_and_∇log𝒢(logμ₊)
-        logμ_bdry, log𝒢_bdry = log𝒢₋ < log𝒢₊ ? (logμ₋, log𝒢₋) : (logμ₊, log𝒢₊)
-        if ∇log𝒢₋ < 0 && ∇log𝒢₊ > 0
-            log𝒢₀, ∇log𝒢₀ = log𝒢_and_∇log𝒢(logμ₀)
-            logmu_final, log𝒢_final = brent_newton_minimize(log𝒢_and_∇log𝒢, logμ₋, logμ₊, logμ₀, log𝒢₀, ∇log𝒢₀; xrtol = T(rtol), xatol = T(atol), maxiters)
+        𝒢₋, ∇𝒢₋ = 𝒢_and_∇𝒢(logμ₋)
+        𝒢₊, ∇𝒢₊ = 𝒢_and_∇𝒢(logμ₊)
+        logμ_bdry, 𝒢_bdry = 𝒢₋ < 𝒢₊ ? (logμ₋, 𝒢₋) : (logμ₊, 𝒢₊)
+        if ∇𝒢₋ < 0 && ∇𝒢₊ > 0
+            𝒢₀, ∇𝒢₀ = 𝒢_and_∇𝒢(logμ₀)
+            logmu_final, 𝒢_final = brent_newton_minimize(𝒢_and_∇𝒢, logμ₋, logμ₊, logμ₀, 𝒢₀, ∇𝒢₀; xrtol = T(rtol), xatol = T(atol), maxiters)
         else
-            logmu_final, log𝒢_final = logμ_bdry, log𝒢_bdry
+            logmu_final, 𝒢_final = logμ_bdry, 𝒢_bdry
         end
-        if log𝒢_bdry < log𝒢_final
-            logmu_final, log𝒢_final = logμ_bdry, log𝒢_bdry
+        if 𝒢_bdry < 𝒢_final
+            logmu_final, 𝒢_final = logμ_bdry, 𝒢_bdry
         end
     else
         error("Unknown minimization method: $method")
@@ -1556,7 +1562,7 @@ end
 # where here L = Id and λ = μ.
 function gcv!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
-    #   NOTE: assumes `spectrum!(work)` has been called and that `work.γ²` is ready
+    #   NOTE: assumes `eigvals!(work)` has been called and that `work.γ²` is ready
     (; m, n, γ²) = work
 
     # Solve regularized NNLS problem
@@ -1572,9 +1578,9 @@ function gcv!(work::NNLSGCVRegProblem, logμ)
     return gcv
 end
 
-function gcv_and_∇gcv!(work::NNLSGCVRegProblem, logμ)
+function gcv_and_dgcv_dlogμ!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
-    #   NOTE: assumes `spectrum!(work)` has been called and that `work.γ²` is ready
+    #   NOTE: assumes `eigvals!(work)` has been called and that `work.γ²` is ready
     (; m, n, γ²) = work
 
     # Solve regularized NNLS problem
@@ -1587,72 +1593,13 @@ function gcv_and_∇gcv!(work::NNLSGCVRegProblem, logμ)
     dof = gcv_dof(m, n, γ², μ) # degrees of freedom
     gcv = res² / dof^2
 
-    # Compute derivative: ∂/∂λ [resnorm_sq(λ) / dof(λ)^2] = ∇resnorm_sq(λ) / dof(λ)^2 - 2 * resnorm_sq(λ) * ∇dof(λ) / dof(λ)^3
+    # Compute the derivative with respect to logμ
     ∇res² = ∇resnorm_sq(cache)
     ∇dof = ∇gcv_dof(m, n, γ², μ)
-    ∇gcv = (∇res² - 2 * res² * ∇dof / dof) / dof^2
+    ∇gcv = μ * (∇res² - 2 * res² * ∇dof / dof) / dof^2
 
     return gcv, ∇gcv
 end
-
-# Non-trivial lower bound of the GCV function
-#   GCV(μ) = ||A * x(μ) - b||^2 / 𝒯(μ)^2
-# where 𝒯(μ) is the "degrees of freedom" of the regularized system
-#   𝒯(μ) = tr(I - A * (A'A + μ²I)⁻¹ * A')
-#        ∈ [max(m - n, 0), m)
-# The trivial lower bound GCV(μ) = 0 can (sometimes) be achieved when μ = 0 if ||A * x(μ = 0) - b|| = 0.
-# Let ε > 0 be the RMSE threshold below which we consider the solution exact, i.e. bound ||A * x(μ) - b|| / √m >= ε.
-# Then, GCV(μ) = ||A * x(μ) - b||^2 / 𝒯(μ)^2 >= (√m * ε)^2 / m^2 = ε^2 / m
-gcv_lower_bound(m::Int, n::Int, ε::Real) = ε^2 / m
-gcv_lower_bound(work::NNLSGCVRegProblem{T}, ε::T = eps(T)) where {T} = gcv_lower_bound(work.m, work.n, ε)
-
-#=
-# Equivalent direct method (less efficient)
-function gcv!(work::NNLSGCVRegProblem, logμ, ::Val{extract_subproblem} = Val(false)) where {extract_subproblem}
-    # Unpack buffers
-    (; A, b, m, n, Aμ, A_buf, Aᵀ_buf, AᵀA_buf) = work
-
-    # Solve regularized NNLS problem and record residual norm ||A * x(μ) - b||^2
-    μ = exp(logμ)
-    solve!(work.nnls_prob_smooth_cache, μ)
-    res² = resnorm_sq(work.nnls_prob_smooth_cache[])
-
-    if extract_subproblem
-        # Extract equivalent unconstrained least squares subproblem from NNLS problem
-        # by extracting columns of A which correspond to nonzero components of x(μ)
-        idx = NNLS.components(work.nnls_prob_smooth_cache[].nnls_prob.nnls_work)
-        n′ = length(idx)
-        A′ = reshape(view(A_buf, 1:m*n′), m, n′)
-        At′ = reshape(view(Aᵀ_buf, 1:n′*m), n′, m)
-        AtA′ = reshape(view(AᵀA_buf, 1:n′*n′), n′, n′)
-        copyto!(A′, view(A, :, idx))
-    else
-        # Use full matrix
-        A′ = A
-        At′ = Aᵀ_buf
-        AtA′ = AᵀA_buf
-    end
-
-    # Efficient compution of
-    #   Aμ = A * (A'A + μ²I)⁻¹ * A'
-    # where the matrices have sizes
-    #   A: (m, n), Aμ: (m, m), At: (n, m), AtA: (n, n)
-    mul!(AtA′, A′', A′) # A'A
-    @simd for i in 1:n
-        AtA′[i, i] += μ^2 # A'A + μ²I
-    end
-    ldiv!(At′, cholesky!(Symmetric(AtA′)), A′') # (A'A + μ²I)⁻¹ * A'
-    mul!(Aμ, A′, At′) # A * (A'A + μ²I)⁻¹ * A'
-
-    # Return Generalized cross-validation. See equations 27 and 32 in
-    #   Hansen, P.C., 1992. Analysis of Discrete Ill-Posed Problems by Means of the L-Curve. SIAM Review, 34(4), 561-580
-    #   https://doi.org/10.1137/1034115
-    dof = m - tr(Aμ) # tr(I - Aμ) = m - tr(Aμ) for m x m matrix Aμ; can be considered as the "degrees of freedom" (Hansen, 1992)
-    gcv = res² / dof^2 # ||A * x(μ) - b||^2 / tr(I - Aμ)^2
-
-    return gcv
-end
-=#
 
 # Equation (27) from Hansen et al. 1992 (https://epubs.siam.org/doi/10.1137/1034115), specialized for L = identity:
 #
@@ -1672,7 +1619,7 @@ gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = gcv_dof(size(A)..., svdvals(A) 
 
 # DOF derivative w.r.t. the flip angle α: dof = max(m−n, 0) + Σᵢ λ²/(γᵢ²+λ²) and so ∂dof/∂α = Σᵢ [−λ²/(γᵢ²+λ²)²]·dγᵢ²/dα, where dγᵢ²/dα = 2σᵢ·uᵢᵀ(∂A/∂α)vᵢ is the analytic α-derivative of the squared singular values supplied by `dγ²`.
 # The derivative ∂dof/∂α is smooth through branch crossings, since dof is a symmetric spectral function.
-function gcv_ddof_dα(m::Int, n::Int, γ²::AbstractVector{T}, dγ²::AbstractVector{T}, λ::T) where {T}
+function dgcv_dof_dα(m::Int, n::Int, γ²::AbstractVector{T}, dγ²::AbstractVector{T}, λ::T) where {T}
     ∂dof = zero(T)
     λ² = abs2(λ)
     @simd for i in eachindex(γ², dγ²)
@@ -1683,7 +1630,7 @@ end
 
 # GCV dof(μ) at flip angle α, cubic-Hermite interpolated in α between the bracketing grid slices of `interp`, clamped to the grid range.
 # The dof is interpolated directly: sorted singular value curves σᵢ(α) kink (C⁰) where branches cross, so interpolating γ caps the accuracy at the kink scale.
-# The dof itself, dof(μ, α) = max(m − n, 0) + μ²·tr((A(α)ᵀA(α) + μ²I)⁻¹), is a symmetric function of the spectrum and hence analytic in α, so cubic Hermite with the analytic ∂dof/∂α (`gcv_ddof_dα`) is kink-free and O(h⁴) accurate.
+# The dof itself, dof(μ, α) = max(m − n, 0) + μ²·tr((A(α)ᵀA(α) + μ²I)⁻¹), is a symmetric function of the spectrum and hence analytic in α, so cubic Hermite with the analytic ∂dof/∂α (`dgcv_dof_dα`) is kink-free and O(h⁴) accurate.
 function gcv_dof_interp(interp::GriddedSpectrumInterpolator{T}, α::T, m::Int, n::Int, μ::T) where {T}
     (; αs, γ², dγ², ready) = interp
     i = clamp(searchsortedlast(αs, α), 1, length(αs) - 1)
@@ -1691,7 +1638,7 @@ function gcv_dof_interp(interp::GriddedSpectrumInterpolator{T}, α::T, m::Int, n
     ready[i+1] || gridded_spectrum_slice!(interp, i + 1)
     γl, γr = view(γ², :, i), view(γ², :, i + 1)
     dl, dr = view(dγ², :, i), view(dγ², :, i + 1)
-    spl = CubicHermiteInterpolator(αs[i], αs[i+1], gcv_dof(m, n, γl, μ), gcv_dof(m, n, γr, μ), gcv_ddof_dα(m, n, γl, dl, μ), gcv_ddof_dα(m, n, γr, dr, μ))
+    spl = CubicHermiteInterpolator(αs[i], αs[i+1], gcv_dof(m, n, γl, μ), gcv_dof(m, n, γr, μ), dgcv_dof_dα(m, n, γl, dl, μ), dgcv_dof_dα(m, n, γr, dr, μ))
     return spl(α, Val(:nearest)) # clamp to the bracketing cell
 end
 

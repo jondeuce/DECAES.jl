@@ -645,7 +645,7 @@ function test_lsqnonneg_gcv(m, n)
     μ = exp(logμ)
 
     # Precompute the squared singular values for GCV
-    DECAES.spectrum!(work)
+    LinearAlgebra.eigvals!(work)
     @test work.γ² == svdvals(A) .^ 2
 
     # Test GCV degrees of freedom
@@ -659,9 +659,9 @@ function test_lsqnonneg_gcv(m, n)
     @test gcv ≈ res² / DECAES.gcv_dof(A, μ)^2
 
     # Test GCV gradient function
-    _gcv, ∇gcv = DECAES.gcv_and_∇gcv!(work, logμ) # gcv_and_∇gcv! calls `DECAES.solve!` internally
+    _gcv, ∇gcv = DECAES.gcv_and_dgcv_dlogμ!(work, logμ) # gcv_and_dgcv_dlogμ! calls `DECAES.solve!` internally
     @test _gcv == gcv # primals should match exactly
-    @test ∇gcv ≈ ∇logfinitediff(_logμ -> DECAES.gcv!(work, _logμ), logμ, 1e-6) atol = 1e-3 rtol = 1e-3
+    @test ∇gcv ≈ ∇finitediff(_logμ -> DECAES.gcv!(work, _logμ), logμ, 1e-6) atol = 1e-3 rtol = 1e-3
 
     # GCV minimization methods shouldn't fail for any m, n
     @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :brent).mu)
@@ -677,6 +677,16 @@ function test_lsqnonneg_gcv(m, n)
     # Test inference
     @inferred DECAES.gcv!(work, logμ)
     @inferred DECAES.lsqnonneg_gcv!(work)
+end
+
+@testset "GCV log-parameter gradient" begin
+    A = [1.0 0.2 0.1; 0.1 2.0 0.3; 0.2 0.1 4.0; 0.3 0.2 0.1]
+    b = [1.0, 0.8, 0.6, 0.4]
+    work = DECAES.lsqnonneg_gcv_work(A, b)
+    LinearAlgebra.eigvals!(work)
+    logμ = log(0.2)
+    _, ∇gcv = DECAES.gcv_and_dgcv_dlogμ!(work, logμ)
+    @test ∇gcv ≈ ∇finitediff(_logμ -> DECAES.gcv!(work, _logμ), logμ, 1e-8) rtol = 1e-7
 end
 
 @testset "lsqnonneg_gcv" begin
@@ -776,6 +786,46 @@ end
 @testset "lsqnonneg_mdp" begin
     for (m, n) in NNLS_SIZES
         lsqnonneg_mdp_tests(m, n)
+    end
+end
+
+# Scale covariance. Since ‖sAx − sb‖² + μ²‖x‖² = s²(‖Ax − b‖² + (μ/s)²‖x‖²), the Tikhonov path satisfies x_μ(sA, sb) = x_{μ/s}(A, b), so every selection rule must return s·μ* with x* and chi2 unchanged.
+# The rules themselves are covariant: chi2 and mdp equate quantities that both scale as s², and the Regińska and L-curve criteria are invariant under the translation s induces on the log-log curve.
+# Only the search does not follow: `lsqnonneg_gcv` and `lsqnonneg_lcurve` minimize over a hardcoded logμ window, which no scaling moves, so they fail once s carries μ* outside it.
+@testset "scale covariance of reg methods" begin
+    m, n = 48, 40
+    t = range(0, 2; length = m)
+    τ = exp10.(range(-1.5, 0.5; length = n))
+    A = [exp(-tᵢ / τⱼ) for tᵢ in t, τⱼ in τ]
+    x = zeros(n)
+    x[[4, 17, 31]] .= (0.2, 0.5, 0.3)
+    b = A * x .+ 1e-3 .* sin.(1:m)
+    δ = 1e-2 * norm(b) # scaled alongside A and b, since the discrepancy level is a residual norm
+
+    # `rtol` is the accuracy of each search, not of the invariant: chi2 and mdp locate their root to a tolerance in logμ, which leaves a relative drift of that size in μ.
+    methods = (
+        ("unreg", 1e-12, (A, b, s) -> (; mu = 0.0, x = DECAES.lsqnonneg(A, b), chi2 = 1.0)),
+        ("chi2", 5e-3, (A, b, s) -> DECAES.lsqnonneg_chi2(A, b, 1.02)),
+        ("mdp", 5e-3, (A, b, s) -> DECAES.lsqnonneg_mdp(A, b, s * δ)),
+        ("reginska", 1e-9, (A, b, s) -> DECAES.lsqnonneg_reginska(A, b)),
+    )
+    for (name, rtol, f) in methods
+        r = f(A, b, 1.0)
+        for scale in (1e-9, 1e9)
+            rs = f(scale .* A, scale .* b, scale)
+            @test rs.mu / scale ≈ r.mu rtol = rtol atol = 1e-14
+            @test rs.x ≈ r.x rtol = rtol atol = 1e-12
+            @test rs.chi2 ≈ r.chi2 rtol = rtol
+        end
+    end
+
+    # Broken by the hardcoded logμ windows, not by the criteria. These become `Unexpectedly Pass` the moment the windows are replaced by scale-adaptive brackets.
+    for (name, f) in (("lcurve", DECAES.lsqnonneg_lcurve), ("gcv", DECAES.lsqnonneg_gcv))
+        r = f(A, b)
+        for scale in (1e-9, 1e9)
+            rs = f(scale .* A, scale .* b)
+            @test_broken isapprox(rs.mu / scale, r.mu; rtol = 1e-3, atol = 1e-14) && isapprox(rs.x, r.x; rtol = 1e-3, atol = 1e-12)
+        end
     end
 end
 
