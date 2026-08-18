@@ -24,7 +24,7 @@ Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(Any[st
 function T2Maps(opts::T2mapOptions{T}) where {T}
     θ = default_epg_parameters(opts)
     T2_times = T2_component_times(opts)
-    decay_basis_set = opts.SetFlipAngle === nothing ? epg_grid_model(opts, θ).As : epg_decay_basis(restructure(θ, (; α = T(opts.SetFlipAngle))), T2_times)
+    decay_basis_set = opts.SetFlipAngle === nothing ? epg_grid_model(opts, θ).As : epg_decay_basis(restructure(θ, (; α = deg2rad(opts.SetFlipAngle))), T2_times)
     return T2Maps(;
         # Misc. processing parameters
         echotimes     = convert(Array{T}, opts.TE .* (1:opts.nTE)),
@@ -374,7 +374,7 @@ struct FlipAngleOptimizationWorkspace{T, B, E, S, R, C, P}
 end
 
 function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{T}, decay_data::Vector{T}, global_buffer = global_buffer_maker(o)) where {T}
-    α = Ref(o.SetFlipAngle === nothing ? T(NaN) : o.SetFlipAngle)
+    α = Ref(o.SetFlipAngle === nothing ? T(NaN) : deg2rad(o.SetFlipAngle))
     θ = default_epg_parameters(o)
     decay_basis_set = EPGBasisSetFunctor(o, θ, Val((:α,)))
 
@@ -465,7 +465,7 @@ polish_basis!(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T) where {
 function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCosineSeriesBasis{T}, α::T, x, r, idx) where {T}
     (; decay_basis, α_polish_work) = work
     (; Acol, ∂Acol, ∂²Acol, ∂Ax, ∂²Ax, q) = α_polish_work # `Acol` is discarded; the value column is already in `decay_basis`
-    wk = α_polish_work.prob.nnls_work
+    (; nnls_work) = α_polish_work.prob
     fill!(∂Ax, zero(T))
     fill!(∂²Ax, zero(T))
     g = zero(T)
@@ -486,7 +486,7 @@ function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCo
         q[t] += dot(decay_basis[:, j], ∂Ax)
     end
     qₚ = @views q[1:p] # the solve is in place, and `q` is not read again
-    NNLS.solve_triangular_system!(qₚ, NNLS.choleskyfactor(wk, Val(:U)), p, Val(true))
+    NNLS.solve_triangular_system!(qₚ, NNLS.choleskyfactor(nnls_work, Val(:U)), p, Val(true))
     return -2 * g, 2 * (dot(∂Ax, ∂Ax) - dot(r, ∂²Ax) - dot(qₚ, qₚ))
 end
 
@@ -518,9 +518,9 @@ function polish_loss_grad!(work::FlipAngleOptimizationWorkspace{T}, α₀::T) wh
     f₀ = polish_loss!(work, α₀)
 
     # The solve left r = b − A_P x_P current, so the support is already known; scanning all n columns for positivity would rediscover it.
-    wk = work.α_polish_work.prob.nnls_work
-    x, r = NNLS.solution(wk), NNLS.residual(wk)
-    g₀, f″₀ = polish_grad_hess(work, work.decay_basis_work, α₀, x, r, NNLS.components(wk))
+    (; nnls_work) = work.α_polish_work.prob
+    x, r = NNLS.solution(nnls_work), NNLS.residual(nnls_work)
+    g₀, f″₀ = polish_grad_hess(work, work.decay_basis_work, α₀, x, r, NNLS.components(nnls_work))
     return f₀, g₀, f″₀
 end
 
@@ -533,11 +533,11 @@ unreg_source(work::FlipAngleOptimizationWorkspace) = work.α_polish_work === not
 # Every caller reaches here through the Hermite surrogate, which is constructed together with the polish workspace.
 function seed_downstream_from_node!(work::FlipAngleOptimizationWorkspace, j::Int)
     (; seen_idx, seen_nsetp) = work.nnls_search_prob
-    wk = work.α_polish_work.prob.nnls_work
+    (; nnls_work) = work.α_polish_work.prob
     @inbounds for t in 1:seen_nsetp[j]
-        wk.idx[t] = seen_idx[t, j]
+        nnls_work.idx[t] = seen_idx[t, j]
     end
-    wk.nsetp[] = seen_nsetp[j]
+    nnls_work.nsetp[] = seen_nsetp[j]
     return nothing
 end
 

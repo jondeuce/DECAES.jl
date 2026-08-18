@@ -164,6 +164,24 @@ function test_alpha_polish_hessian()
     end
 end
 
+@testset "reconstructed EPG bases from outputs are consistent" begin
+    for αdeg in (50.0, 90.0, 165.0, 180.0)
+        o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 32, nT2 = 20, SetFlipAngle = αdeg, SaveNNLSBasis = true, Silent = true)
+        img = DECAES.mock_image(o)
+        maps, _ = DECAES.redirect_to_devnull() do
+            return DECAES.T2mapSEcorr(img, o)
+        end
+        @test maps["alpha"][1] ≈ αdeg
+        θ = DECAES.restructure(DECAES.default_epg_parameters(o), (; α = deg2rad(αdeg)))
+        @test maps["decaybasisset"] ≈ DECAES.epg_decay_basis(θ, DECAES.T2_component_times(o))
+    end
+end
+
+@testset "EPGdecaycurve constructors are consistent" begin
+    @test DECAES.EPGdecaycurve(32, 165.0, 9e-3, 50e-3, 1.0, 150.0) == DECAES.EPGdecaycurve(DECAES.EPGOptions((; ETL = 32, α = deg2rad(165.0), TE = 9e-3, T2 = 50e-3, T1 = 1.0, β = deg2rad(150.0))))
+    @test DECAES.EPGdecaycurve(32, 165.0, 9e-3, 50e-3, 1.0) == DECAES.EPGdecaycurve(DECAES.EPGConstantFlipAngleOptions((; ETL = 32, α = deg2rad(165.0), TE = 9e-3, T2 = 50e-3, T1 = 1.0)))
+end
+
 @testset "α-polish" begin
     test_alpha_polish()
     test_alpha_polish_hessian()
@@ -181,17 +199,18 @@ end
         b = make_signal(deg2rad(100 + 75 * rand()), 0.02)
         w = build(b)
         DECAES.optimize_flip_angle!(w, o)
-        DECAES.NNLS.issolved(w.α_polish_work.prob.nnls_work) || continue
+
+        (; nnls_work) = w.α_polish_work.prob
+        DECAES.NNLS.issolved(nnls_work) || continue
         ncertified += 1
 
         @test w.decay_basis ≈ DECAES.epg_decay_basis(DECAES.restructure(θ, (; α = w.α[])), T2t)
 
-        wk = w.α_polish_work.prob.nnls_work
         x = DECAES.lsqnonneg(w.decay_basis, b)
-        @test DECAES.NNLS.solution(wk) ≈ x rtol = 1e-10
-        @test DECAES.NNLS.residual(wk) ≈ b - w.decay_basis * x rtol = 1e-10 atol = 1e-14
-        @test DECAES.NNLS.residualnorm(wk) ≈ norm(b - w.decay_basis * x) rtol = 1e-10
-        @test sort(DECAES.NNLS.components(wk)) == findall(>(0), x)
+        @test DECAES.NNLS.solution(nnls_work) ≈ x rtol = 1e-10
+        @test DECAES.NNLS.residual(nnls_work) ≈ b - w.decay_basis * x rtol = 1e-10 atol = 1e-14
+        @test DECAES.NNLS.residualnorm(nnls_work) ≈ norm(b - w.decay_basis * x) rtol = 1e-10
+        @test sort(DECAES.NNLS.components(nnls_work)) == findall(>(0), x)
     end
     @test ncertified > 0 # the adopted path must actually be reached
 end
@@ -201,7 +220,7 @@ end
 # No positive balance point exists, and the selected solution is the unregularized one.
 @testset "limiting regularization solution propagation" begin
     o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 16, nT2 = 8, SetFlipAngle = 180.0, Reg = "reginska", SaveRegParam = true, Threaded = false, Silent = true)
-    θ = DECAES.restructure(DECAES.default_epg_parameters(o), (; α = o.SetFlipAngle))
+    θ = DECAES.restructure(DECAES.default_epg_parameters(o), (; α = deg2rad(o.SetFlipAngle)))
     A = DECAES.epg_decay_basis(θ, DECAES.T2_component_times(o))
     x = zeros(o.nT2)
     x[3], x[6] = 0.4, 0.8
@@ -217,7 +236,7 @@ end
 # Each returns a vector the cache does not own, μ = 0 the unregularized workspace and μ = ∞ the shared zero solution.
 @testset "limiting regularization returns across a reused workspace" begin
     limiting_opts(; kwargs...) = DECAES.mock_t2map_opts(Float64; MatrixSize = (2, 1, 1), nTE = 16, nT2 = 8, SetFlipAngle = 180.0, SaveRegParam = true, Threaded = false, Silent = true, kwargs...)
-    basis(o) = DECAES.epg_decay_basis(DECAES.restructure(DECAES.default_epg_parameters(o), (; α = o.SetFlipAngle)), DECAES.T2_component_times(o))
+    basis(o) = DECAES.epg_decay_basis(DECAES.restructure(DECAES.default_epg_parameters(o), (; α = deg2rad(o.SetFlipAngle))), DECAES.T2_component_times(o))
     function peaks(o, i, j, wi, wj)
         x = zeros(o.nT2)
         x[i], x[j] = wi, wj

@@ -578,8 +578,8 @@ end
 function nnls_gram_setup!(work)
     gp = work.nnls_gram
     NNLS.load!(gp, work.A, work.b)
-    wk = work.nnls_prob.nnls_work
-    NNLS.set_active!(gp, work.A, wk.idx, NNLS.ncomponents(wk))
+    (; nnls_work) = work.nnls_prob
+    NNLS.set_active!(gp, work.A, nnls_work.idx, NNLS.ncomponents(nnls_work))
     return gp
 end
 
@@ -591,8 +591,8 @@ function nnls_gram_losses!(work, μ::T) where {T}
     if isnan(res²)
         solve!(work.nnls_prob_smooth_cache, μ)
         cache = work.nnls_prob_smooth_cache[]
-        wk = cache.nnls_prob.nnls_work
-        NNLS.set_active!(gp, work.A, wk.idx, NNLS.ncomponents(wk))
+        (; nnls_work) = cache.nnls_prob
+        NNLS.set_active!(gp, work.A, nnls_work.idx, NNLS.ncomponents(nnls_work))
         return resnorm_sq(cache), seminorm_sq(cache)
     end
     return res², NNLS.seminorm_sq(gp)

@@ -416,10 +416,10 @@ end
 
 # MATLAB spline optimization performs global optimization by sampling the spline
 # fit to data (X, Y) at points X[1]:0.001:X[end], and uses the minimum value.
-function spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1))
+function spline_opt_legacy(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1), step = deg2rad(0.001))
     spl = make_spline(X, Y; deg_spline)
     knots = Dierckx.get_knots(spl)
-    xs = knots[1]:eltype(knots)(0.001):knots[end] # from MATLAB version
+    xs = knots[1]:eltype(knots)(step):knots[end] # from MATLAB version
     x, y = xs[1], spl(xs[1])
     for (i, xᵢ) in enumerate(xs)
         (i == 1) && continue
@@ -1115,11 +1115,11 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) wh
     end
 
     # Record the active set for future warm starts; each grid point is evaluated at most once per search, so no overwrite occurs.
-    wk = nnls_work.nnls_work
-    ns = NNLS.ncomponents(wk)
+    work = nnls_work.nnls_work
+    ns = NNLS.ncomponents(work)
     seen_nsetp[lin] = ns
     @inbounds for t in 1:ns
-        seen_idx[t, lin] = wk.idx[t]
+        seen_idx[t, lin] = work.idx[t]
     end
     seen_stamp[lin] = voxel[]
     push!(seen_pts, I)
@@ -1132,14 +1132,14 @@ end
 # accumulating that as one dot product per support column avoids rebuilding the residual, materializing ∂A_P x_P, and scanning all n columns for positivity.
 function ∇loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; ∇As, nnls_work) = prob
-    wk = nnls_work.nnls_work
-    r = NNLS.residual(wk)
-    x = NNLS.solution(wk)
-    m, p = size(∇As, 1), NNLS.ncomponents(wk)
+    work = nnls_work.nnls_work
+    r = NNLS.residual(work)
+    x = NNLS.solution(work)
+    m, p = size(∇As, 1), NNLS.ncomponents(work)
     ∇u = ntuple(D) do d
         s = zero(T)
         @inbounds for t in 1:p
-            j = wk.idx[t]
+            j = work.idx[t]
             sj = zero(T)
             @simd for i in 1:m
                 sj = muladd(∇As[i, j, d, I], r[i], sj)
@@ -1168,14 +1168,14 @@ function loss_gram!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D
     NNLS.solve!(nnls_gram, G, m) || return false
 
     # Scatter the results into the NNLS workspace; the residual norm is computed from the exact m-space residual r = b − A_P x_P
-    wk = nnls_work.nnls_work
+    work = nnls_work.nnls_work
     p = nnls_gram.np[]
-    fill!(wk.x, zero(T))
+    fill!(work.x, zero(T))
     @inbounds for t in 1:p
-        wk.x[nnls_gram.P[t]] = nnls_gram.xp[t]
-        wk.idx[t] = nnls_gram.P[t]
+        work.x[nnls_gram.P[t]] = nnls_gram.xp[t]
+        work.idx[t] = nnls_gram.P[t]
     end
-    r = wk.r
+    r = work.r
     @inbounds @simd ivdep for i in 1:m
         r[i] = b[i]
     end
@@ -1201,10 +1201,10 @@ function loss_gram!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D
             res² = muladd(r[i], r[i], res²)
         end
     end
-    wk.rnorm[] = sqrt(res²)
-    wk.nsetp[] = p
-    wk.mode[] = 0
-    wk.solved[] = true
+    work.rnorm[] = sqrt(res²)
+    work.nsetp[] = p
+    work.mode[] = 0
+    work.solved[] = true
     return true
 end
 
@@ -1271,8 +1271,8 @@ function mock_surrogate_search_problem(
     opts::T2mapOptions{T},
     ::Val{D},
     ::Val{ETL};
-    alphas = range(50, 180; length = opts.nRefAngles),
-    betas = range(50, 180; length = opts.nRefAngles),
+    alphas = range(deg2rad(50.0), π; length = opts.nRefAngles),
+    betas = range(deg2rad(50.0), π; length = opts.nRefAngles),
 ) where {D, T, ETL}
 
     # Mock CPMG image
@@ -1290,7 +1290,7 @@ function mock_surrogate_search_problem(
         @inbounds for j in 1:opts.nT2
             θαs = D == 1 ?
                   restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]])) :
-                  restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]], β = alphas[Iαs[2]]))
+                  restructure(θ, (T2 = T2s[j], α = alphas[Iαs[1]], β = betas[Iαs[2]]))
             @views j!(∇As[:, j, :, Iαs], As[:, j, Iαs], θαs)
         end
     end
