@@ -13,10 +13,10 @@ Analyzes T2 distributions produced by [`T2mapSEcorr`](@ref) to produce data maps
 
   - `maps`: a dictionary containing the following 3D data maps as fields:
 
-      + `"sfr"`: small pool fraction, e.g. myelin water fraction (`MatrixSize` 3D array)
-      + `"sgm"`: small pool geometric mean T2 (`MatrixSize` 3D array)
-      + `"mfr"`: medium pool fraction, e.g. intra/extracellular water fraction (`MatrixSize` 3D array)
-      + `"mgm"`: medium pool geometric mean T2 (`MatrixSize` 3D array)
+      + `"sfr"`: small pool fraction, e.g. myelin water fraction (Units: none, in [0, 1]) (`MatrixSize` 3D array)
+      + `"sgm"`: small pool geometric mean T2 (Units: time, matching `T2Range`) (`MatrixSize` 3D array)
+      + `"mfr"`: medium pool fraction, e.g. intra/extracellular water fraction (Units: none, in [0, 1]) (`MatrixSize` 3D array)
+      + `"mgm"`: medium pool geometric mean T2 (Units: time, matching `T2Range`) (`MatrixSize` 3D array)
 
 # Examples
 

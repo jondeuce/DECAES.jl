@@ -28,9 +28,9 @@ const EPG_TestOptionTypes = (
 #### Test parameter constructors
 ####
 
-mock_θ(::Type{DECAES.EPGOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGOptions((; ETL, α = T(165.0), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0), β = T(150.0)))
-mock_θ(::Type{DECAES.EPGConstantFlipAngleOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGConstantFlipAngleOptions((; ETL, α = T(165.0), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0)))
-mock_θ(::Type{DECAES.EPGIncreasingFlipAnglesOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGIncreasingFlipAnglesOptions((; ETL, α = T(165.0), α1 = T(165.0), α2 = T(140.0), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0)))
+mock_θ(::Type{DECAES.EPGOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGOptions((; ETL, α = deg2rad(T(165.0)), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0), β = deg2rad(T(150.0))))
+mock_θ(::Type{DECAES.EPGConstantFlipAngleOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGConstantFlipAngleOptions((; ETL, α = deg2rad(T(165.0)), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0)))
+mock_θ(::Type{DECAES.EPGIncreasingFlipAnglesOptions}, ::Type{T}, ETL::Int) where {T} = DECAES.EPGIncreasingFlipAnglesOptions((; ETL, α = deg2rad(T(165.0)), α1 = deg2rad(T(165.0)), α2 = deg2rad(T(140.0)), TE = T(39e-3), T2 = T(1.1), T1 = T(151.0)))
 
 supports(work, θ) = applicable(DECAES.epg_decay_curve!, DECAES.decaycurve(work), work, θ)
 
@@ -95,15 +95,15 @@ function test_EPG_algorithm_consistency(; verbose = false)
 
     for T in (Float32, Float64)
         for ETL in (4, 5, 6, 7)
-            α  = T(165.0)
+            α = deg2rad(T(165.0))
             TE = T(39e-3)
             T2 = T(1.1)
             T1 = T(151.0)
 
-            # EPGOptions with β=180 represents constant train
-            θ_opt = DECAES.EPGOptions((; ETL, α, TE, T2, T1, β = T(180.0)))
+            # EPGOptions with β = π represents a constant train
+            θ_opt = DECAES.EPGOptions((; ETL, α, TE, T2, T1, β = T(π)))
             θ_cst = DECAES.EPGConstantFlipAngleOptions((; ETL, α, TE, T2, T1))
-            θ_inc = DECAES.EPGIncreasingFlipAnglesOptions((; ETL, α, α1 = T(180.0), α2 = T(180.0), TE, T2, T1))
+            θ_inc = DECAES.EPGIncreasingFlipAnglesOptions((; ETL, α, α1 = T(π), α2 = T(π), TE, T2, T1))
 
             w_ref = DECAES.EPGWork_Basic_Cplx(T, ETL)
             @test supports(w_ref, θ_opt)
@@ -123,11 +123,11 @@ function test_EPG_algorithm_consistency(; verbose = false)
 end
 
 function test_EPGOptions()
-    θ = DECAES.EPGOptions((; ETL = 10, α = 169.0, TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = 176.0))
+    θ = DECAES.EPGOptions((; ETL = 10, α = deg2rad(169.0), TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = deg2rad(176.0)))
 
     @testset "basics" begin
-        @test Tuple(θ) == (10, 169.0, 9.0e-3, 10.1e-3, 0.98, 176.0)
-        @test NamedTuple(θ) == (; ETL = 10, α = 169.0, TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = 176.0)
+        @test Tuple(θ) == (10, deg2rad(169.0), 9.0e-3, 10.1e-3, 0.98, deg2rad(176.0))
+        @test NamedTuple(θ) == (; ETL = 10, α = deg2rad(169.0), TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = deg2rad(176.0))
     end
 
     @testset "destructure/restructure" begin
@@ -142,7 +142,7 @@ end
 function test_EPGFunctor()
     T = Float64
     ETL = 8
-    θ = DECAES.EPGOptions((; ETL, α = 169.0, TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = 176.0))
+    θ = DECAES.EPGOptions((; ETL, α = deg2rad(169.0), TE = 9.0e-3, T2 = 10.1e-3, T1 = 0.98, β = deg2rad(176.0)))
     fun! = DECAES.EPGFunctor(θ, Val((:α, :T2)))
     jac! = DECAES.EPGJacobianFunctor(θ, Val((:α, :T2)))
 
@@ -197,8 +197,8 @@ function test_EPG_cosine_basis()
         basis_cos = zeros(T, ETL, nT2)
         work_ref = DECAES.EPGdecaycurve_work(θ)
         for α in T[51.3, 90.0, 119.7, 147.2, 165.0, 180.0]
-            DECAES.epg_decay_basis!(basis_ref, work_ref, DECAES.restructure(θ, (; α)), T2_times)
-            DECAES.epg_decay_basis!(basis_cos, decay_basis_work, α)
+            DECAES.epg_decay_basis!(basis_ref, work_ref, DECAES.restructure(θ, (; α = deg2rad(α))), T2_times)
+            DECAES.epg_decay_basis!(basis_cos, decay_basis_work, deg2rad(α))
             @test isapprox(basis_ref, basis_cos; rtol = cbrt(eps(T))^2, atol = 10 * eps(T))
         end
     end
@@ -213,19 +213,19 @@ function test_EPG_cosine_basis_gradient()
         Acol, dAcol, ddAcol = zeros(T, ETL), zeros(T, ETL), zeros(T, ETL)
 
         # The differencing alone runs in Double64, so the reference carries no cancellation error and the tolerance measures the Float64 kernel rather than the step size.
-        D64 = Double64
-        θ64 = mock_θ(DECAES.EPGConstantFlipAngleOptions, D64, ETL)
-        work64 = DECAES.EPGCosineSeriesBasis(θ64, D64.(T2_times))
-        B⁺, B⁻, B, B⁺₂, B⁻₂ = (zeros(D64, ETL, nT2) for _ in 1:5)
+        θ_D64 = mock_θ(DECAES.EPGConstantFlipAngleOptions, Double64, ETL)
+        work_D64 = DECAES.EPGCosineSeriesBasis(θ_D64, Double64.(T2_times))
+        B⁺, B⁻, B, B⁺₂, B⁻₂ = (zeros(Double64, ETL, nT2) for _ in 1:5)
         Bf = zeros(T, ETL, nT2)
-        h₁, h₂ = D64(1e-12), D64(1e-8)
-        for α in T[91.3, 120.7, 150.2, 164.9, 179.1]
-            α64 = D64(α)
-            DECAES.epg_decay_basis!(B⁺, work64, α64 + h₁)
-            DECAES.epg_decay_basis!(B⁻, work64, α64 - h₁)
-            DECAES.epg_decay_basis!(B⁺₂, work64, α64 + h₂)
-            DECAES.epg_decay_basis!(B⁻₂, work64, α64 - h₂)
-            DECAES.epg_decay_basis!(B, work64, α64)
+        h₁, h₂ = Double64(1e-12), Double64(1e-8)
+        for α_deg in T[91.3, 120.7, 150.2, 164.9, 179.1]
+            α = deg2rad(α_deg)
+            α_D64 = deg2rad(Double64(α_deg))
+            DECAES.epg_decay_basis!(B⁺, work_D64, α_D64 + h₁)
+            DECAES.epg_decay_basis!(B⁻, work_D64, α_D64 - h₁)
+            DECAES.epg_decay_basis!(B⁺₂, work_D64, α_D64 + h₂)
+            DECAES.epg_decay_basis!(B⁻₂, work_D64, α_D64 - h₂)
+            DECAES.epg_decay_basis!(B, work_D64, α_D64)
             DECAES.epg_decay_basis!(Bf, decay_basis_work, α) # Float64 value reference; also leaves `c`, `sn`, `cn` current at α for the column kernel
             for j in 1:nT2
                 DECAES.epg_decay_basis_∂α_col!(Acol, dAcol, ddAcol, decay_basis_work, α, j)

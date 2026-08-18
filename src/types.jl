@@ -9,6 +9,11 @@ This struct collects keyword arguments passed to `T2mapSEcorr`, performs checks 
 
     $TYPEDFIELDS
 
+!!! note "Units of time"
+    The signal model depends on the echo time only through the ratios `TE/T2` and `TE/T1`, so no particular unit of time is assumed.
+    `TE`, `T1`, and `T2Range` need only use the same units; the defaults are stated in seconds by convention.
+    Output T2 times and derived quantities are returned in the same unit which was supplied.
+
 !!! note
     The 5D array that is saved when `SaveNNLSBasis` is set to `true` has dimensions `MatrixSize x nTE x nT2`, and therefore is typically extremely large.
     If the flip angle is fixed via `SetFlipAngle`, however, this is not an issue as only the unique `nTE x nT2` 2D basis matrix is saved.
@@ -31,20 +36,20 @@ See also:
     nTE::Int
     @assert nTE >= 4 "At least four echoes are required for T2 mapping, but nTE = $nTE."
 
-    "Interecho spacing (Units: seconds). This argument has no default."
-    TE::T # seconds
+    "Interecho spacing (Units: time, must match `T1` and `T2Range`). This argument has no default."
+    TE::T
     @assert TE > 0.0 "Echo spacing must be positive, but TE = $TE."
 
     "Number of T2 times to estimate in the multi-exponential analysis. This argument has no default."
     nT2::Int
     @assert nT2 >= 2 "At least two T2 components are required for T2 mapping, but nT2 = $nT2."
 
-    "Tuple of min and max T2 values (Units: seconds). This argument has no default."
-    T2Range::NTuple{2, T} # seconds
+    "Tuple of min and max T2 values (Units: time, must match `TE`). This argument has no default."
+    T2Range::NTuple{2, T}
     @assert 0.0 < T2Range[1] < T2Range[2] "T2Range must a sorted 2-tuple of positive values, but T2Range = $T2Range."
 
-    "Assumed value of T1 (Units: seconds)."
-    T1::T = 1.0 # seconds
+    "Assumed value of T1 (Units: time, must match `TE`)."
+    T1::T = 1.0
     @assert T1 > 0.0 "T1 must be positive, but T1 = $T1."
 
     "First echo intensity cutoff for empty voxels."
@@ -106,8 +111,7 @@ Base.convert(::Type{Dict{String, Any}}, o::T2mapOptions) = Dict{String, Any}(Pai
 Base.Dict{T, Any}(o::T2mapOptions) where {T} = convert(Dict{T, Any}, o)
 
 T2_component_times(o::T2mapOptions{T}) where {T} = logrange(o.T2Range..., o.nT2)
-flip_angles(o::T2mapOptions{T}) where {T} = o.SetFlipAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.SetFlipAngle]
-refcon_angles(o::T2mapOptions{T}) where {T} = o.RefConAngle === nothing ? collect(range(o.MinRefAngle, T(180); length = o.nRefAngles)) : T[o.RefConAngle]
+flip_angles(o::T2mapOptions{T}) where {T} = o.SetFlipAngle === nothing ? collect(range(deg2rad(o.MinRefAngle), T(π); length = o.nRefAngles)) : T[deg2rad(o.SetFlipAngle)]
 
 function show_string(o::T2mapOptions)
     io = IOBuffer()
@@ -133,6 +137,9 @@ This struct collects keyword arguments passed to `T2partSEcorr`, performs checks
 
     $TYPEDFIELDS
 
+!!! note "Units of time"
+    `T2Range`, `SPWin`, `MPWin`, and `Sigmoid` share whatever unit of time the input T2 distribution was computed with, and the output T2 times are returned in that same unit.
+
 See also:
 * [`T2partSEcorr`](@ref)
 """
@@ -151,19 +158,19 @@ See also:
     nT2::Int
     @assert nT2 >= 2
 
-    "Tuple of min and max T2 values (Units: seconds). This argument has no default."
-    T2Range::NTuple{2, T} # seconds
+    "Tuple of min and max T2 values (Units: time, must match the T2 distribution). This argument has no default."
+    T2Range::NTuple{2, T}
     @assert 0.0 < T2Range[1] < T2Range[2]
 
-    "Tuple of min and max T2 values of the short peak window (Units: seconds). This argument has no default."
-    SPWin::NTuple{2, T} # seconds
+    "Tuple of min and max T2 values of the short peak window (Units: time, must match `T2Range`). This argument has no default."
+    SPWin::NTuple{2, T}
     @assert SPWin[1] < SPWin[2]
 
-    "Tuple of min and max T2 values of the middle peak window (Units: seconds). This argument has no default."
-    MPWin::NTuple{2, T} # seconds
+    "Tuple of min and max T2 values of the middle peak window (Units: time, must match `T2Range`). This argument has no default."
+    MPWin::NTuple{2, T}
     @assert MPWin[1] < MPWin[2]
 
-    "Apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small peak window cutoff time. `Sigmoid` is the delta-T2 parameter, which is the distance in seconds on either side of the `SPWin` upper limit where the sigmoid curve reaches 10% and 90% (Units: seconds)."
+    "Apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small peak window cutoff time. `Sigmoid` is the delta-T2 parameter, which is the distance on either side of the `SPWin` upper limit where the sigmoid curve reaches 10% and 90% (Units: time, must match `T2Range`)."
     Sigmoid::Union{T, Nothing} = nothing
     @assert Sigmoid === nothing || Sigmoid > 0
 

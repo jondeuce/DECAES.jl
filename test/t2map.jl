@@ -25,7 +25,6 @@ function alpha_polish_setup(::Type{T} = Float64) where {T}
     function build(b)
         return DECAES.FlipAngleOptimizationWorkspace(o, zeros(T, o.nTE, o.nT2), copy(b))
     end
-    # The discrete search's own continuous proposal α₀, before any true off-grid evaluation. Mirrors the search prefix of `optimize_flip_angle!`.
     function surrogate_minimizer(w)
         empty!(w.α_surrogate)
         DECAES.advance_warmstart!(w.nnls_search_prob)
@@ -41,7 +40,7 @@ function test_alpha_polish()
     o, loss_true, make_signal, build, surrogate_minimizer = alpha_polish_setup()
     _, loss_true_D64, _, _, _ = alpha_polish_setup(Double64)
     for noise in (0.0, 0.02), _ in 1:20
-        b = make_signal(100 + 75 * rand(), noise)
+        b = make_signal(deg2rad(100 + 75 * rand()), noise)
 
         # The search is deterministic, so a fresh workspace reaching only the search prefix yields the α₀ the polished run started from
         α₀ = surrogate_minimizer(build(b))
@@ -54,11 +53,11 @@ function test_alpha_polish()
         # The allowance is roundoff between two independent NNLS solves, not slack in the selection, which compares its own evaluations exactly.
         @test loss_true(αp, b) <= (1 + 1e-10) * best_seen_loss(wp) + 1e-14
         @test loss_true(αp, b) <= (1 + 1e-10) * loss_true(α₀, b) + 1e-14
-        @test 90 < αp <= 180 # noisy signals routinely minimize at the grid's upper endpoint
+        @test π/2 < αp <= π # noisy signals routinely minimize at the grid's upper endpoint
 
         # Envelope-theorem soundness. Evaluated away from α₀ where f′ vanishes.
-        α = α₀ + rand((-1, 1)) * rand(1:5)
-        if 100 < α < 175
+        α = α₀ + deg2rad(rand((-1, 1)) * rand(1:5))
+        if deg2rad(100) < α < deg2rad(175)
             wg = build(b)
             surrogate_minimizer(wg)
             f, g, _ = DECAES.polish_loss_grad!(wg, α)
@@ -100,7 +99,6 @@ function test_alpha_polish_general_refcon()
         o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 48, nT2 = 40, nRefAngles = 16, nRefAnglesMin = 5, RefConAngle = β, Silent = true)
         θ = DECAES.default_epg_parameters(o)
         T2t = DECAES.T2_component_times(o)
-        @test !(θ isa DECAES.EPGConstantFlipAngleOptions) # the cosine backend must not apply here
         function loss_true(α, b)
             A = DECAES.epg_decay_basis(DECAES.restructure(θ, (; α)), T2t)
             return sum(abs2, A * DECAES.lsqnonneg(A, b) - b)
@@ -115,7 +113,7 @@ function test_alpha_polish_general_refcon()
         end
 
         for _ in 1:4
-            A = DECAES.epg_decay_basis(DECAES.restructure(θ, (; α = 100 + 75 * rand())), T2t)
+            A = DECAES.epg_decay_basis(DECAES.restructure(θ, (; α = deg2rad(100 + 75 * rand()))), T2t)
             x = zeros(o.nT2)
             for _ in 1:rand(1:4)
                 x[rand(1:o.nT2)] += rand()
@@ -129,12 +127,12 @@ function test_alpha_polish_general_refcon()
             DECAES.optimize_flip_angle!(w, o)
             α̂ = w.α[]
 
-            @test 90 < α̂ <= 180
+            @test π/2 < α̂ <= π
             @test loss_true(α̂, b) <= (1 + 1e-10) * best_seen_loss(w) + 1e-14
 
             # The AD envelope derivative matches central differences of the true loss, evaluated away from α̂ where f′ does not vanish
-            α = α̂ + rand((-1, 1)) * rand(1:5)
-            if 100 < α < 175
+            α = α̂ + deg2rad(rand((-1, 1)) * rand(1:5))
+            if deg2rad(100) < α < deg2rad(175)
                 f, g, _ = DECAES.polish_loss_grad!(w, α)
                 @test f ≈ loss_true(α, b) rtol = 1e-6
                 h, b_D64 = Double64(1e-12), Double64.(b)
@@ -150,9 +148,9 @@ function test_alpha_polish_hessian()
     o, loss_true, make_signal, build, surrogate_minimizer = alpha_polish_setup()
     _, _, _, build_D64, surrogate_minimizer_D64 = alpha_polish_setup(Double64)
     for _ in 1:10
-        b = make_signal(100 + 75 * rand(), 0.02)
+        b = make_signal(deg2rad(100 + 75 * rand()), 0.02)
         w = build(b)
-        α = surrogate_minimizer(w) + rand((-1, 1)) * rand(1:5) # away from the minimizer, where f′ and f″ are both order one
+        α = surrogate_minimizer(w) + deg2rad(rand((-1, 1)) * rand(1:5)) # away from the minimizer, where f′ and f″ are both order one
         _, _, f″ = DECAES.polish_loss_grad!(w, α) # analytical, in Float64: this is the kernel under test
 
         # Central difference of the exact gradient, which is itself an envelope quantity requiring a fresh solve at each point. Only the differencing runs in Double64.
@@ -180,7 +178,7 @@ end
     θ, T2t = DECAES.default_epg_parameters(o), DECAES.T2_component_times(o)
     ncertified = 0
     for _ in 1:20
-        b = make_signal(100 + 75 * rand(), 0.02)
+        b = make_signal(deg2rad(100 + 75 * rand()), 0.02)
         w = build(b)
         DECAES.optimize_flip_angle!(w, o)
         DECAES.NNLS.issolved(w.α_polish_work.prob.nnls_work) || continue

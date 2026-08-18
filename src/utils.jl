@@ -735,8 +735,8 @@ function mock_image(o::MockImageOpts{T}) where {T}
         mfr = 1 - sfr # long T2 fraction
         T21 = T21Range[1] + (T21Range[2] - T21Range[1]) * rand(T) # short T2
         T22 = T22Range[1] + (T22Range[2] - T22Range[1]) * rand(T) # long T2
-        dc1 = EPGdecaycurve!(work1, EPGOptions((; ETL = nTE, α = FlipAngle, TE, T2 = T21, T1, β = T(180.0))))
-        dc2 = EPGdecaycurve!(work2, EPGOptions((; ETL = nTE, α = FlipAngle, TE, T2 = T22, T1, β = T(180.0))))
+        dc1 = EPGdecaycurve!(work1, EPGOptions((; ETL = nTE, α = deg2rad(FlipAngle), TE, T2 = T21, T1, β = T(π))))
+        dc2 = EPGdecaycurve!(work2, EPGOptions((; ETL = nTE, α = deg2rad(FlipAngle), TE, T2 = T22, T1, β = T(π))))
         @inbounds begin
             # Note: no need to normalize `m`, since convex combinations of EPG decay curves have maximum value 1,
             #       and therefore the relative noise level `σ` equals the absolute noise level.

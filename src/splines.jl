@@ -1282,7 +1282,7 @@ function mock_surrogate_search_problem(
     As = zeros(T, ETL, opts.nT2, length.(opt_ranges)...)
     ∇As = zeros(T, ETL, opts.nT2, D, length.(opt_ranges)...)
     T2s = logrange(opts.T2Range..., opts.nT2)
-    θ = EPGOptions((; ETL, α = T(165.0), TE = opts.TE, T2 = zero(T), T1 = opts.T1, β = T(180.0)))
+    θ = EPGOptions((; ETL, α = deg2rad(T(165.0)), TE = opts.TE, T2 = zero(T), T1 = opts.T1, β = T(π)))
     j! = EPGJacobianFunctor(θ, Val(opt_vars))
 
     _, Rαs = SplitCartesianIndices(As, Val(2))

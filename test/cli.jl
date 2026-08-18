@@ -329,11 +329,14 @@ function run_cli_tests()
                 append!(cli_t2map_args, ["--B1map", B1mapfilename])
             end
 
-            # A B1 map run has no flip-angle search, so its T2-stage unregularized solve is unseeded and takes a different arithmetic path than the search run.
-            # chi2 is sensitive to this through its χ² target, which is scaled by the residual of that solve.
-            # gcv minimizes a smooth objective, so a perturbation of the evaluated points moves the minimizer by its square root; its μ is therefore only defined to the search tolerance `atol = 1e-4` on logμ.
             t2maps_cli, t2dist_cli, t2parts_cli = run_main(image, cli_t2map_args; make_settings_file)
-            cli_rtol = !b1_used ? 1e-14 : paramdict[:Reg] == "gcv" ? 1e-4 : 1e-9
+
+            # A B1 map run skips the flip-angle search, so its T2-stage unregularized solve is unseeded and follows a different arithmetic path. The α used to construct the bases has also been converted to degrees and back, perturbing it by up to one ulp.
+            # Methods that select μ by root-finding a residual level are more robust to these types of perturbations. `gcv` and `lcurve` instead select extrema, which are unstable if the residual does not have a noise floor:
+            # at nTE < nT2 the basis may interpolate the data, so R(μ) → 0 as μ → 0, the L-curve corner flattens, and 𝒢 = R/dof² approaches a finite limit rather than diverging. μ is then determined no better than the width of the flat regions.
+            cli_rtol = !b1_used ? 1e-14 :
+                       paramdict[:nTE] >= paramdict[:nT2] ? 1e-8 :
+                       paramdict[:Reg] ∈ ("gcv", "lcurve") ? 1e-3 : 1e-8
             t2map_passed = test_compare_t2map(t2map, t2dist, t2maps_cli, t2dist_cli; rtol = cli_rtol)
             t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = cli_rtol)
             if !(t2map_passed && t2part_passed)

@@ -29,7 +29,7 @@ function T2Maps(opts::T2mapOptions{T}) where {T}
         # Misc. processing parameters
         echotimes     = convert(Array{T}, opts.TE .* (1:opts.nTE)),
         t2times       = convert(Array{T}, T2_times),
-        refangleset   = opts.SetFlipAngle === nothing ? convert(Array{T}, flip_angles(opts)) : T(opts.SetFlipAngle),
+        refangleset   = opts.SetFlipAngle === nothing ? convert(Array{T}, rad2deg.(flip_angles(opts))) : T(opts.SetFlipAngle), # outputs are in degrees
         decaybasisset = decay_basis_set,
 
         # Default output maps
@@ -94,18 +94,18 @@ Records parameter maps and T2 distributions for further partitioning.
           * `"t2times"`       T2 times corresponding to T2-distributions (length `nT2` 1D array)
           * `"refangleset"`   Refocusing angles used during flip angle optimization (length `nRefAngles` 1D array by default; scalar if `SetFlipAngle` is used)
           * `"decaybasisset"` Decay basis sets corresponding to `"refangleset"` (`nTE x nT2 x nRefAngles` 3D array by default; `nTE x nT2` 2D array if `SetFlipAngle` is used)
-          * `"gdn"`:          Map of general density = sum(T2distribution) (`MatrixSize` 3D array)
-          * `"ggm"`:          Map of general geometric mean of T2-distribution (`MatrixSize` 3D array)
-          * `"gva"`:          Map of general variance (`MatrixSize` 3D array)
-          * `"fnr"`:          Map of fit to noise ratio = gdn / √(sum(residuals.^2) / (nTE-1)) (`MatrixSize` 3D array)
-          * `"snr"`:          Map of signal to noise ratio = maximum(signal) / std(residuals) (`MatrixSize` 3D array)
-          * `"alpha"`:        Map of optimized refocusing pulse flip angle (`MatrixSize` 3D array)
+          * `"gdn"`:          Map of general density = sum(T2distribution) (Units: same as input signal) (`MatrixSize` 3D array)
+          * `"ggm"`:          Map of general geometric mean of T2-distribution (Units: time, must match `T2Range`) (`MatrixSize` 3D array)
+          * `"gva"`:          Map of general variance of the T2-distribution (Units: none) (`MatrixSize` 3D array)
+          * `"fnr"`:          Map of fit to noise ratio = gdn / √(sum(residuals.^2) / (nTE-1)) (Units: none) (`MatrixSize` 3D array)
+          * `"snr"`:          Map of signal to noise ratio = maximum(signal) / std(residuals) (Units: none) (`MatrixSize` 3D array)
+          * `"alpha"`:        Map of optimized refocusing pulse flip angle (Units: degrees) (`MatrixSize` 3D array)
 
       + **Optional Fields**
 
           * `"resnorm"`:      ``\\ell^2``-norm of NNLS fit residuals; see `SaveResidualNorm` option (`MatrixSize` 3D array)
           * `"decaycurve"`:   Signal decay curve resulting from NNLS fit; see `SaveDecayCurve` option (`MatrixSize x nTE` 4D array)
-          * `"mu"`:           Regularization parameter used during from NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
+          * `"mu"`:           Regularization parameter used during the NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
           * `"chi2factor"`:   ``\\chi^2`` increase factor relative to unregularized NNLS fit; see `SaveRegParam` option (`MatrixSize` 3D array)
           * `"decaybasis"`:   Decay bases resulting from flip angle optimization; see `SaveNNLSBasis` option (`MatrixSize x nTE x nT2` 5D array, or `nTE x nT2` 2D array if `SetFlipAngle` is used)
 
@@ -229,7 +229,7 @@ function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps{T}, dist::T2Dist
 
     if is_B1map_provided(maps)
         # Load flip angle from provided B1 map
-        @inbounds flip_angle_work.α[] = maps.alpha[I]
+        @inbounds flip_angle_work.α[] = deg2rad(maps.alpha[I]) # output is stored in degrees
 
         # Compute basis using the provided flip angle, routed through the same `final_decay_basis!` as the flip-search path, so a rerun that supplies the fitted α as a B1 map uses an identical basis.
         final_decay_basis!(flip_angle_work)
@@ -499,8 +499,8 @@ function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α
         decay_basis_set.epg_jac_functor!(∇col, Acol, restructure(θα, (; T2 = decay_basis_set.T2_times[j])))
         g = muladd(x[j], dot(∂Acol, r), g)
     end
-    return -2 * g, T(NaN) # no curvature, so the caller keeps the Hermite proposal
     #TODO Supply ∂²A here so general β also gets a Newton candidate. Nested AD over the EPG recurrence would work but a hand-written α-derivative would be far cheaper.
+    return -2 * g, T(NaN)
 end
 
 # Polish evaluation: build the basis A(α), solve NNLS warm-started from the search's final active set, which is the support at the last grid node the search solved rather than at its continuous proposal, and return the true loss ‖A(α)x − b‖².
@@ -711,7 +711,7 @@ function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T},
         gva[I] = expm1(log1p_gva) # general variance
         fnr[I] = Σ_dist / √(Σ_res² / (o.nTE - 1)) # fit to noise ratio
         snr[I] = max_signal / σ_res # signal to noise ratio
-        alpha[I] = flip_angle_work.α[] # optimized refocusing pulse flip angle
+        alpha[I] = rad2deg(flip_angle_work.α[]) # optimized refocusing pulse flip angle, in degrees
     end
 
     # Save distribution
@@ -767,7 +767,6 @@ function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = global_buffer_m
         T2_times         = logrange(o.T2Range..., o.nT2),
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
         flip_angles      = flip_angles(o),
-        refcon_angles    = refcon_angles(o),
         decay_basis      = decay_basis,
         decay_data       = decay_data,
         decay_scale      = decay_scale,
@@ -792,5 +791,5 @@ end
 function default_epg_parameters(o::T2mapOptions{T}) where {T}
     return o.RefConAngle == 180 ?
            EPGConstantFlipAngleOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1)) :
-           EPGOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1, β = o.RefConAngle))
+           EPGOptions((; ETL = o.nTE, α = T(NaN), TE = o.TE, T2 = T(NaN), T1 = o.T1, β = deg2rad(o.RefConAngle)))
 end

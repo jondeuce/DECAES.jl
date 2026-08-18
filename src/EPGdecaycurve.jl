@@ -2,37 +2,30 @@
 #### Helper functions
 ####
 
-@static if !isdefined(Base, :cisd)
-    @inline function cisd(theta::Real)
-        s, c = sincosd(theta)
-        return Complex(c, s)
-    end
-end
-
-# Rotation matrix R_x(α) = R(α, 0) for rotating the complex magnetization vector representation (M⁺, M⁻, Mz) about the x-axis by angle α (degrees), where M⁺ = Mx + iMy and M⁻ = Mx - iMy.
+# Rotation matrix R_x(α) = R(α, 0) for rotating the complex magnetization vector representation (M⁺, M⁻, Mz) about the x-axis by angle α (radians), where M⁺ = Mx + iMy and M⁻ = Mx - iMy.
 # Equivalently, rotates the magnetization phase state vector (MPSV) of Fourier coefficients (Fₖ⁺, Fₖ⁻, Zₖ) = (Fₖ, F̄₋ₖ, Zₖ).
 @inline element_flipmat(α::T) where {T} = SA{Complex{T}}[
-    cosd(α / 2)^2 sind(α / 2)^2 -im*sind(α);
-    sind(α / 2)^2 cosd(α / 2)^2 im*sind(α);
-    -im*sind(α)/2 im*sind(α)/2 cosd(α)]
+    cos(α / 2)^2 sin(α / 2)^2 -im*sin(α);
+    sin(α / 2)^2 cos(α / 2)^2 im*sin(α);
+    -im*sin(α)/2 im*sin(α)/2 cos(α)]
 
-# Rotation matrix R(α, φ) for rotating the MPSV by angle α (degrees) about an axis having an angle φ (degrees) with the x-axis.
+# Rotation matrix R(α, φ) for rotating the MPSV by angle α (radians) about an axis having an angle φ (radians) with the x-axis.
 @inline element_flipmat(α::T, φ::T) where {T} = SA{Complex{T}}[
-    cosd(α / 2)^2 cisd(2φ)*sind(α / 2)^2 -im*cisd(φ)*sind(α);
-    cisd(-2φ)*sind(α / 2)^2 cosd(α / 2)^2 im*cisd(-φ)*sind(α);
-    -im*cisd(-φ)*sind(α)/2 im*cisd(φ)*sind(α)/2 cosd(α)]
+    cos(α / 2)^2 cis(2φ)*sin(α / 2)^2 -im*cis(φ)*sin(α);
+    cis(-2φ)*sin(α / 2)^2 cos(α / 2)^2 im*cis(-φ)*sin(α);
+    -im*cis(-φ)*sin(α)/2 im*cis(φ)*sin(α)/2 cos(α)]
 
 # Real representation for the rotation matrix R(α, 90) for the Carr-Purcell (CP/anti-CPMG) pulse sequence following excitation 90_y.
 @inline anti_cpmg_flipmat(α::T) where {T} = SA{T}[
-    cosd(α / 2)^2 -sind(α / 2)^2 sind(α);
-    -sind(α / 2)^2 cosd(α / 2)^2 sind(α);
-    -sind(α)/2 -sind(α)/2 cosd(α)]
+    cos(α / 2)^2 -sin(α / 2)^2 sin(α);
+    -sin(α / 2)^2 cos(α / 2)^2 sin(α);
+    -sin(α)/2 -sin(α)/2 cos(α)]
 
 # Real representation for the rotation matrix R_x(α) for the Carr-Purcell-Meiboom-Gill (CPMG) pulse sequence following excitation 90_y and change of variables Mz = i * Mz′.
 @inline cpmg_flipmat(α::T) where {T} = SA{T}[
-    cosd(α / 2)^2 sind(α / 2)^2 sind(α);
-    sind(α / 2)^2 cosd(α / 2)^2 -sind(α);
-    -sind(α)/2 sind(α)/2 cosd(α)]
+    cos(α / 2)^2 sin(α / 2)^2 sin(α);
+    sin(α / 2)^2 cos(α / 2)^2 -sin(α);
+    -sin(α)/2 sin(α)/2 cos(α)]
 
 ####
 ####
@@ -57,8 +50,7 @@ end
 
 @inline Base.eltype(::EPGOptions{T}) where {T} = T
 @inline echotrainlength(θ::EPGOptions) = θ.ETL
-@inline B1correction(θ::EPGOptions{T}) where {T} = T(θ.α / 180) # Multiplicative FA correction: A = α/180
-@inline flipangle(θ::EPGOptions{T}, i::Int) where {T} = ifelse(i == 0, T(90), ifelse(i == 1, T(180), θ.β)) # Pulse sequence: 90, 180, β, β, ...
+@inline B1correctedflipangle(θ::EPGOptions{T}, i::Int) where {T} = ifelse(i == 0, θ.α / 2, ifelse(i == 1, θ.α, θ.α * θ.β / T(π))) # B1-corrected pulse sequence: α/2, α, αβ/π, αβ/π, ...
 @inline echotime(θ::EPGOptions) = θ.TE
 @inline T2time(θ::EPGOptions) = θ.T2
 @inline T1time(θ::EPGOptions) = θ.T1
@@ -81,8 +73,7 @@ end
 
 @inline Base.eltype(::EPGConstantFlipAngleOptions{T}) where {T} = T
 @inline echotrainlength(θ::EPGConstantFlipAngleOptions) = θ.ETL
-@inline B1correction(θ::EPGConstantFlipAngleOptions{T}) where {T} = T(θ.α / 180) # Multiplicative FA correction: A = α/180
-@inline flipangle(θ::EPGConstantFlipAngleOptions{T}, i::Int) where {T} = ifelse(i == 0, T(90), T(180)) # Pulse sequence: 90, 180, 180, 180, ...
+@inline B1correctedflipangle(θ::EPGConstantFlipAngleOptions{T}, i::Int) where {T} = ifelse(i == 0, θ.α / 2, θ.α) # B1-corrected pulse sequence: α/2, α, α, α, ...
 @inline echotime(θ::EPGConstantFlipAngleOptions) = θ.TE
 @inline T2time(θ::EPGConstantFlipAngleOptions) = θ.T2
 @inline T1time(θ::EPGConstantFlipAngleOptions) = θ.T1
@@ -107,8 +98,7 @@ end
 
 @inline Base.eltype(::EPGIncreasingFlipAnglesOptions{T}) where {T} = T
 @inline echotrainlength(θ::EPGIncreasingFlipAnglesOptions) = θ.ETL
-@inline B1correction(θ::EPGIncreasingFlipAnglesOptions{T}) where {T} = T(θ.α / 180) # Multiplicative FA correction: A = α/180
-@inline flipangle(θ::EPGIncreasingFlipAnglesOptions{T}, i::Int) where {T} = ifelse(i == 0, T(90), ifelse(i == 1, θ.α1, ifelse(i == 2, θ.α2, T(180)))) # Pulse sequence: 90, α1, α2, 180, 180, ...
+@inline B1correctedflipangle(θ::EPGIncreasingFlipAnglesOptions{T}, i::Int) where {T} = ifelse(i == 0, θ.α / 2, ifelse(i == 1, θ.α * θ.α1 / T(π), ifelse(i == 2, θ.α * θ.α2 / T(π), θ.α))) # B1-corrected pulse sequence: α/2, αα₁/π, αα₂/π, α, α, ...
 @inline echotime(θ::EPGIncreasingFlipAnglesOptions) = θ.TE
 @inline T2time(θ::EPGIncreasingFlipAnglesOptions) = θ.T2
 @inline T1time(θ::EPGIncreasingFlipAnglesOptions) = θ.T1
@@ -197,17 +187,22 @@ pulse sequence.
 
   - `ETL::Int`:   echo train length, i.e. number of echos
   - `α::Real`:    angle of refocusing pulses (Units: degrees)
-  - `TE::Real`:   inter-echo time (Units: seconds)
-  - `T2::Real`:   transverse relaxation time (Units: seconds)
-  - `T1::Real`:   longitudinal relaxation time (Units: seconds)
-  - `β::Real`:    value of Refocusing Pulse Control Angle (Units: degrees)
+  - `TE::Real`:   inter-echo time (Units: time, must match `T1` and `T2`)
+  - `T2::Real`:   transverse relaxation time (Units: time, must match `TE`)
+  - `T1::Real`:   longitudinal relaxation time (Units: time, must match `TE`)
+  - `β::Real`:    refocusing pulse control angle (Units: degrees)
 
 # Outputs
 
   - `decay_curve::AbstractVector`: normalized echo decay curve with length `ETL`
+
+!!! note "Units of time"
+    The decay curve depends on `TE`, `T2`, and `T1` only through the ratios `TE/T2` and `TE/T1`, so no particular unit of time is assumed; the three need only use the same units.
+
+The four-argument method omits `β`, fixing the refocusing control angle at 180 degrees, which is the standard CPMG sequence.
 """
-@inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions((; ETL, α, TE, T2, T1, β)))
-@inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real) = EPGdecaycurve(EPGConstantFlipAngleOptions((; ETL, α, TE, T2, T1)))
+@inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions((; ETL, α = deg2rad(α), TE, T2, T1, β = deg2rad(β)))) # the arguments are degrees; the parameterization stores radians
+@inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real) = EPGdecaycurve(EPGConstantFlipAngleOptions((; ETL, α = deg2rad(α), TE, T2, T1))) # the arguments are degrees; the parameterization stores radians
 @inline EPGdecaycurve(θ::EPGParameterization{T}) where {T} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
 @inline EPGdecaycurve!(work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}) where {T} = EPGdecaycurve!(decaycurve(work), work, θ)
 @inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}) where {T} = epg_decay_curve!(dc, work, θ)
@@ -304,10 +299,9 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
 
     # Unpack workspace
     (; MPSV) = work
-    A = B1correction(θ)
-    αₑₓ = A * 90
-    α₁ = A * 180
-    αᵢ = A * θ.β
+    αₑₓ = B1correctedflipangle(θ, 0)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -323,7 +317,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
     @inbounds for j in 1:ETL
         MPSV[j] = V[0, 0, 0]
     end
-    @inbounds MPSV[1] = V[sind(αₑₓ), 0, 0] # initial magnetization in F1 state
+    @inbounds MPSV[1] = V[sin(αₑₓ), 0, 0] # initial magnetization in F1 state
 
     @inbounds for i in 1:ETL
         # Relaxation for TE/2, followed by flip matrix
@@ -357,8 +351,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
 
     # Unpack workspace
     (; MPSV) = work
-    A = B1correction(θ)
-    αₑₓ = A * flipangle(θ, 0)
+    αₑₓ = B1correctedflipangle(θ, 0)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -372,11 +365,11 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
     @inbounds for j in 1:ETL
         MPSV[j] = V[0, 0, 0]
     end
-    @inbounds MPSV[1] = V[sind(αₑₓ), 0, 0] # initial magnetization in F1 state
+    @inbounds MPSV[1] = V[sin(αₑₓ), 0, 0] # initial magnetization in F1 state
 
     @inbounds for i in 1:ETL
         # Relaxation for TE/2, followed by flip matrix
-        R = element_flipmat(A * flipangle(θ, i))
+        R = element_flipmat(B1correctedflipangle(θ, i))
         for j in 1:ETL
             MPSV[j] = R * (E .* MPSV[j])
         end
@@ -421,9 +414,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T}, θ::EPGO
 
     # Unpack workspace
     (; MPSV) = work
-    A = B1correction(θ)
-    α₁ = deg2rad(A * 180)
-    αᵢ = deg2rad(A * θ.β)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -499,9 +491,8 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
     MPSV(i::Int) = Symbol(:MPSV, i)
     quote
         # Unpack workspace
-        A  = B1correction(θ)
-        α₁ = deg2rad(A * 180)
-        αᵢ = deg2rad(A * θ.β)
+        α₁ = B1correctedflipangle(θ, 1)
+        αᵢ = B1correctedflipangle(θ, 2)
         TE = echotime(θ)
         T2 = T2time(θ)
         T1 = T1time(θ)
@@ -591,9 +582,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T
 
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
-    A = B1correction(θ)
-    α₁ = deg2rad(A * 180)
-    αᵢ = deg2rad(A * θ.β)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -672,9 +662,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_S
 
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
-    A = B1correction(θ)
-    α₁ = deg2rad(A * 180)
-    αᵢ = deg2rad(A * θ.β)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -757,9 +746,8 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
 
-    A = B1correction(θ)
-    α₁ = deg2rad(A * 180)
-    αᵢ = deg2rad(A * θ.β)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -852,7 +840,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     epg_impulse_response!(dc, work, θ)
 
     # Scale impulse response by initial magnetization and take absolute value
-    m₀ = sind(θ.α / 2)
+    m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
     @simd ivdep for i in eachindex(dc)
         dc[i] = abs(m₀ * dc[i])
     end
@@ -864,7 +852,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVec
     ETL = length(dc)
     (; MPSV₁, MPSV₂) = work
 
-    α = deg2rad(θ.α)
+    α = θ.α
     TE, T2, T1 = echotime(θ), T2time(θ), T1time(θ)
     V = SA{T} # alias
 
@@ -968,7 +956,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualFlat_Split_
     epg_impulse_response!(dc, work, θ)
 
     # Scale impulse response by initial magnetization and take absolute value
-    m₀ = sind(θ.α / 2)
+    m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
     @simd ivdep for i in eachindex(dc)
         dc[i] = abs(m₀ * dc[i])
     end
@@ -983,7 +971,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualFla
     (; MPSV₁, MPSV₂) = work
     @assert length(MPSV₁) == length(MPSV₂) == 3 * ETL "Dimension mismatch"
 
-    α = deg2rad(θ.α)
+    α = θ.α
     TE, T2, T1 = echotime(θ), T2time(θ), T1time(θ)
 
     E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
@@ -1080,7 +1068,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualTuple_Split
     epg_impulse_response!(dc, work, θ)
 
     # Scale impulse response by initial magnetization and take absolute value
-    m₀ = sind(θ.α / 2)
+    m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
     @simd ivdep for i in eachindex(dc)
         dc[i] = abs(m₀ * dc[i])
     end
@@ -1097,7 +1085,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTup
     @assert length(MPSVx₁) == length(MPSVy₁) == length(MPSVz₁) == ETL "Dimension mismatch"
     @assert length(MPSVx₂) == length(MPSVy₂) == length(MPSVz₂) == ETL "Dimension mismatch"
 
-    α = deg2rad(θ.α)
+    α = θ.α
     TE, T2, T1 = echotime(θ), T2time(θ), T1time(θ)
 
     E₁, E₂ = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
@@ -1213,7 +1201,7 @@ end
 # Out-of-range lanes repeat the last T2, and their results are discarded by the caller.
 function epg_setup_lanes!(work::EPGWork_ReIm_Batched_Split_Dynamic{T}, θ::EPGConstantFlipAngleOptions{T}, T2s::AbstractVector, l0::Int, lmax::Int) where {T}
     (; a, b, c, c′, d) = work
-    α = deg2rad(θ.α)
+    α = θ.α
     TE, T1 = echotime(θ), T1time(θ)
     E₁ = exp(-(TE / 2) / T1)
     sinα, cosα = sincos(α)
@@ -1325,7 +1313,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_Batched_Split_D
     epg_impulse_response_batched!(work)
 
     # Scale impulse response by initial magnetization and take absolute value
-    m₀ = sind(θ.α / 2)
+    m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
     (; dcb) = work
     @inbounds @simd ivdep for i in 1:ETL
         dc[i] = abs(m₀ * dcb[1, i])
@@ -1338,7 +1326,7 @@ function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::EPGW
     # Compute the NNLS basis over T2 space in lane-batched chunks
     ETL, nT2 = size(decay_basis)
     W = EPG_BATCH_WIDTH
-    m₀ = sind(θ.α / 2)
+    m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
     (; dcb) = decay_curve_work
     @inbounds for j0 in 1:W:nT2
         epg_setup_lanes!(decay_curve_work, θ, T2_times, j0, nT2)
@@ -1373,9 +1361,8 @@ EPGWork_ReIm_DualMVector_Split(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_Dua
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_Split{T, Val{ETL}}, θ::EPGOptions{T, Val{ETL}}) where {T, ETL}
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
-    A = B1correction(θ)
-    α₁ = deg2rad(A * 180)
-    αᵢ = deg2rad(A * θ.β)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -1456,9 +1443,8 @@ EPGWork_ReIm_DualPaddedMVector_Vec_Split(::Type{T}, ETL::Int) where {T} = EPGWor
 function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMVector_Vec_Split{T, Val{ETL}}, θ::EPGOptions{T, Val{ETL}}) where {T, ETL}
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
-    A = B1correction(θ)
-    α₁ = deg2rad(A * 180)
-    αᵢ = deg2rad(A * θ.β)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -1540,9 +1526,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVe
 
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
-    A = B1correction(θ)
-    α₁ = deg2rad(A * 180)
-    αᵢ = deg2rad(A * θ.β)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -1627,9 +1612,8 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T}, θ::EPGOp
     ###########################
     # Setup
     (; MPSV) = work
-    A = B1correction(θ)
-    α₁ = deg2rad(A * 180)
-    αᵢ = deg2rad(A * θ.β)
+    α₁ = B1correctedflipangle(θ, 1)
+    αᵢ = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -1713,7 +1697,7 @@ end
 # Exact cosine-series form of the constant-flip-angle basis, used to evaluate A(α) at arbitrary α without re-running the EPG recursion.
 # When every pulse is proportional to α, i.e. RefConAngle == 180, the signed unit-excitation impulse response of echo i is an even trigonometric polynomial of degree ≤ i in α.
 # All α-dependence enters the recursion affinely via cos α and sin α, each echo adds at most one degree, and transverse↔longitudinal transfers carry sin α factors in pairs.
-# Hence A_ij(α) = |sin(α/2) Σ_{k=0}^{i} Â_ijk cos(kα)| exactly, with coefficients from a cosine-Vandermonde solve on nTE+1 impulse-response samples at α_m = 180m/nTE; the Vandermonde has DCT-I structure and condition number ≈ 1.5.
+# Hence A_ij(α) = |sin(α/2) Σ_{k=0}^{i} Â_ijk cos(kα)| exactly, with coefficients from a cosine-Vandermonde solve on nTE+1 impulse-response samples at α_m = πm/nTE; the Vandermonde has DCT-I structure and condition number ≈ 1.5.
 struct EPGCosineSeriesBasis{T}
     ETL::Int # echo train length, and also the cosine series degree
     nT2::Int # number of T2 times, i.e. basis columns
@@ -1729,7 +1713,7 @@ function EPGCosineSeriesBasis(θ::EPGConstantFlipAngleOptions{T}, T2_times::Abst
     work = EPGWork_ReIm_Batched_Split_Dynamic(T, ETL)
     S = zeros(T, ETL, nT2, N + 1)
     for m in 0:N
-        θm = restructure(θ, (; α = T(180) * m / N))
+        θm = restructure(θ, (; α = T(π) * m / N))
         for j0 in 1:W:nT2
             epg_setup_lanes!(work, θm, T2_times, j0, nT2)
             epg_impulse_response_batched!(work)
@@ -1758,7 +1742,7 @@ EPGCosineSeriesBasis(decay_basis_work::EPGCosineSeriesBasis{T}) where {T} = EPGC
 # The rotation keeps sin²+cos² within roundoff of one, so the normalization is one Newton step for the inverse square root rather than a square root and a division.
 function cosine_features!(decay_basis_work::EPGCosineSeriesBasis{T}, α::T) where {T}
     (; ETL, c, sn, cn) = decay_basis_work
-    sinα, cosα = sind(α), cosd(α)
+    sinα, cosα = sin(α), cos(α)
     sinkα, coskα = zero(T), one(T)
     c[1], sn[1], cn[1] = coskα, zero(T), zero(T)
     @inbounds for k in 1:ETL
@@ -1776,7 +1760,7 @@ function epg_decay_basis!(decay_basis::Matrix{T}, decay_basis_work::EPGCosineSer
     (; coeffs, c) = decay_basis_work
     ETL, nT2 = size(decay_basis)
     cosine_features!(decay_basis_work, α)
-    s = sind(α / 2)
+    s = sin(α / 2)
     p = 0
     @inbounds for j in 1:nT2
         o = (j - 1) * ETL
@@ -1807,18 +1791,16 @@ function epg_decay_basis!(decay_basis::Matrix{T}, decay_basis_work::EPGCosineSer
 end
 
 # Fill column j of A(α) into `Acol` and its first two α-derivatives into `dAcol` and `ddAcol` (all length ETL) from the cosine series.
-# A_ij = |s·a_ij| with s = sind(α/2) and a_ij = Σₖ Â_ijk cos(kα). Writing σ = sign(a_ij), within a sign cell A_ij = σ·s·a_ij and so
+# A_ij = |s·a_ij| with s = sin(α/2) and a_ij = Σₖ Â_ijk cos(kα), for α in radians. Writing σ = sign(a_ij), within a sign cell A_ij = σ·s·a_ij and so
 #   ∂A_ij/∂α = σ·(s′·a + s·a′),   ∂²A_ij/∂α² = σ·(s″·a + 2·s′·a′ + s·a″),
-# with s′ = (π/360)·cosd(α/2), s″ = −(π/360)²·s, a′ = −(π/180)·Σₖ k·Â_ijk sin(kα), and a″ = −(π/180)²·Σₖ k²·Â_ijk cos(kα).
+# with s′ = cos(α/2)/2, s″ = −s/4, a′ = −Σₖ k·Â_ijk sin(kα), and a″ = −Σₖ k²·Â_ijk cos(kα).
 # Requires `c`, `sn`, and `cn` current at α through `cosine_features!`.
 # One column is O(ETL²/2), so building only the few support columns is far cheaper than a full basis.
 function epg_decay_basis_∂α_col!(Acol::AbstractVector{T}, dAcol::AbstractVector{T}, ddAcol::AbstractVector{T}, decay_basis_work::EPGCosineSeriesBasis{T}, α::T, j::Int) where {T}
     (; ETL, coeffs, c, sn, cn) = decay_basis_work
     nblk = cld(ETL, 4)
-    s, ds = sind(α / 2), T(π) / 360 * cosd(α / 2)
-    dds = -(T(π) / 360)^2 * s
-    dcoef = -T(π) / 180
-    ddcoef = dcoef^2
+    s, ds = sin(α / 2), cos(α / 2) / 2
+    dds = -s / 4
     p = 4 * (j - 1) * sum(b -> min(4b, ETL) + 1, 1:nblk)
     @inbounds for b in 1:nblk
         i0 = 4 * (b - 1)
@@ -1846,8 +1828,8 @@ function epg_decay_basis_∂α_col!(Acol::AbstractVector{T}, dAcol::AbstractVect
         for (r, a, d, e) in ((1, a1, d1, e1), (2, a2, d2, e2), (3, a3, d3, e3), (4, a4, d4, e4))
             i = i0 + r
             i <= ETL || break
-            a′ = dcoef * d
-            a″ = -ddcoef * e
+            a′ = -d
+            a″ = -e
             dv = muladd(ds, a, s * a′)
             ddv = muladd(dds, a, muladd(2 * ds, a′, s * a″))
             neg = a < 0
