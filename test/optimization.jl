@@ -58,3 +58,32 @@ end
     x, fx = DECAES.brent_newton_minimize(f_df, -2.2, 0.8, -0.3; xatol = 0.0, xrtol = 1e-9)
     @test abs(x - log(0.5)) <= 1e-9 * abs(log(0.5))
 end
+
+# Every solver returns `(x, y, bracket)`, and `bisect_root` also returns the bracket values. The bracket is in coordinate order, and its values must belong to those endpoints whichever order the caller supplied them in.
+@testset "solver bracket API" begin
+    f(x) = x^2 - 2
+    for (a, b) in ((0.0, 2.0), (2.0, 0.0))
+        x, y, (lo, hi), (ylo, yhi) = DECAES.bisect_root(f, a, b, f(a), f(b); xatol = 1e-8)
+        @test lo <= hi && lo <= x <= hi
+        @test ylo == f(lo) && yhi == f(hi)
+        @test x ≈ √2 atol = 1e-6
+    end
+
+    # An unbracketed interval takes the early return, which must pair its endpoints the same way
+    x, y, (lo, hi), (ylo, yhi) = DECAES.bisect_root(f, 3.0, 2.0, f(3.0), f(2.0); xatol = 1e-8)
+    @test lo == 2.0 && hi == 3.0
+    @test ylo == f(2.0) && yhi == f(3.0)
+
+    for (a, b) in ((0.0, 2.0), (2.0, 0.0))
+        x, y, (lo, hi) = DECAES.brent_root(f, a, b; xatol = 1e-10)
+        @test lo <= x <= hi
+        @test x ≈ √2 atol = 1e-8
+    end
+
+    # `brent_minimize` bounds its converged bracket by 4·xatol
+    g(x) = (x - 0.3)^2
+    x, y, (lo, hi) = DECAES.brent_minimize(g, -1.0, 1.0; xatol = 1e-6, xrtol = 0.0, maxiters = 100)
+    @test lo <= x <= hi
+    @test hi - lo <= 4e-6
+    @test x ≈ 0.3 atol = 1e-5
+end

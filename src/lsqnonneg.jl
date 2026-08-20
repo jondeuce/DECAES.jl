@@ -78,9 +78,9 @@ function solve!(
     return NNLS.unsafe_nnls!(work.nnls_work, A; kwargs..., init_dual = false)
 end
 
-# Warm-started unregularized solve: seeds the passive set with the original column indices idx0[1:nsetp0], e.g. `NNLS.components` saved from a solve against a nearby matrix, such as an adjacent flip angle's decay basis in the surrogate search.
-# Seeds are stashed in hpos, entered without the positivity check, and a feasibility pass drops any that come out non-positive, so the result satisfies the same KKT conditions as a cold solve regardless of seed quality.
-# The initial dual is recomputed from the seeded residual, so no dual preload is needed here.
+# Warm-started unregularized solve: seeds the passive set with column indices `idx0[1:nsetp0]`, e.g. saved by `NNLS.components` at a nearby flip angle.
+# Seeds enter without the positivity check; a feasibility pass then drops any that come out non-positive, so the KKT conditions hold whatever the seed.
+# The dual is recomputed from the seeded residual, so unlike the cold solves there is nothing to preload.
 function solve!(
     work::NNLSProblem{T},
     A::AbstractMatrix{T},
@@ -172,8 +172,8 @@ function solve!(
     @inbounds w[end] = 0
     @inbounds w[end] = all(<=(0), w)
 
-    # Initialize nnls workspace; A is not copied, since the solver reads pristine column data directly from the caller's
-    # matrix and candidate columns are materialized in a scratch buffer with their λ entry placed on the fly
+    # Initialize nnls workspace; A is not copied, since the solver reads pristine column data directly from the caller's matrix,
+    # and candidate columns are materialized in a scratch buffer with their λ entry placed on the fly
     @inbounds for i in 1:m
         f[i] = b0[i]
     end
@@ -187,9 +187,7 @@ function solve!(
     return NNLS.unsafe_nnls!(work.nnls_work, A0, μ; kwargs..., init_dual = false)
 end
 
-# Warm-started Tikhonov solve: like `solve!(work, A, b, μ)` above, but seeds the passive set with the original column indices `idx0[1:nsetp0]`, e.g. saved via `NNLS.components` from a solve at a nearby μ.
-# Seeding follows the same protocol as `NNLS.nnls!(work, A, b, λ, idx0, nsetp0)`: seeds are stashed in `hpos`, entered without the positivity check, and a feasibility pass drops any that come out non-positive, so the result satisfies the same KKT conditions as a cold solve regardless of seed quality.
-# The initial dual is recomputed from the seeded residual, so no dual preload is needed here.
+# Warm-started Tikhonov solve: `solve!(work, A, b, μ)` seeded with the passive set `idx0[1:nsetp0]`, e.g. saved by `NNLS.components` at a nearby μ. Seeding protocol as above.
 function solve!(
     work::NNLSProblem{T},
     A::AbstractMatrix{T},
@@ -243,17 +241,16 @@ function solve!(
     return NNLS.unsafe_nnls!(work.nnls_work, A0, μ; kwargs..., nwarm = nsetp0)
 end
 
-# Source for the unregularized solve that each μ-selection method starts from.
-# A bare workspace only seeds: its passive set warm-starts the solve, changing the cost but never the solution.
-# A problem over the same `A` and `b`, which the flip-angle polish leaves solved at the fitted angle, also lets a solved state be used outright.
+# Source for the unregularized solve every μ-selection method starts from.
+# A workspace supplies a passive set to warm-start from, changing the cost but not the solution.
+# A problem over the same `A` and `b`, as the flip-angle polish leaves behind, additionally allows copying a finished solution outright.
 const NNLSUnregSource{T} = Union{Nothing, NNLS.NNLSWorkspace{T}, NNLSProblem{T}}
 
 solve_unreg!(prob::NNLSProblem, ::Nothing) = solve!(prob)
 solve_unreg!(prob::NNLSProblem, seed::NNLS.NNLSWorkspace) = solve!(prob, prob.A, prob.b, seed.idx, NNLS.ncomponents(seed))
 solve_unreg!(prob::NNLSProblem, src::NNLSProblem) = NNLS.issolved(src.nnls_work) ? adopt_solution!(prob, src.nnls_work) : solve_unreg!(prob, src.nnls_work)
 
-# Consumers read the solution, residual, residual norm, and passive set, never the triangular factor, so an O(m + n) transfer of those replaces the solve.
-# Kept out of line so that `solve_unreg!` stays small enough to inline into its callers.
+# Consumers read the solution, residual, residual norm, and passive set, never the triangular factor, so copying those O(m + n) values replaces the solve.
 function adopt_solution!(prob::NNLSProblem, src::NNLS.NNLSWorkspace)
     dst = prob.nnls_work
     copyto!(dst.x, src.x)
@@ -270,6 +267,7 @@ end
 @inline ncomponents(work::NNLSProblem) = NNLS.ncomponents(work.nnls_work)
 @inline resnorm(work::NNLSProblem) = NNLS.residualnorm(work.nnls_work)
 @inline resnorm_sq(work::NNLSProblem) = resnorm(work)^2
+@inline seminorm_sq(work::NNLSProblem) = sum(abs2, NNLS.positive_solution(work.nnls_work))
 
 @doc raw"""
     lsqnonneg(A::AbstractMatrix, b::AbstractVector)
@@ -294,7 +292,7 @@ lsqnonneg_work(A::AbstractMatrix, b::AbstractVector) = NNLSProblem(A, b)
 lsqnonneg!(work::NNLSProblem) = solve!(work)
 lsqnonneg!(work::NNLSProblem{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T} = solve!(work, A, b)
 
-# Unregularized counterpart of the `NNLS*RegProblem` types: no μ to select, so the workspace carries only the problem and the source its solve may be seeded from or adopted whole.
+# Unregularized counterpart of the `NNLS*RegProblem` types: with no μ to select, the workspace holds only the problem and the source its solve starts from.
 struct NNLSUnregProblem{T, W <: NNLSProblem{T}, S}
     nnls_prob::W
     nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
@@ -407,7 +405,6 @@ lsqnonneg_tikh!(work::NNLSTikhonovRegProblem, μ::Real) = solve!(work, μ)
 regparam(work::NNLSTikhonovRegProblem) = regparam(work.nnls_prob.A)
 regparam!(work::NNLSTikhonovRegProblem, μ::Real) = regparam!(work.nnls_prob.A, μ)
 
-# Solve the Tikhonov-regularized NNLS problem with regularization parameter `μ`
 function solve!(work::NNLSTikhonovRegProblem, μ::Real; kwargs...)
     regparam!(work, μ)
     solve!(work.nnls_prob, μ; kwargs...)
@@ -446,16 +443,21 @@ solution_gradnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) 
 curvature(::typeof(identity), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = inv(2 * ∇.xᵀB⁻¹x * √(1 + ∇.μ^4)^3)
 
 # L-curve: (ξ̄(μ), η̄(μ)) = (log||Ax-b||^2, log||x||^2)
-function curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work))
-    # Analytically, we have that
-    #       d(η²)/d(ξ²) = d(η²)/dμ / d(ξ²)/dμ = -1 / μ²     (1)
-    #   =>  d(logη²)/d(logξ²) = -(ξ² / η²) / μ²             (2)
-    ℓ² = loss(work) # ℓ² = ||Ax-b||^2 + μ²||x||^2 = ξ² + μ²η²
-    ξ² = resnorm_sq(work)
-    η² = seminorm_sq(work)
-    ξ⁴, η⁴ = ξ²^2, η²^2
-    C̄ = ξ² * η² * (ξ² * η² - (2 * ∇.xᵀB⁻¹x) * ∇.μ^2 * ℓ²) / (2 * ∇.xᵀB⁻¹x * √(ξ⁴ + ∇.μ^4 * η⁴)^3)
-    return C̄
+curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = lcurve_geometry(resnorm_sq(work), seminorm_sq(work), ∇.xᵀB⁻¹x, ∇.μ)[1]
+
+# Curvature κ and turning rate ω = θ̇ of the log-log L-curve P(t) = (log ξ², log η²) at t = log μ, from ξ² = ‖Ax-b‖², η² = ‖x‖², q = xᵀB⁻¹x.
+# At fixed active set Ṗ = (4ρ²q/ξ², -4ρq/η²) with ρ = μ², so the log-log slope is -ξ²/(ρη²).
+# Writing H = hypot(ξ², ρη²), c = ξ²/H, d = ρη²/H, z = 2ρq/η², whence c² + d² = 1,
+#       κ = cd·u/z,   ω = 2d·u,   u = c - z(c + d).
+# Every factor is O(1) but the intrinsic 1/z, and u alone cancels at zero curvature. B ⪰ ρI gives q ≤ η²/ρ, hence 0 < z ≤ 2.
+# κ selects the corner; ω tells it apart from the μ → 0 tail, where κ tends to a plateau η⁴/(2qξ²) but the arc speed vanishes.
+function lcurve_geometry(ξ²::T, η²::T, q::T, μ::T) where {T}
+    ρ = μ^2
+    H = hypot(ξ², ρ * η²)
+    c, d = ξ² / H, (ρ * η²) / H
+    z = 2 * ((ρ * q) / η²)
+    u = muladd(-z, c + d, c)
+    return (c * d * u / z, 2 * d * u)
 end
 
 function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
@@ -505,9 +507,7 @@ function chi2_relerr!(work::NNLSTikhonovRegProblem, res²_target, logμ, ∇log�
 end
 chi2_relerr⁻¹(res²_target, relerr) = res²_target * (1 + relerr)
 
-# Helper struct which wraps `N` caches of `NNLSTikhonovRegProblem` workspaces.
-# Useful for optimization problems where the last function call may not be the optimium,
-# but perhaps it was recent and is still in the `NNLSTikhonovRegProblemCache`, avoiding a recomputation.
+# `N` `NNLSTikhonovRegProblem` workspaces in rotation. A μ-search rarely ends at its last evaluation, so keeping the recent ones lets the selected μ be recovered without re-solving.
 struct NNLSTikhonovRegProblemCache{T, N, W <: AbstractVector}
     cache::W # a Vector rather than an NTuple, so runtime slot indexing compiles to a load instead of a branch chain
     idx::Base.RefValue{Int} # index of the most recently written slot
@@ -550,8 +550,7 @@ function solve!(work::NNLSTikhonovRegProblemCache{T}, μ::T) where {T}
     end
 
     if emptycache || imax == 0
-        # No cached solve is an exact match, so solve from scratch.
-        # A nearest match can also fail to exist when μ is so large that (μ - μi) / μi rounds to -1 and Δlogμ overflows to Inf.
+        # Nothing to warm-start from: the cache is empty, or every Δlogμ overflowed to Inf, which happens once μ is small enough relative to μi that (μ - μi) / μi rounds to -1.
         next_cache_index!(work)
         solve!(work[], μ)
     elseif Δlogμmax > 0
@@ -573,37 +572,37 @@ end
 #### Gram matrix-based fast path for the μ-search
 ####
 
-# Seed the Gram fast path from the unregularized solution's active set.
-# Requires `solve!(work.nnls_prob)` to have been called; `work` is any of the μ-selection problem types (chi2/gcv/lcurve) exposing `.nnls_gram`, `.A`, `.nnls_prob`.
+# Seed the Gram fast path from the unregularized solution's active set, so `work.nnls_prob` must already be solved.
+# `work` is any of the μ-selection problem types exposing `.nnls_gram`, `.A`, `.b`, and `.nnls_prob`.
 function nnls_gram_setup!(work)
-    gp = work.nnls_gram
-    NNLS.load!(gp, work.A, work.b)
+    (; nnls_gram) = work
+    NNLS.load!(nnls_gram, work.A, work.b)
     (; nnls_work) = work.nnls_prob
-    NNLS.set_active!(gp, work.A, nnls_work.idx, NNLS.ncomponents(nnls_work))
-    return gp
+    NNLS.set_active!(nnls_gram, work.A, nnls_work.idx, NNLS.ncomponents(nnls_work))
+    return nnls_gram
 end
 
-# Evaluate (‖Ax(μ)-b‖², ‖x(μ)‖²) via the Gram fast path, warm-chained across μ, falling back to the exact QR solver if the Gram path fails a conditioning/iteration guard.
-# Used by the gcv and lcurve μ-searches (see `lsqnonneg_gcv!`, `lsqnonneg_lcurve!`); the selected μ is then recomputed with an exact final solve.
+# Evaluate (‖Ax(μ)-b‖², ‖x(μ)‖²) on the Gram fast path, warm-chained across μ, falling back to the exact QR solver when a conditioning or iteration guard trips.
+# The gcv and lcurve searches evaluate through this, then recompute the selected μ with `nnls_gram_polish_solve!`.
 function nnls_gram_losses!(work, μ::T) where {T}
-    gp = work.nnls_gram
-    res² = NNLS.solve!(gp, work.A, work.b, μ)
+    (; nnls_gram) = work
+    res² = NNLS.solve!(nnls_gram, work.A, work.b, μ)
     if isnan(res²)
         solve!(work.nnls_prob_smooth_cache, μ)
         cache = work.nnls_prob_smooth_cache[]
         (; nnls_work) = cache.nnls_prob
-        NNLS.set_active!(gp, work.A, nnls_work.idx, NNLS.ncomponents(nnls_work))
+        NNLS.set_active!(nnls_gram, work.A, nnls_work.idx, NNLS.ncomponents(nnls_work))
         return resnorm_sq(cache), seminorm_sq(cache)
     end
-    return res², NNLS.seminorm_sq(gp)
+    return res², NNLS.seminorm_sq(nnls_gram)
 end
 
-# Exact final solve at the selected μ, seeded from the Gram path's active set and stored in a fresh μ-cache slot so the usual `solution(work)` accessors see it.
+# Exact final solve at the selected μ, seeded from the Gram path's active set and written to a fresh μ-cache slot so that `solution(work)` finds it.
 function nnls_gram_polish_solve!(work, μ::T) where {T}
-    gp = work.nnls_gram
+    (; nnls_gram) = work
     cache = work.nnls_prob_smooth_cache
     next_cache_index!(cache)
-    return solve!(cache[], μ, gp.P, gp.np[])
+    return solve!(cache[], μ, nnls_gram.P, nnls_gram.np[])
 end
 
 ####
@@ -668,15 +667,14 @@ end
 lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSChi2RegProblem(A, b, nnls_prob_seed)
 
 function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :brent_gram) where {T}
-    # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present: `method === :brent_gram` solves the same χ²(μ) = target root problem to the same tolerance as :brent, using the Gram fast path for search evaluations and an exact final solve.
-    # On voxels where the χ²(μ) curve is flat the selected μ is reproducible only within the root-tolerance band; use :brent for an evaluation-path identical to the reference implementation.
+    # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
 
     if res²_min == 0 || ncomponents(work.nnls_prob) == 0
-        # 1. If non-regularized solution is exact, the only solution to res²(μ) = chi2_target * res²_min = 0 is μ = 0, since res²(μ) > 0 for all μ > 0.
-        # 2. If non-regularized solution is zero, any value of μ > 0 also results in x(μ) = 0, and so res²(μ) = chi2_target * res²_min has either no solutions if chi2_target > 1, or infinitely many solutions if chi2_target = 1; choose μ = 0 and chi2_target = 1.
+        # An exact unregularized fit makes the target res²(μ) = chi2_target * res²_min zero, whose only root is μ = 0, since res²(μ) > 0 for μ > 0.
+        # Or, since a zero unregularized solution gives x(μ) = 0 for every μ > 0, the target has no roots when chi2_target > 1 and every μ is a root when chi2_target = 1; take μ = 0.
         x_final = x_unreg
         return (; x = x_final, mu = zero(T), chi2 = one(T))
     end
@@ -709,7 +707,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
 
         if fa * fb < 0
             # Bracketing interval found
-            a, fa, c, fc, b, fb = bisect_root(f_bisect, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = T(1e-3) * (chi2_target - 1), maxiters = 100)
+            c, fc, (a, b), (fa, fb) = bisect_root(f_bisect, a, b, fa, fb; xatol = T(0.0), xrtol = T(0.0), ftol = T(1e-3) * (chi2_target - 1), maxiters = 100)
 
             # Root of secant line through `(a, fa), (b, fb)` or `(c, fc), (b, fb)` to improve bisection accuracy
             tmp = fa * fc < 0 ? root_real_linear(a, c, fa, fc) : fc * fb < 0 ? root_real_linear(c, b, fc, fb) : T(NaN)
@@ -730,7 +728,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         end
 
     elseif method === :brent
-        # Search evaluations use the exact QR solver via the μ-cache (identical evaluation path to the reference implementation, so the selected μ tracks it to solver roundoff; solves are warm-started across μ, which perturbs only the QR roundoff, not the active set)
+        # Search evaluations use the exact QR solver through the μ-cache, the same evaluation path as the reference implementation, so the selected μ tracks it to solver roundoff. Warm-starting across μ perturbs that roundoff but not the active set.
         function f_brent(logμ)
             solve!(work.nnls_prob_smooth_cache, exp(logμ))
             return chi2_relerr!(work.nnls_prob_smooth_cache[], res²_target, logμ)
@@ -755,7 +753,8 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         end
 
     elseif method === :brent_gram
-        # Fast variant: search evaluations use the Gram fast path, warm-chained across μ. Only the residual norm feeds the root finder, and the final solution is recomputed with the exact QR solver below.
+        # The same root problem and tolerance as `:brent`, but evaluated on the Gram fast path, warm-chained across μ, with only the residual norm reaching the root finder.
+        # Where χ²(μ) is flat this pins μ only to within the root-tolerance band, whereas `:brent` reproduces the reference implementation's evaluation path exactly.
         nnls_gram_setup!(work) # seed the Gram fast path from the unregularized active set
         function f_brent_gram(logμ)
             res², _ = nnls_gram_losses!(work, exp(logμ))
@@ -914,7 +913,7 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
         return (; x = x_final, mu = T(Inf), chi2 = res²_max / res²_min)
     end
 
-    # Prepare to solve. The residual-norm root ‖Ax(μ)-b‖² = δ² is found with the Gram fast path for search evaluations, seeded by the unregularized solve.
+    # Search evaluations for the root ‖Ax(μ)-b‖² = δ² take the Gram fast path, seeded from the unregularized solve.
     reset_cache!(work.nnls_prob_smooth_cache)
     nnls_gram_setup!(work)
 
@@ -956,8 +955,8 @@ struct NNLSLCurveRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T},
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
-    lsqnonneg_lcurve_fun_cache::C1 # cache of (log res², log ‖x‖²) points on the L-curve
-    lcurve_corner_caches::C2 # corner-search point and state caches (see `lcurve_corner`)
+    lcurve_point_cache::C1 # cache of evaluated L-curve points; see `LCurveCornerPoint`
+    lcurve_state_stack::C2 # corner-search branch stack; see `lcurve_corner`
     nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
 end
 function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
@@ -965,19 +964,20 @@ function NNLSLCurveRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_p
     nnls_prob = NNLSProblem(A, b)
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
     nnls_gram = NNLS.NNLSGram(A, b)
-    lsqnonneg_lcurve_fun_cache = GrowableCache{T, SVector{2, T}}(64, isapprox)
-    lcurve_corner_caches = (
-        GrowableCache{T, LCurveCornerPoint{T}}(64, isapprox),
-        GrowableCache{T, LCurveCornerState{T}}(64, isapprox),
-    )
-    return NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_gram, lsqnonneg_lcurve_fun_cache, lcurve_corner_caches, nnls_prob_seed)
+    lcurve_point_cache = GrowableCache{T, LCurveCornerPoint{T}}(64, (t₁, t₂) -> isapprox(t₁, t₂; atol = 10 * eps(T), rtol = 10 * eps(T)))
+    lcurve_state_stack = GrowableCache{Int, LCurveCornerState{T}}(64)
+    return NNLSLCurveRegProblem(A, b, m, n, nnls_prob, nnls_prob_smooth_cache, nnls_gram, lcurve_point_cache, lcurve_state_stack, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSLCurveRegProblem) = solution(work.nnls_prob_smooth_cache[])
 @inline ncomponents(work::NNLSLCurveRegProblem) = ncomponents(work.nnls_prob_smooth_cache[])
 
+# Default slope guard: the largest log-log tangent slope |S| = ξ²/(μ²η²) accepted at a corner, keeping the tangent at least arctan(1/τ) off the vertical μ → 0 asymptote.
+# A guard is needed because positive curvature does not exclude the μ → 0 tail wherein κ tends to a positive plateau, even rising out of the plateau when ‖x₀‖²·x₀ᵀG⁻²x₀ > 2(x₀ᵀG⁻¹x₀)².
+const LCURVE_SLOPE_MAX_DEFAULT = 10.0
+
 @doc raw"""
-    lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector)
+    lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector; max_slope = $(LCURVE_SLOPE_MAX_DEFAULT))
 
 Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
 
@@ -985,13 +985,15 @@ Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{
 X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||L x||_2^2
 ```
 
-where ``L`` is the identity matrix, and ``\mu`` is chosen by locating the corner of the "L-curve"[1].
+where ``L`` is the identity matrix, and ``\mu`` is chosen at a corner of the "L-curve"[1], a local maximum of the curvature of ``\mu \mapsto (\log||Ax_\mu - b||_2^2, \log||x_\mu||_2^2)``.
+The L-curve may have several corners; `max_slope` excludes those in its near-vertical ``\mu \to 0`` tail, where the fit is barely regularized. If no corner is found, ``\mu = 0`` and the unregularized solution is returned.
 Details of L-curve theory can be found in Hansen (1992)[2].
 
 # Arguments
 
   - `A::AbstractMatrix`: Decay basis matrix
   - `b::AbstractVector`: Decay curve data
+  - `max_slope::Real = $(LCURVE_SLOPE_MAX_DEFAULT)`: reject corners at which ``||Ax_\mu - b||_2^2 / (\mu^2 ||x_\mu||_2^2)`` exceeds `max_slope`. Pass `Inf` to accept any corner.
 
 # Outputs
 
@@ -1010,38 +1012,48 @@ function lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector; kwargs...)
 end
 lsqnonneg_lcurve_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSLCurveRegProblem(A, b, nnls_prob_seed)
 
-# Slope-collapse guard threshold for the L-curve corner: the maximum admissible log-log tangent slope |S| = -res²/(‖x‖²·μ²) at a corner candidate.
-# The max-curvature search can latch onto spurious high curvature near μ→0, where the residual bottoms out as ‖Ax-b‖² → res²_min and the log-residual axis flattens, so the L-curve turns near-vertical and the "corner" collapses onto its top-left tail.
-# A near-vertical collapse has |S|≫1, a genuine elbow has |S| ~ 0.1 to 10; candidate points steeper than this are not accepted as corners. This is built into the search's admissibility filter; see `lcurve_corner`'s `slope_max` kwarg.
-# Set to Inf to disable and recover the pure max-curvature search.
-const LCURVE_SLOPE_MAX = Ref(10.0)
-
-function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
-    # Compute the regularization using the L-curve method
+function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; max_slope = LCURVE_SLOPE_MAX_DEFAULT, kwargs...) where {T}
     reset_cache!(work.nnls_prob_smooth_cache)
 
-    # The corner search's (ξ, η) points are evaluated through the Gram fast path. The corner curvature is computed from these cached points and the final solution is recomputed via `nnls_gram_polish_solve!`.
+    # Search points come from the Gram fast path, which also supplies κ, ω and the active set; the selected μ is recomputed exactly by `nnls_gram_polish_solve!`.
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
     nnls_gram_setup!(work)
 
     # A point on the L-curve is given by (ξ(μ), η(μ)) = (log||Ax-b||^2, log||x||^2)
-    #   Note: Squaring the norms is convenient for computing gradients of (ξ(μ), η(μ));
-    #         this scales the L-curve, but does not change μ* = argmax C(ξ(μ), η(μ)).
-    function f_lcurve(logμ)
-        res², η² = nnls_gram_losses!(work, exp(logμ))
-        return SA{T}[log(res²), log(η²)]
+    # Note: squaring the norms is convenient for computing gradients of (ξ(μ), η(μ)); this scales the L-curve, but does not change μ* = argmax κ(ξ(μ), η(μ)).
+    ξ²₀, η²₀, b² = resnorm_sq(work.nnls_prob), seminorm_sq(work.nnls_prob), sum(abs2, work.b)
+
+    # A zero solution puts log η² at -∞ and reduces the curve to a single point; a fit exact to working precision puts log ξ² there and leaves only roundoff to read curvature from.
+    # Exactness is judged as ‖Ax₀ - b‖ ≤ ε‖b‖: declining to regularize is a convention, applied only where the residual has reached the level of the arithmetic.
+    (ξ²₀ <= eps(T)^2 * b² || η²₀ <= 0) && return (; x = solution(work.nnls_prob), mu = zero(T), chi2 = one(T))
+
+    # Seed at the balance point ξ²₀ = μ²η²₀ from the unregularized solution.
+    f = LCurveCornerCachedFunction(CachedFunction(logμ -> lcurve_point(work, exp(logμ)), empty!(work.lcurve_point_cache)), empty!(work.lcurve_state_stack))
+    P₀ = SA{T}[log(ξ²₀), log(η²₀)]
+    t₀ = (P₀[1] - P₀[2]) / 2
+
+    # A finite slope guard confines every admissible corner to an interval computed from the data, assuming nothing about the active set.
+    # ξ² is nondecreasing and η² nonincreasing, so |S| ≥ e^{2(t₀-t)} and |S| ≤ τ forces t ≥ t₀ - ½logτ.
+    # KKT gives (Aᵀb)ᵀx = xᵀAᵀAx + ρη², and x ≥ 0 with Cauchy-Schwarz gives (Aᵀb)ᵀx ≤ ‖(Aᵀb)₊‖·η.
+    # Bounding ξ² below by ξ²₀ and by ‖b‖² - (Aᵀb)ᵀx - ρη² then gives ρ ≤ ‖(Aᵀb)₊‖²·min{τ/ξ²₀, (τ+2)/‖b‖²}.
+    # Unregularized optimality gives Aᵀb ≤ AᵀAx₀ componentwise, hence ρη² ≤ ‖Ax₀‖²/4 and |S| ≥ 4ξ²₀/(‖b‖² - ξ²₀) everywhere.
+    # So ξ²₀/‖b‖² > τ/(τ+4) leaves the path with no admissible point. For 1 < τ < 6 + 2√17 that is also the only way the seed can fall outside [t₋, t₊].
+    τ = T(max_slope)
+    logmu_bounds = if isfinite(τ)
+        (τ + 4) * ξ²₀ > τ * b² && return (; x = solution(work.nnls_prob), mu = zero(T), chi2 = one(T))
+        c₊² = sum(cᵢ -> max(cᵢ, zero(T))^2, work.nnls_gram.c)
+        cmax = work.nnls_gram.cscale[]
+        logC = isfinite(c₊²) ? log(c₊²) : 2 * log(cmax) + log(sum(cᵢ -> (max(cᵢ, zero(T)) * inv(cmax))^2, work.nnls_gram.c))
+        (t₀ - log(τ) / 2, (logC + log(min(τ / ξ²₀, (τ + 2) / b²))) / 2)
+    else
+        (T(-Inf), T(Inf))
     end
+    logmu_final = lcurve_corner(f, t₀, P₀, NNLS.active_signature(work.nnls_gram); max_slope = τ, bounds = logmu_bounds, kwargs...)
 
-    # Build cached function and solve via pointwise max-curvature, following Cultrera-Callegaro, rejecting corners in the near-vertical μ→0 collapse tail with the slope guard `LCURVE_SLOPE_MAX`.
-    f_lcurve_cached = CachedFunction(f_lcurve, empty!(work.lsqnonneg_lcurve_fun_cache))
-    f = LCurveCornerCachedFunction(f_lcurve_cached, empty!.(work.lcurve_corner_caches)...)
-    logmu_final = lcurve_corner(f, T(-8), T(2); slope_max = T(LCURVE_SLOPE_MAX[]), kwargs...)
-
-    # A degenerate cornerless curve admits no corner; see `lcurve_corner`.
-    # Return the unregularized solution rather than an arbitrary near-zero μ.
+    # A degenerate curve admits no corner; see `lcurve_corner`. Return the unregularized solution rather than an arbitrary near-zero μ
     isnan(logmu_final) && return (; x = solution(work.nnls_prob), mu = zero(T), chi2 = one(T))
 
-    # Return the final regularized solution (recomputed exactly; the unregularized solve was already done above to seed the Gram path)
+    # Return the final regularized solution, recomputed via QR
     mu_final = exp(logmu_final)
     x_final = nnls_gram_polish_solve!(work, mu_final)
     chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
@@ -1049,135 +1061,311 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; kwargs...) where {T}
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
 end
 
-struct LCurveCornerState{T}
-    x⃗::SVector{4, T} # grid of regularization parameters
-    P⃗::SVector{4, SVector{2, T}} # points (residual norm, solution seminorm) evaluated at x⃗
+# The L-curve at μ: the log-log point, its exact κ and ω, and a digest of the active set.
+function lcurve_point(work::NNLSLCurveRegProblem{T}, μ::T) where {T}
+    (; nnls_gram) = work
+    ξ² = NNLS.solve!(nnls_gram, work.A, work.b, μ)
+    if isnan(ξ²)
+        solve!(work.nnls_prob_smooth_cache, μ)
+        cache = work.nnls_prob_smooth_cache[]
+        (; nnls_work) = cache.nnls_prob
+        NNLS.set_active!(nnls_gram, work.A, nnls_work.idx, NNLS.ncomponents(nnls_work))
+        ξ², η², q = resnorm_sq(cache), seminorm_sq(cache), gradient_temps(cache).xᵀB⁻¹x
+    else
+        η², q = NNLS.seminorm_sq(nnls_gram), NNLS.inv_quadratic_form(nnls_gram)
+    end
+    κ, ω = lcurve_geometry(ξ², η², q, μ)
+    return LCurveCornerPoint(SA{T}[log(ξ²), log(η²)], κ, ω, NNLS.active_signature(nnls_gram))
 end
-@inline Base.iterate(s::LCurveCornerState, args...) = iterate((s.x⃗, s.P⃗), args...)
 
 struct LCurveCornerPoint{T}
-    P::SVector{2, T} # grid point
-    C::T # curvature
+    P::SVector{2, T} # log-log L-curve point (log||Ax-b||², log||x||²)
+    κ::T # exact signed curvature of the log-log curve; see `lcurve_geometry`
+    ω::T # exact angular velocity dθ/dt of the tangent, t = logμ
+    sig::UInt128 # digest of the active set; see `NNLS.active_signature`
 end
-LCurveCornerPoint(P::SVector{2, T}) where {T} = LCurveCornerPoint(P, T(-Inf))
-@inline Base.iterate(p::LCurveCornerPoint, args...) = iterate((p.P, p.C), args...)
 
-struct LCurveCornerCachedFunction{T, F <: CachedFunction{T, SVector{2, T}}, C1 <: GrowableCache{T, LCurveCornerPoint{T}}, C2 <: GrowableCache{T, LCurveCornerState{T}}}
-    f::F
-    point_cache::C1
-    state_cache::C2
+# A golden state is four abscissas x₁ < x₂ < x₃ < x₄ with x₂ = x₁ + Δ/φ², x₃ = x₁ + Δ/φ and Δ = x₄ - x₁.
+# `C` and `κ⃗ₒ` are stored rather than looked up so that every decision is a function of the branch state alone.
+struct LCurveCornerState{T}
+    x⃗::SVector{4, T} # grid of regularization parameters
+    p⃗::SVector{4, LCurveCornerPoint{T}} # L-curve points evaluated at x⃗
+    C::SVector{2, T} # Menger curvatures of the triples (p₁, p₂, p₃) and (p₂, p₃, p₄)
+    κ⃗ₒ::SVector{2, T} # curvature at the nearest point this branch evaluated outside [x₁, x₄] on each side, +Inf where it has evaluated none
 end
-@inline Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.point_cache); empty!(f.state_cache); f)
-@inline (f::LCurveCornerCachedFunction{T})(x::T) where {T} = f.f(x)
+
+struct LCurveCornerCachedFunction{T, F <: CachedFunction{T, LCurveCornerPoint{T}}, C <: GrowableCache{Int, LCurveCornerState{T}}}
+    f::F
+    state_stack::C # states whose discarded sibling branch is unexplored, innermost last
+end
+Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.state_stack); f)
+(f::LCurveCornerCachedFunction{T})(x::T) where {T} = f.f(x)
 
 @doc raw"""
-    lcurve_corner(f, xlow, xhigh)
+    lcurve_corner(f, t₀, P₀, sig₀; kwargs...)
 
-Find the corner of the L-curve via curvature maximization using a modified version of Algorithm 1 from Cultrera and Callegaro (2020)[1].
+Locate a corner of the L-curve, following Cultrera and Callegaro (2020)[1] with a dynamically bracketed search.
+
+`f(t)` returns the L-curve point at ``t = \log\mu`` with its curvature, angular velocity, and active-set digest; `P₀` and `sig₀` correspond to the unregularized solution at which the curve terminates.
+Returns ``\log\mu`` at a corner, or `NaN` if none is found. A returned corner has positive curvature, satisfies the slope guard, and exceeds the curvature at the neighbouring points the search evaluated on either side of it.
+
+# Keyword arguments
+
+  - `init_width`: width in ``\log\mu`` of the initial bracket, and the scale at which the first corner is sought.
+  - `xtol`, `Ptol`: absolute tolerances on ``\log\mu`` and on arc length of the log-log curve; contraction stops when either is met.
+  - `max_expand`, `max_backtrack`, `nsweep`, `max_candidates`: search budgets.
+  - `max_slope`: reject corners whose log-log tangent slope exceeds this.
+  - `bounds`: interval of ``\log\mu`` to search within.
 
 # References
 
   1. A. Cultrera and L. Callegaro, "A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems". IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, https://doi.org/10.1088/2633-1357/abad0d.
 """
-function lcurve_corner(f::LCurveCornerCachedFunction{T}, xlow::T = -8.0, xhigh::T = 2.0; xtol = 1e-4, Ptol = 1e-4, Ctol = 1e-4, slope_max = T(Inf), backtracking = true) where {T}
-    # Initialize state
-    state = initial_state(f, T(xlow), T(xhigh))
-
+function lcurve_corner(f::LCurveCornerCachedFunction{T}, t₀::T, P₀::SVector{2, T}, sig₀::UInt128; init_width = 1.0, xtol = 1e-4, Ptol = 1e-4, max_expand::Int = 64, max_backtrack::Int = 4, nsweep::Int = 32, max_candidates::Int = 8, max_slope = T(Inf), bounds = (T(-Inf), T(Inf))) where {T}
     # Note: tolerances are absolute because typically the L-curve is on a log-log scale, and atol on log-log is equivalent to rtol on linear-linear
-    Ptopleft, Pbottomright = state.P⃗[1], state.P⃗[4]
-    Ptol = T(Ptol) # convergence occurs when diameter of L-curve state is less than Ptol
-    Ctol = T(Ctol) # note: *not* a tolerance on curvature, but on the minimum diameter of the L-curve state used to estimate curvature (see `Pfilter` below)
+    xtol, Ptol, max_log_slope = T(xtol), T(Ptol), log(T(max_slope))
 
-    # A candidate point is x = logμ paired with P = (log‖Ax-b‖², log‖x‖²), and is admissible as a corner only if two tests pass.
-    # First, it must not be numerically too close to an endpoint: points on the L-curve can be extremely close for tiny μ, and the curvature estimate is then unstable.
-    # Second, its log-log tangent slope |S| = -res²/(μ²‖x‖²) must not be too steep, i.e. log|S| = P[1] - P[2] - 2x ≤ log(slope_max).
-    # Steep near-vertical points are the μ→0 collapse artifact of the log transform, where the residual has bottomed out at res_min, whereas a genuine elbow has |S| ~ 0.1 to 10.
-    # Setting slope_max = Inf drops the second test and recovers the pure max-curvature search. Inadmissible points are assigned -Inf curvature, so the search never accepts them.
-    log_slope_max = log(T(slope_max))
-    Pfilter = (x, P) -> (min(norm(P - Ptopleft), norm(P - Pbottomright)) > T(Ctol)) && (P[1] - P[2] - 2 * x <= log_slope_max)
-    update_curvature!(f, state, Pfilter)
+    # The search domain is where ρ = μ² is finite and normal, intersected with the caller's admissible interval.
+    # The state slides to fit the domain rather than shrinking around the seed, so the first corner is still sought at the scale `init_width`.
+    # Δ ≤ U - L together with 1/φ + 1/φ² = 1 gives x₁ ≥ L and x₄ ≤ U. The clamp is inert for 1 < τ < 6 + 2√17, where the caller has already excluded a seed outside [t₋, t₊].
+    φ = T(Base.MathConstants.φ)
+    L, U = max(log(floatmin(T)) / 2, T(bounds[1])), min(log(floatmax(T)) / 2, T(bounds[2]))
+    L < U || return T(NaN)
+    Δ = min(T(init_width), prevfloat(U - L))
+    tₛ = clamp(t₀, L + Δ / φ^2, U - Δ / φ)
+    x⃗ = SA[tₛ-Δ/φ^2, tₛ, tₛ+Δ/φ^3, tₛ+Δ/φ]
+    init = golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], SA[T(Inf), T(Inf)])
 
-    # msg(s, state) = (@info "$s: [x⃗, P⃗, C⃗] = "; display(hcat(state.x⃗, state.P⃗, [f.point_cache[x].C for x in state.x⃗])))
-    # msg("Starting", state)
-
-    iter = 0
-    while !is_converged(state; xtol = T(xtol), Ptol = T(Ptol))
-        iter += 1
-        if backtracking
-            # Find state with minimum diameter which contains the current best estimate maximum curvature point
-            (x, (_, _)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
-            for (_, s) in f.state_cache
-                if (s.x⃗[2] == x || s.x⃗[3] == x) && abs(s.x⃗[4] - s.x⃗[1]) <= abs(state.x⃗[4] - state.x⃗[1])
-                    state = s
-                end
-            end
+    # A reversal brackets a curvature basin at the Menger scale, but only proposes it: the exact κ may have no maximum inside it and genuine maxima outside.
+    # Contraction and backtracking both stay within the candidate, so a failed certification resumes expanding outward; otherwise the search could never leave a basin it had entered.
+    best = init
+    for left in (contract_left(init), !contract_left(init))
+        state, budget = init, max_expand
+        while budget > 0
+            found, candidate, state, chainbest, spent = expand_to_reversal(f, state, left, P₀, sig₀, budget, L, U)
+            budget -= spent
+            rank(chainbest) > rank(best) && (best = chainbest)
+            !found && break
+            x = lcurve_certify!(f, candidate; xtol, Ptol, max_log_slope, max_backtrack)
+            !isnan(x) && return x
         end
-
-        # Move state toward region of lower curvature
-        if f.point_cache[state.x⃗[2]].C > f.point_cache[state.x⃗[3]].C
-            state = move_left(f, state)
-            update_curvature!(f, state, Pfilter)
-            # msg("C₂ > C₃; moved left", state)
-        else
-            state = move_right(f, state)
-            update_curvature!(f, state, Pfilter)
-            # msg("C₃ ≥ C₂; moved right", state)
-        end
-        backtracking && push!(f.state_cache, (iter, state))
     end
 
-    (x, (_, C)), _, _ = mapfindmax(T, ((x, (P, C)),) -> C, pairs(f.point_cache))
-    # msg("Converged", state)
+    # Both directions are exhausted; the best-turning state visited is the last candidate.
+    x = lcurve_certify!(f, best; xtol, Ptol, max_log_slope, max_backtrack)
+    !isnan(x) && return x
 
-    # Every evaluated point is inadmissible when the maximum curvature is still -Inf, which happens when all points are endpoint-near or steeper than `slope_max`, as on a degenerate cornerless L-curve.
-    # Return NaN rather than an arbitrary collapse point, and let the caller fall back; `lsqnonneg_lcurve!` returns the unregularized solution in that case.
-    return C == T(-Inf) ? T(NaN) : x
+    # Nothing the branch search reached certifies, so fall back to a brute force sweep. NaN from the sweep leaves `lsqnonneg_lcurve!` returning the unregularized solution.
+    return lcurve_sweep!(f, L, U, max_log_slope; nsweep, max_candidates, xtol, Ptol, max_backtrack)
 end
 
-function initial_state(f::LCurveCornerCachedFunction{T}, x₁::T, x₄::T) where {T}
+# Sample the admissible domain uniformly and certify the brackets those samples propose, returning NaN if none certifies.
+# Two passes, each trying up to `max_candidates` brackets in rank order: intervals of positive net tangent rotation, tried alone and then widened by one sample on either side, followed by the sampled discrete maxima of κ.
+function lcurve_sweep!(f::LCurveCornerCachedFunction{T}, L::T, U::T, max_log_slope::T; nsweep::Int, max_candidates::Int, xtol::T, Ptol::T, max_backtrack::Int) where {T}
+    nsweep >= 3 || return T(NaN)
+    δ = (U - L) / (nsweep - 1)
+
+    # Net rotation of the tangent across each interval, largest first. θ is continuous, so θᵢ₊₁ - θᵢ = ∫ω dt exactly; see `tangent_angle`.
+    # The rotation is signed, and an interval can hide a bend cancelled by an opposite one, so this only ranks proposals and certifies nothing.
+    prev = (T(Inf), 0)
+    for _ in 1:max_candidates
+        best = (T(0), 0) # only intervals that turn positively are worth proposing
+        for i in 1:nsweep-1
+            xᵢ = L + (i - 1) * δ
+            cand = (tangent_angle(f(xᵢ + δ), xᵢ + δ) - tangent_angle(f(xᵢ), xᵢ), -i)
+            cand < prev && cand > best && (best = cand)
+        end
+        best[2] == 0 && break
+        prev = best
+        a = L + (-best[2] - 1) * δ
+        y = certify_span!(f, a, a + δ, δ, L, U; xtol, Ptol, max_log_slope, max_backtrack)
+        !isnan(y) && return y
+        y = certify_span!(f, max(a - δ, L), min(a + 2δ, U), δ, L, U; xtol, Ptol, max_log_slope, max_backtrack)
+        !isnan(y) && return y
+    end
+
+    # Sampled discrete maxima of κ, largest first. The left comparison admits ties, resolving right as `contract_left` does, so a maximum falling between two equal samples is not lost; a monotone or constant sequence yields nothing.
+    prev = (T(Inf), 0)
+    for _ in 1:max_candidates
+        best = (T(-Inf), 0)
+        for i in 2:nsweep-1
+            xᵢ = L + (i - 1) * δ
+            p = f(xᵢ)
+            (p.κ >= f(xᵢ - δ).κ && p.κ > f(xᵢ + δ).κ && is_admissible(p, xᵢ, max_log_slope)) || continue
+            cand = (p.κ, -i)
+            cand < prev && cand > best && (best = cand)
+        end
+        best[2] == 0 && break
+        prev = best
+        xⱼ = L + (-best[2] - 1) * δ
+        y = certify_span!(f, xⱼ - δ, xⱼ + δ, δ, L, U; xtol, Ptol, max_log_slope, max_backtrack)
+        !isnan(y) && return y
+    end
+
+    return T(NaN)
+end
+
+# Angle of the log-log tangent, whose direction (ρη², -ξ²) is continuous across an active-set transition.
+tangent_angle(p::LCurveCornerPoint{T}, t::T) where {T} = -atan(exp(p.P[1] - p.P[2] - 2t))
+
+# Search a proposed bracket for a corner, passing in the samples just outside it as `κ⃗ₒ`.
+# Corners often sit on a bracket's edge, since κ rises up to an active-set transition and drops across it, leaving the largest sampled value the last one before the jump.
+# Confirming such a corner takes a point beyond the edge, which is what `κ⃗ₒ` supplies.
+function certify_span!(f::LCurveCornerCachedFunction{T}, a::T, c::T, δ::T, L::T, U::T; xtol::T, Ptol::T, max_log_slope::T, max_backtrack::Int) where {T}
+    c - a > 0 || return T(NaN)
     φ = T(Base.MathConstants.φ)
-    x₂ = (φ * x₁ + x₄) / (φ + 1)
-    x₃ = x₁ + (x₄ - x₂)
-    x⃗ = SA[x₁, x₂, x₃, x₄]
-    P⃗ = SA[f(x₁), f(x₂), f(x₃), f(x₄)]
-    Base.Cartesian.@nexprs 4 i -> push!(f.point_cache, (x⃗[i], LCurveCornerPoint(P⃗[i])))
-    return LCurveCornerState(x⃗, P⃗)
+    x⃗ = SA[a, a+(c-a)/φ^2, a+(c-a)/φ, c]
+    κ⃗ₒ = SA[a - δ >= L ? f(a - δ).κ : T(Inf), c + δ <= U ? f(c + δ).κ : T(Inf)]
+    return lcurve_certify!(f, golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], κ⃗ₒ); xtol, Ptol, max_log_slope, max_backtrack)
 end
 
-is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x⃗[1]) < xtol || norm(state.P⃗[1] - state.P⃗[4]) < Ptol
+# Search `state` for a corner, and if none is found retry in a part the search skipped, up to `max_backtrack` times.
+# Each contraction keeps half the state and discards the other, which `lcurve_localize!` records; the discards come back out oldest first, hence largest first.
+# Retries are bounded because each searches from scratch, so an unbounded count would cost O(depth²) solves per voxel.
+function lcurve_certify!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}; xtol::T, Ptol::T, max_log_slope::T, max_backtrack::Int) where {T}
+    empty!(f.state_stack)
+    for _ in 0:max_backtrack
+        x = lcurve_localize!(f, state; xtol, Ptol, max_log_slope)
+        !isnan(x) && return x
+        isempty(f.state_stack) && break
+        _, parent = popfirst!(f.state_stack)
+        state = move(f, parent, !contract_left(parent))
+    end
+    return T(NaN)
+end
 
+# Expand in one direction until the preferred contraction direction reverses.
+# Returns whether a candidate was found, the state just before the reversal as the candidate bracket, the state expansion resumes from, the best-ranked state visited, and the expansions spent.
+# Reaching a domain endpoint exhausts that side alone and leaves the other at its starting state, so both directions run before `rank` is consulted.
+function expand_to_reversal(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, left::Bool, P₀::SVector{2, T}, sig₀::UInt128, budget::Int, L::T, U::T) where {T}
+    best = state
+    prev = contract_left(state)
+    for k in 1:budget
+        (; x⃗) = state
+        x = left ? x⃗[1] - (x⃗[4] - x⃗[1]) / T(Base.MathConstants.φ) : x⃗[4] + (x⃗[4] - x⃗[1]) / T(Base.MathConstants.φ)
+        L < x < U || return (false, state, state, best, k - 1)
+        expanded = expand(f, state, left)
+
+        # Saturation is tested before the reversal: a saturated endpoint makes its Menger triples degenerate, so the expanded state's direction carries no information.
+        is_saturated(left ? expanded.p⃗[1] : expanded.p⃗[4], P₀, sig₀) && return (false, state, state, best, k)
+
+        if contract_left(expanded) != prev
+            # The expansion that reversed also evaluated a point just outside `state`. Record it: a corner on that edge of `state` is confirmed only against a point beyond the edge.
+            κₒ = left ? SA[expanded.p⃗[1].κ, state.κ⃗ₒ[2]] : SA[state.κ⃗ₒ[1], expanded.p⃗[4].κ]
+            return (true, LCurveCornerState(state.x⃗, state.p⃗, state.C, κₒ), expanded, best, k)
+        end
+
+        rank(expanded) > rank(best) && (best = expanded)
+        prev = contract_left(expanded)
+        state = expanded
+    end
+
+    return (false, state, state, best, budget)
+end
+
+# Contract the bracket until a point certifies as a local maximum of the exact curvature, returning NaN if none does.
+function lcurve_localize!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}; xtol::T, Ptol::T, max_log_slope::T) where {T}
+    while true
+        (; x⃗, p⃗) = state
+        κᵢ = max(p⃗[2].κ, p⃗[3].κ)
+        if is_equal_signature(state) && κᵢ > max(p⃗[1].κ, p⃗[4].κ)
+            # `brent_minimize` bounds its returned bracket by 4·xatol and no better, so it is asked for a quarter of the target. An exhausted budget leaves the bracket wide and certifies nothing.
+            x, _, (lo, hi) = brent_minimize(t -> -f(t).κ, x⃗[1], x⃗[4]; xatol = xtol / 4, xrtol = zero(T), maxiters = 40)
+            hi - lo <= xtol && lo < x < hi && f(x).κ > max(f(lo).κ, f(hi).κ) && f(x).κ >= κᵢ && is_admissible(f(x), x, max_log_slope) && return x
+        end
+        is_converged(state; xtol, Ptol) && return best_corner(state, max_log_slope)
+        push!(f.state_stack, (length(f.state_stack), state)) # the discarded sibling is `move(f, state, !contract_left(state))`, instantiated only if this branch certifies nothing
+        state = move(f, state, contract_left(state))
+    end
+end
+
+# Highest-curvature point of a state that exceeds both its neighbours, or NaN if none does.
+# An interior point's neighbours are the adjacent state points; an endpoint's are its one adjacent state point and the matching entry of `κ⃗ₒ`, which is +Inf where nothing past the endpoint has been evaluated.
+# A corner is therefore never declared at the edge of the region searched so far.
+function best_corner(state::LCurveCornerState{T}, max_log_slope::T) where {T}
+    (; x⃗, p⃗, κ⃗ₒ) = state
+    κ⃗ = SA[κ⃗ₒ[1], p⃗[1].κ, p⃗[2].κ, p⃗[3].κ, p⃗[4].κ, κ⃗ₒ[2]]
+    x, κ = T(NaN), T(-Inf)
+    for i in 1:4
+        κ⃗[i+1] > κ && κ⃗[i+1] > κ⃗[i] && κ⃗[i+1] > κ⃗[i+2] && is_admissible(p⃗[i], x⃗[i], max_log_slope) && ((x, κ) = (x⃗[i], κ⃗[i+1]))
+    end
+    return x
+end
+
+# A corner must curve the right way and must lie clear of the near-vertical μ → 0 tail.
+# Both halves are needed: κ tends to a positive plateau η⁴/(2qξ²) in that tail and can rise out of it into a genuine maximum, so positive curvature alone does not exclude it. See `LCURVE_SLOPE_MAX_DEFAULT`.
+is_admissible(p::LCurveCornerPoint{T}, x::T, max_log_slope::T) where {T} = p.κ > 0 && p.P[1] - p.P[2] - 2 * x <= max_log_slope
+
+# Contract toward the higher state-local curvature. A negative right-hand curvature places the corner to the left regardless, which is the positive-curvature safeguard of Cultrera-Callegaro; exact equality resolves right.
+contract_left(state::LCurveCornerState) = state.C[2] < 0 || state.C[1] > state.C[2]
+
+# Whether all four abscissas returned the same active set, which gates the exact-curvature maximization.
+is_equal_signature(state::LCurveCornerState) = state.p⃗[1].sig == state.p⃗[2].sig == state.p⃗[3].sig == state.p⃗[4].sig
+
+# Contraction stops when the abscissas span less than `xtol` or the endpoints span less than `Ptol` of L-curve arc. The two are not comparable: `xtol` resolves the abscissa, `Ptol` the solution.
+# Monotonicity of the Tikhonov path gives ‖x₁ - x₂‖² ≤ tanh(t₂ - t₁)·(η²₁ - η²₂), across active-set changes and not merely within one branch, and so
+#       ‖Δx‖/‖x‖ ≤ √(tanh(Δt)·(1 - e^{-Δlog η²})) ≤ √Ptol.
+# That bounds the spread of solutions within one state, not the distance to the corner an `xtol`-resolved search would return: stopping on `Ptol` leaves the state wide in t, so `best_corner` compares distant neighbours and accepts a coarser feature of κ.
+is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x⃗[1]) < xtol || norm(state.p⃗[1].P - state.p⃗[4].P) < Ptol
+
+# Whether the path has run out at this endpoint, so that expanding past it would add nothing: to the left x has reached the unregularized solution, to the right it has collapsed to x = 0 and log‖x‖² is -∞.
+# The left test needs both parts. P alone moves arbitrarily little between two distinct solutions on a flat stretch, and the digest alone repeats whenever an unrelated μ happens to share the active set.
+is_saturated(p::LCurveCornerPoint{T}, P₀::SVector{2, T}, sig₀::UInt128) where {T} = !isfinite(p.P[2]) || (p.sig == sig₀ && maximum(abs, p.P - P₀) <= √eps(T))
+
+isfinite_else(x::T, y::T) where {T} = isfinite(x) ? x : y
+
+# Ranking of the states visited during expansion, consulted only when both directions reach an endpoint without ever reversing.
+# ω leads rather than κ: the two share a sign, but ω weights curvature by arc length, and vanishing arc length is what marks the μ → 0 tail. Ties fall to the higher state-local curvature, then to the tighter state.
+rank(state::LCurveCornerState{T}) where {T} = (max(zero(T), isfinite_else(state.p⃗[2].ω, zero(T)), isfinite_else(state.p⃗[3].ω, zero(T))), max(isfinite_else(state.C[1], typemin(T)), isfinite_else(state.C[2], typemin(T))), state.x⃗[1] - state.x⃗[4])
+
+golden_state(x⃗::SVector{4, T}, p⃗::SVector{4, LCurveCornerPoint{T}}, κ⃗ₒ::SVector{2, T}) where {T} = LCurveCornerState(x⃗, p⃗, SA[state_curvature(p⃗[1], p⃗[2], p⃗[3]), state_curvature(p⃗[2], p⃗[3], p⃗[4])], κ⃗ₒ)
+
+# Menger curvature of one state triple, rejected as unresolved when the circumcircle is indeterminate.
+function state_curvature(pⱼ::LCurveCornerPoint{T}, pₖ::LCurveCornerPoint{T}, pₗ::LCurveCornerPoint{T}) where {T}
+    Pⱼ, Pₖ, Pₗ = pⱼ.P, pₖ.P, pₗ.P
+
+    # A zero solution puts log η² at -∞ and leaves κ = 0/0. The expansion chain stops on `is_saturated` before consulting such a point, but the four seed abscissas are not screened, so the triple rejects it here.
+    (isfinite(pⱼ.κ) && isfinite(pₖ.κ) && isfinite(pₗ.κ) && all(isfinite, Pⱼ) && all(isfinite, Pₖ) && all(isfinite, Pₗ)) || return T(-Inf)
+    Δⱼₖ, Δₖₗ = Pⱼ - Pₖ, Pₖ - Pₗ
+    scale = 1 + max(norm(Pⱼ), norm(Pₖ), norm(Pₗ))
+    if min(norm(Δⱼₖ), norm(Δₖₗ), norm(Pₗ - Pⱼ)) <= √eps(T) * scale || abs(Δⱼₖ × Δₖₗ) <= √eps(T) * norm(Δⱼₖ) * norm(Δₖₗ)
+        return pⱼ.sig == pₖ.sig == pₗ.sig ? pₖ.κ : T(-Inf)
+    end
+
+    return menger(Pⱼ, Pₖ, Pₗ)
+end
+
+move(f::LCurveCornerCachedFunction, state::LCurveCornerState, left::Bool) = left ? move_left(f, state) : move_right(f, state)
+expand(f::LCurveCornerCachedFunction, state::LCurveCornerState, left::Bool) = left ? expand_left(f, state) : expand_right(f, state)
+
+# Golden contraction: one new point, width divided by φ, golden proportions preserved.
 function move_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
-    (; x⃗, P⃗) = state
+    (; x⃗, p⃗, κ⃗ₒ) = state
     φ = T(Base.MathConstants.φ)
-    x⃗ = SA[x⃗[1], (φ*x⃗[1]+x⃗[3])/(φ+1), x⃗[2], x⃗[3]]
-    P⃗ = SA[P⃗[1], f(x⃗[2]), P⃗[2], P⃗[3]] # only P⃗[2] is recalculated
-    return LCurveCornerState{T}(x⃗, P⃗)
+    x = (φ * x⃗[1] + x⃗[3]) / (φ + 1) # x₁ + Δ/φ³
+    return golden_state(SA[x⃗[1], x, x⃗[2], x⃗[3]], SA[p⃗[1], f(x), p⃗[2], p⃗[3]], SA[κ⃗ₒ[1], p⃗[4].κ])
 end
 
 function move_right(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
-    (; x⃗, P⃗) = state
-    x⃗ = SA[x⃗[2], x⃗[3], x⃗[2]+(x⃗[4]-x⃗[3]), x⃗[4]]
-    P⃗ = SA[P⃗[2], P⃗[3], f(x⃗[3]), P⃗[4]] # only P⃗[3] is recalculated
-    return LCurveCornerState(x⃗, P⃗)
+    (; x⃗, p⃗, κ⃗ₒ) = state
+    φ = T(Base.MathConstants.φ)
+    x = (φ * x⃗[4] + x⃗[2]) / (φ + 1) # x₄ - Δ/φ³
+    return golden_state(SA[x⃗[2], x⃗[3], x, x⃗[4]], SA[p⃗[2], p⃗[3], f(x), p⃗[4]], SA[p⃗[1].κ, κ⃗ₒ[2]])
 end
 
-function update_curvature!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}, Pfilter = nothing) where {T}
-    (; x⃗, P⃗) = state
-    for i in 1:4
-        x, P, C = x⃗[i], P⃗[i], T(-Inf)
-        if Pfilter === nothing || Pfilter(x, P)
-            # Compute curvature from nearest neighbours
-            x₋, x₊ = T(-Inf), T(+Inf)
-            P₋, P₊ = P, P
-            for (_x, (_P, _)) in pairs(f.point_cache)
-                (x₋ < _x < x) && ((x₋, P₋) = (_x, _P))
-                (x < _x < x₊) && ((x₊, P₊) = (_x, _P))
-            end
-            C = menger(P₋, P, P₊)
-        end
-        f.point_cache[x] = LCurveCornerPoint(P, C)
-    end
-    return state
+# Inverse golden expansion: one new point, width multiplied by φ. Exactly inverse to a contraction, so `move_right(expand_left(state)) == state` and `move_left(expand_right(state)) == state`.
+function expand_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
+    (; x⃗, p⃗, κ⃗ₒ) = state
+    φ = T(Base.MathConstants.φ)
+    x = x⃗[1] - (x⃗[4] - x⃗[1]) / φ
+    return golden_state(SA[x, x⃗[1], x⃗[2], x⃗[4]], SA[f(x), p⃗[1], p⃗[2], p⃗[4]], SA[T(Inf), κ⃗ₒ[2]])
+end
+
+function expand_right(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
+    (; x⃗, p⃗, κ⃗ₒ) = state
+    φ = T(Base.MathConstants.φ)
+    x = x⃗[4] + (x⃗[4] - x⃗[1]) / φ
+    return golden_state(SA[x⃗[1], x⃗[3], x⃗[4], x], SA[p⃗[1], p⃗[3], p⃗[4], f(x)], SA[κ⃗ₒ[1], T(Inf)])
 end
 
 function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}
@@ -1318,7 +1506,10 @@ where ``\mu`` is chosen by Regińska's minimum-product criterion[1]:
 \mu = \underset{\nu > 0}{\operatorname{argmin}}\; \Psi(\nu) = ||AX_{\nu} - b||_2^2 \, ||X_{\nu}||_2^2,
 ```
 
-taking the smallest local minimizer of ``\Psi``. Stationarity of ``\Psi`` is equivalent to the log-log L-curve tangent slope equalling ``-1``, so the selected ``\mu`` is the balance point ``||AX_{\mu} - b|| = \mu ||X_{\mu}||`` nearest the L-curve corner; unlike curvature maximization the criterion is parameter-free and cannot collapse into the near-vertical ``\mu \to 0`` tail. The smallest local minimizer is required because ``\Psi \to 0`` trivially as ``\mu \to \infty`` (``X_{\mu} \to 0``); if ``\Psi`` has no interior local minimum, the unregularized solution is returned with ``\mu = 0``.
+taking the smallest local minimizer of ``\Psi``.
+Stationarity of ``\Psi`` is equivalent to a log-log L-curve tangent slope of ``-1``, so the selected ``\mu`` is the balance point ``||AX_{\mu} - b|| = \mu ||X_{\mu}||``.
+The smallest local minimizer is taken because ``\Psi \to 0`` trivially as ``\mu \to \infty``, where ``X_{\mu} \to 0``.
+If ``\Psi`` has no interior local minimum, the unregularized solution is returned with ``\mu = 0``.
 
 # Arguments
 
@@ -1342,18 +1533,18 @@ end
 lsqnonneg_reginska_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSReginskaRegProblem(A, b, nnls_prob_seed)
 
 function lsqnonneg_reginska!(
-    work::NNLSReginskaRegProblem{T}; atol = 1e-4, h = 0.5, # h floors the leap, which both bounds the step count and sets the resolution at which a crossing pair can be stepped over; see the scan below
+    work::NNLSReginskaRegProblem{T}; atol = 1e-4, h = 0.5, # floors the leap, bounding the step count and setting the resolution at which a crossing pair can be stepped over; see the scan below
 ) where {T}
     reset_cache!(work.nnls_prob_smooth_cache)
 
-    # Evaluations run on the Gram fast path (one warm-chained μ-solve yields both ‖Ax-b‖² and ‖x‖²); the final solution is recomputed exactly at the selected μ
+    # Evaluations run on the Gram fast path, one warm-chained μ-solve yielding both ‖Ax-b‖² and ‖x‖²; the final solution is recomputed via QR at the selected μ
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
 
-    # An exact unregularized fit makes the minimum-product criterion zero at μ = 0. The test must be relative, not res²_min == 0, since a computed exact fit leaves a residual at the roundoff level and Φ(0) would then be a ratio of noise.
+    # An exact unregularized fit makes the minimum-product criterion zero at μ = 0. The test must be relative rather than res²_min == 0, since a computed exact fit leaves a roundoff-level residual and Φ(0) would be a ratio of noise.
     # A consistent system solved in floating point leaves ‖r‖ ≲ ε·κ₂(A)·‖b‖, so res² ≤ eps(T)·‖b‖² admits relative residual norms up to √ε, which is that bound at κ₂(A) ≃ ε^(-1/2).
-    # The threshold is a conditioning assumption, not a free tolerance: a basis conditioned worse than ε^(-1/2) needs it loosened.
+    # The threshold is a conditioning assumption rather than a free tolerance: a basis conditioned worse than ε^(-1/2) needs it loosened.
     b_nrm² = sum(abs2, work.b)
     if res²_min <= eps(T) * b_nrm² || ncomponents(work.nnls_prob) == 0
         return (; x = x_unreg, mu = zero(T), chi2 = one(T))
@@ -1361,23 +1552,23 @@ function lsqnonneg_reginska!(
     η²_unreg = sum(abs2, x_unreg)
     nnls_gram_setup!(work)
 
-    # g(logμ) = log|S| = log res² − log ‖x‖² − 2 logμ, the log-log L-curve tangent slope magnitude (continuous in μ; derivative-free from one Gram evaluation).
+    # g(logμ) = log|S| = log res² − log ‖x‖² − 2 logμ is the log-log L-curve tangent slope magnitude, continuous in μ and derivative-free from one Gram evaluation.
     # Ψ = res²·‖x‖² satisfies dlogΨ/dlogμ = ξ'·(1 + S) with ξ' ≥ 0, so the smallest local minimizer of Ψ is exactly the leftmost downward crossing g = 0, i.e. the balance point |S| = 1.
-    # `res²` is returned alongside, since it also certifies when the scan may stop; see below.
+    # `res²` is returned alongside because it also certifies when the scan may stop; see below.
     function g_and_res²(logμ)
         res², η² = nnls_gram_losses!(work, exp(logμ))
         return (η² == 0 ? T(+Inf) : log(res²) - log(η²) - 2 * logμ), res²
     end
     g(logμ) = first(g_and_res²(logμ))
 
-    # |S| → ∞ at BOTH ends (μ → 0: μ²‖x‖² → 0 with res² → res²_min > 0; μ → ∞: ‖x‖² ~ C/μ⁴), so |S| = 1 generically has an even number of crossings and the leftmost one must be certified by a left-to-right scan (early-exit at the first sign change; each evaluation is one cheap warm-chained Gram solve).
-    # Monotonicity of res²(μ) (nondecreasing) and ‖x‖² (nonincreasing) gives g(b) ≥ g(a) − 2(b − a) for b > a with no smoothness assumption, so from a point with g(a) > 0 the first crossing lies at or beyond a + g(a)/2: the scan leaps by max(h, g(a)/2) - the same crossing-detection resolution h as a uniform scan where g is small, exponentially fewer evaluations where g is large (g ≈ −2 logμ + O(1) as μ → 0).
-    # Φ(μ) = ‖Ax(μ) − b‖/‖x(μ)‖ is nondecreasing, since res² is nondecreasing and ‖x‖² nonincreasing, and the balance points are exactly its fixed points, so every one of them satisfies μ ≥ Φ(0): the scan starts there and needs no lower bound.
-    # Each leap logμ -> logμ + g/2 is one step of that same fixed-point map, so starting at Φ(0) is starting the iteration at its natural first iterate rather than climbing to it from an arbitrary constant.
-    # That map alone cannot bracket a crossing: g > 0 is Φ(μ) > μ, and applying the nondecreasing Φ gives Φ(Φ(μ)) ≥ Φ(μ), i.e. g ≥ 0 at every iterate, so the scan approaches the crossing from below and passes it only when g underflows.
-    # Flooring the leap at h advances logμ by at least h per step, bounding the scan at (logμ_cert − logμ₀)/h steps and handing Brent a genuine sign change. The overstep past the certified interval (a, a + g/2) is then at most h − g/2.
-    # It needs no upper bound either: complementarity gives bᵀr = res² + μ²‖x‖², which at a balance point reads bᵀr = 2·res², and Cauchy-Schwarz then bounds res² ≤ ‖b‖²/4 there.
-    # Since res² is nondecreasing, the first scan point exceeding ‖b‖²/4 proves no balance point lies at or beyond it, and res² → ‖b‖² guarantees that test eventually fires.
+    # |S| → ∞ at both ends, since μ²‖x‖² → 0 with res² → res²_min > 0 as μ → 0, and ‖x‖² ~ C/μ⁴ as μ → ∞. So |S| = 1 generically has an even number of crossings, and a left-to-right scan exiting at the first sign change is what identifies the leftmost.
+    # res² is nondecreasing and ‖x‖² nonincreasing, so g(b) ≥ g(a) − 2(b − a) for b > a with no smoothness assumption, and from g(a) > 0 the first crossing lies at or beyond a + g(a)/2.
+    # Leaping by max(h, g(a)/2) therefore keeps the crossing-detection resolution h of a uniform scan where g is small, and takes exponentially fewer evaluations where g is large, g ≈ −2 logμ + O(1) as μ → 0.
+    # Those same monotonicities make Φ(μ) = ‖Ax(μ) − b‖/‖x(μ)‖ nondecreasing, and the balance points are its fixed points, so all of them satisfy μ ≥ Φ(0) and the scan can start there with no lower bound.
+    # The leap logμ -> logμ + g/2 is a step of that fixed-point map, which alone never brackets: g > 0 means Φ(μ) > μ, and applying the nondecreasing Φ gives g ≥ 0 at every iterate.
+    # The floor h is what carries the scan past the crossing, bounding it at (logμ_cert − logμ₀)/h steps and handing Brent a genuine sign change, overstepping the certified interval (a, a + g/2) by at most h − g/2.
+    # No upper bound is needed either: complementarity gives bᵀr = res² + μ²‖x‖², which at a balance point reads bᵀr = 2·res², and Cauchy-Schwarz bounds res² ≤ ‖b‖²/4 there.
+    # res² is nondecreasing, so the first scan point exceeding ‖b‖²/4 proves no balance point lies at or beyond it, and res² → ‖b‖² makes that test eventually fire.
     logμ₀ = (log(res²_min) - log(η²_unreg)) / 2
     res²_max = b_nrm² / 4
 
@@ -1492,22 +1683,22 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
     logμ₋, logμ₊ = T.(bounds)
     logμ₀ = T(init)
 
-    # Precompute the squared singular values, which are all dof(μ) needs; the opt-in alternative interpolates dof across the α-grid slices per evaluation instead (see `gcv_dof_interp`)
+    # Precompute the squared singular values, which are all that dof(μ) needs. The opt-in alternative instead interpolates dof across the α-grid slices at each evaluation; see `gcv_dof_interp`.
     dof_interpolator = work.dof_interpolator
     use_dof_interp = dof_interpolator !== nothing && GCV_INTERP_DOF[] && method === :brent
     use_dof_interp || eigvals!(work)
 
-    # The gradient-free search (:brent, the default) evaluates the GCV objective 𝒢(μ) = ‖Ax(μ)-b‖² / dof(μ)² through the Gram fast path (dof is μ-cheap from the singular values; only the residual needs an NNLS solve).
-    # The gradient-based methods keep the exact μ-cache solves, since ∇resnorm_sq needs the QR triangular factor. Forfeiting the Gram fast path roughly doubles the cost per evaluation, which is why :brent is the default.
-    # Curvature would not repay it either, since 𝒢 is C¹ but not C²: dof is smooth in μ, and d‖x‖²/dμ = 2Σⱼ xⱼx'ⱼ survives a passive-set change because the component entering or leaving does so at xⱼ = 0, whereas d²‖x‖²/dμ² carries (x'ⱼ)² and jumps.
-    # The final solution is always recomputed exactly.
+    # `:brent`, the default, evaluates 𝒢(μ) = ‖Ax(μ)-b‖² / dof(μ)² on the Gram fast path. Only the residual needs an NNLS solve, dof being cheap in μ once the singular values are known.
+    # The gradient-based methods keep the exact μ-cache solves, since ∇resnorm_sq needs the QR triangular factor, roughly doubling the cost per evaluation.
+    # Curvature would not repay that either, as 𝒢 is C¹ but not C²: d‖x‖²/dμ = 2Σⱼ xⱼx'ⱼ survives a passive-set change because the component entering or leaving does so at xⱼ = 0, whereas d²‖x‖²/dμ² carries (x'ⱼ)² and jumps.
+    # The final solution is always recomputed via QR.
     use_gram = method === :brent
     reset_cache!(work.nnls_prob_smooth_cache)
     if use_gram
         solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
         nnls_gram_setup!(work)
     end
-    # 𝒢 is minimized directly. It is strictly positive for μ > 0 and b ≠ 0: KKT complementarity gives xᵀd = 0, hence (Ax)ᵀr = μ²‖x‖², and with Ax = b − r this is bᵀr = res² + μ²‖x‖², so res² = 0 would force x = 0 and then b = 0.
+    # 𝒢 needs no guard: it is strictly positive for μ > 0 and b ≠ 0, since KKT complementarity gives xᵀd = 0, hence (Ax)ᵀr = μ²‖x‖², and with Ax = b − r this reads bᵀr = res² + μ²‖x‖², so res² = 0 would force x = 0 and then b = 0.
     function 𝒢(logμ)
         use_gram || return gcv!(work, logμ)
         μ = exp(logμ)
@@ -1536,7 +1727,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         logmu_final       = @inbounds T(minx[1])
         𝒢_final           = T(minf)
     elseif method === :brent
-        # Gradient-free golden-section/parabolic search over the full bounds. The GCV minimization is bracket-shrink bound (convergence needs the bracket width, not just a good point, to reach `atol`), so a warm start cannot speed it without narrowing the bounds a priori (sacrificing determinism, risking collapse).
+        # Gradient-free golden-section/parabolic search over the full bounds. Convergence needs the bracket width to reach `atol`, not merely a good point, so a warm start cannot speed it up without narrowing the bounds a priori.
         logmu_final, 𝒢_final = brent_minimize(𝒢, logμ₋, logμ₊; xrtol = T(rtol), xatol = T(atol), maxiters)
     elseif method === :brent_newton
         𝒢₋, ∇𝒢₋ = 𝒢_and_∇𝒢(logμ₋)
@@ -1555,7 +1746,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         error("Unknown minimization method: $method")
     end
 
-    # Return the final regularized solution (recomputed exactly; if the Gram path was used the unregularized solve was already done above to seed it)
+    # Return the final regularized solution, recomputed exactly. The Gram path already ran the unregularized solve above to seed itself.
     mu_final = exp(logmu_final)
     x_final = use_gram ? nnls_gram_polish_solve!(work, mu_final) : solve!(work.nnls_prob_smooth_cache, mu_final)
     use_gram || solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
@@ -1572,7 +1763,7 @@ end
 # where here L = Id and λ = μ.
 function gcv!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
-    #   NOTE: assumes `eigvals!(work)` has been called and that `work.γ²` is ready
+    #   NOTE: assumes `eigvals!(work)` has filled `work.γ²`
     (; m, n, γ²) = work
 
     # Solve regularized NNLS problem
@@ -1590,7 +1781,7 @@ end
 
 function gcv_and_dgcv_dlogμ!(work::NNLSGCVRegProblem, logμ)
     # Unpack buffers
-    #   NOTE: assumes `eigvals!(work)` has been called and that `work.γ²` is ready
+    #   NOTE: assumes `eigvals!(work)` has filled `work.γ²`
     (; m, n, γ²) = work
 
     # Solve regularized NNLS problem
@@ -1627,8 +1818,8 @@ function gcv_dof(m::Int, n::Int, γ²::AbstractVector{T}, λ::T) where {T}
 end
 gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = gcv_dof(size(A)..., svdvals(A) .^ 2, λ)
 
-# DOF derivative w.r.t. the flip angle α: dof = max(m−n, 0) + Σᵢ λ²/(γᵢ²+λ²) and so ∂dof/∂α = Σᵢ [−λ²/(γᵢ²+λ²)²]·dγᵢ²/dα, where dγᵢ²/dα = 2σᵢ·uᵢᵀ(∂A/∂α)vᵢ is the analytic α-derivative of the squared singular values supplied by `dγ²`.
-# The derivative ∂dof/∂α is smooth through branch crossings, since dof is a symmetric spectral function.
+# DOF derivative with respect to the flip angle α. From dof = max(m−n, 0) + Σᵢ λ²/(γᵢ²+λ²), ∂dof/∂α = −Σᵢ λ²·(dγᵢ²/dα)/(γᵢ²+λ²)², with `dγ²` supplying dγᵢ²/dα = 2σᵢ·uᵢᵀ(∂A/∂α)vᵢ.
+# It is smooth through branch crossings, dof being a symmetric function of the spectrum.
 function dgcv_dof_dα(m::Int, n::Int, γ²::AbstractVector{T}, dγ²::AbstractVector{T}, λ::T) where {T}
     ∂dof = zero(T)
     λ² = abs2(λ)
@@ -1640,7 +1831,7 @@ end
 
 # GCV dof(μ) at flip angle α, cubic-Hermite interpolated in α between the bracketing grid slices of `interp`, clamped to the grid range.
 # The dof is interpolated directly: sorted singular value curves σᵢ(α) kink (C⁰) where branches cross, so interpolating γ caps the accuracy at the kink scale.
-# The dof itself, dof(μ, α) = max(m − n, 0) + μ²·tr((A(α)ᵀA(α) + μ²I)⁻¹), is a symmetric function of the spectrum and hence analytic in α, so cubic Hermite with the analytic ∂dof/∂α (`dgcv_dof_dα`) is kink-free and O(h⁴) accurate.
+# The dof itself, dof(μ, α) = max(m − n, 0) + μ²·tr((A(α)ᵀA(α) + μ²I)⁻¹), is a symmetric function of the spectrum and hence analytic in α, so cubic Hermite with the analytic ∂dof/∂α from `dgcv_dof_dα` is kink-free and O(h⁴) accurate.
 function gcv_dof_interp(interp::GriddedSpectrumInterpolator{T}, α::T, m::Int, n::Int, μ::T) where {T}
     (; αs, γ², dγ², ready) = interp
     i = clamp(searchsortedlast(αs, α), 1, length(αs) - 1)

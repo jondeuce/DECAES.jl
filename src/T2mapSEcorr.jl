@@ -197,7 +197,7 @@ function T2mapSEcorr!(
 end
 
 # Reset every cross-voxel warm-start chain, namely the flip-search per-gridpoint active sets, at the start of each voxel block.
-# Without this, a chain persists across whichever blocks a worker happens to pull, so the dynamic block-to-worker assignment perturbs near-tie search decisions and the output depends on both the run and the thread count.
+# A chain that persisted across blocks would let the dynamic block-to-worker assignment perturb near-tie search decisions, making the output depend on the run and the thread count.
 # Resetting makes each block's result a function of its own voxels alone, at the cost of one cold-started voxel per block.
 function reset_voxel_chains!(thread_buffer)
     (; flip_angle_work) = thread_buffer
@@ -402,7 +402,7 @@ end
 
 # One refinement of the surrogate minimizer, followed by a certificate. The discrete search evaluates the true loss f(α) = min_{x≥0} ‖A(α)x − b‖² only at grid nodes, so its continuous minimizer α₀ carries the cubic-Hermite interpolation error of the enclosing cell.
 # A true off-grid evaluation builds A(α₀), solves NNLS, and forms the envelope gradient g₀ = -2·rᵀA′(α₀)x. Minimizing both adjacent cubics then proposes one candidate α₁.
-# The returned angle is the lex-minimum of true losses over the best evaluated node, α₀, and α₁, so f(α̂) ≤ min_{j evaluated} f(αⱼ) holds regardless of how badly the interpolant misbehaves. The surrogate proposes; it never certifies.
+# The returned angle is the lex-minimum of true losses over the best evaluated node, α₀, and α₁, so f(α̂) ≤ min_{j evaluated} f(αⱼ) however badly the interpolant misbehaves.
 # Returns `true` iff `work.decay_basis` already holds the exact basis at the final `work.α[]`, letting the caller skip the final rebuild.
 function polish_flip_angle!(work::FlipAngleOptimizationWorkspace{T}) where {T}
     (; grid, seen, u, ∇u) = work.α_surrogate
@@ -427,8 +427,7 @@ function polish_flip_angle!(work::FlipAngleOptimizationWorkspace{T}) where {T}
     αr, ũr = minimize(CubicHermiteInterpolator(α₀, first(grid[i+1]), f₀, u[i+1], g₀, first(∇u[i+1])))
     α₁ = -min((ũl, abs(αl - α₀), -αl), (ũr, abs(αr - α₀), -αr))[3]
 
-    # A Newton step on the true loss uses only local data at α₀, so it is not limited by the cell width the cubics interpolate over. It is taken when the local model is a genuine minimum and stays in the cell; otherwise the cubic proposal stands.
-    # Either way the candidate is only a proposal: the selection below certifies it against true losses, so an overshoot is rejected rather than accepted.
+    # A Newton step on the true loss uses only local data at α₀, so the cell width the cubics interpolate over does not limit it. It is taken when the local model is a genuine minimum and stays in the cell; otherwise the cubic proposal stands.
     if f″₀ > 0
         αₙ = α₀ - g₀ / f″₀
         first(grid[i]) < αₙ < first(grid[i+1]) && (α₁ = αₙ)
@@ -503,7 +502,7 @@ function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α
     return -2 * g, T(NaN)
 end
 
-# Polish evaluation: build the basis A(α), solve NNLS warm-started from the search's final active set, which is the support at the last grid node the search solved rather than at its continuous proposal, and return the true loss ‖A(α)x − b‖².
+# Polish evaluation: build the basis A(α), solve NNLS warm-started from the search's final active set, and return the true loss ‖A(α)x − b‖². That active set is the support at the last grid node the search solved, not at its continuous proposal.
 # Leaves `work.decay_basis` holding A(α) and the solve's residual current, so `polish_loss_grad!` can extend it with the envelope gradient.
 function polish_loss!(work::FlipAngleOptimizationWorkspace{T}, α::T) where {T}
     (; nnls_search_prob, decay_basis_work, α_polish_work) = work

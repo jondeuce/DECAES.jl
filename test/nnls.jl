@@ -197,7 +197,7 @@ function verify_NNLS_tikh(m, n, μ)
         work.diag .= rand(0:n, n)
         work.rnorm[] = rand()
         work.mode[] = rand(1:100)
-        work.nsetp[] = rand(0:min(m + n, n))
+        work.nsetp[] = rand(0:min(m+n, n))
 
         if mode === :direct
             @inferred NNLS.nnls!(work, A, b, μ)
@@ -441,33 +441,440 @@ end
     end
 end
 
+# Mock L-curve (ξ(t), η(t)) = (e^t, e^{-t}), whose exact geometry is v² = e^{2t} + e^{-2t}, κ = 2/v³ and ω = κv = 2/v².
+# The active-set signature is constant, so the search sees one analytic branch, and `sig₀` below is chosen distinct from it so the unregularized endpoint is never reached.
 function build_lcurve_corner_cached_fun(::Type{T} = Float64) where {T}
-    # Mock lcurve function with (ξ(μ), η(μ)) = (μ, 1/μ)
-    f = CachedFunction(_logμ -> SA[exp(_logμ), exp(-_logμ)], GrowableCache{T, SVector{2, T}}())
-    f = LCurveCornerCachedFunction(f, GrowableCache{T, LCurveCornerPoint{T}}(), GrowableCache{T, LCurveCornerState{T}}())
-    return f
+    function mock_lcurve_point(t)
+        v² = exp(2t) + exp(-2t)
+        return LCurveCornerPoint(SA{T}[exp(t), exp(-t)], 2 / v²^(3 // 2), 2 / v², UInt128(1))
+    end
+    f = CachedFunction(mock_lcurve_point, GrowableCache{T, LCurveCornerPoint{T}}(64, isapprox))
+    return LCurveCornerCachedFunction(f, GrowableCache{Int, LCurveCornerState{T}}(64))
 end
 
 function lcurve_corner_tests()
-    function run_lcurve_corner(f)
-        return lcurve_corner(f, log(0.1), log(10.0); xtol = 1e-6, Ptol = 1e-6, Ctol = 0)
+    # Maximum curvature of (x(μ), y(μ)) = (μ, 1/μ) occurs at μ=1, i.e. logμ=0. Each seed is far enough away that the corner is found by expansion, not by the initial state.
+    for t₀ in (-5.0, -0.5, 3.0)
+        f = build_lcurve_corner_cached_fun()
+        @inferred empty!(f)
+        @test @inferred(lcurve_corner(f, t₀, SA[NaN, NaN], UInt128(0); xtol = 1e-6, Ptol = 1e-6)) ≈ 0 atol = 1e-3
     end
 
-    #TODO: # Test allocations
-    # f = build_lcurve_corner_cached_fun()
-    # empty!(f)
-    # @test @allocated(run_lcurve_corner(f)) > 0 # caches will be populated with first call
-    # empty!(f)
-    # @test @allocated(run_lcurve_corner(f)) == 0 # caches should be reused with second call
+    # A seed outside the caller's admissible interval slides the initial state into the interval instead of ending the search, and nothing is ever evaluated outside it.
+    for t₀ in (6.0, -6.0)
+        f = build_lcurve_corner_cached_fun()
+        bounds = (-1.5, 1.5)
+        @test lcurve_corner(f, t₀, SA[NaN, NaN], UInt128(0); xtol = 1e-6, Ptol = 1e-6, bounds) ≈ 0 atol = 1e-3
+        @test all(t -> bounds[1] <= t <= bounds[2], keys(f.f.cache))
+    end
 
-    # Maximum curvature point for the graph (x(μ), y(μ)) = (μ, 1/μ) occurs at μ=1, i.e. logμ=0
+    # Inverse golden expansions undo golden contractions exactly, so an expanded state contracts back onto its parent.
     f = build_lcurve_corner_cached_fun()
-    @inferred empty!(f)
-    @test @inferred(run_lcurve_corner(f)) ≈ 0 atol = 1e-3
+    φ, t₀, Δ = Base.MathConstants.φ, 0.7, 1.0
+    x⃗ = SA[t₀-Δ/φ^2, t₀, t₀+Δ/φ^3, t₀+Δ/φ]
+    s = DECAES.golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], SA[Inf, Inf])
+    @test DECAES.move_right(f, DECAES.expand_left(f, s)).x⃗ ≈ s.x⃗
+    @test DECAES.move_left(f, DECAES.expand_right(f, s)).x⃗ ≈ s.x⃗
+
+    # The branch queue holds the discarded siblings in decreasing width, so retiring its oldest entry examines the largest unexplored region first. `lcurve_certify!` depends on that ordering.
+    let f = build_lcurve_corner_cached_fun()
+        φ, t₀, Δ = Base.MathConstants.φ, 0.7, 1.0
+        x⃗ = SA[t₀-Δ/φ^2, t₀, t₀+Δ/φ^3, t₀+Δ/φ]
+        s = DECAES.golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], SA[Inf, Inf])
+        empty!(f.state_stack)
+        for _ in 1:8
+            push!(f.state_stack, (length(f.state_stack), s))
+            s = DECAES.move(f, s, DECAES.contract_left(s))
+        end
+        widths = [v.x⃗[4] - v.x⃗[1] for (_, v) in f.state_stack]
+        @test issorted(widths; rev = true)
+        _, widest = popfirst!(f.state_stack)
+        @test widest.x⃗[4] - widest.x⃗[1] == maximum(widths)
+        @test length(f.state_stack) == 7
+    end
+
+    # Contraction preserves the interior ratios (φ⁻², φ⁻¹), a fixed point whose linearization has multiplier -1, so a deviation neither grows nor accumulates.
+    # Stepping a new abscissa off a stored one gives -φ² instead, which reorders the abscissas at Float32 precision.
+    let f = build_lcurve_corner_cached_fun(Float32), φ = Float32(Base.MathConstants.φ), t₀ = -1.836f0, Δ = 1.0f0
+        x⃗ = SA[t₀-Δ/φ^2, t₀, t₀+Δ/φ^3, t₀+Δ/φ]
+        s₀ = DECAES.golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], SA[Inf32, Inf32])
+        for move in (DECAES.move_left, DECAES.move_right)
+            s = s₀
+            for _ in 1:20
+                s = move(f, s)
+                w = s.x⃗[4] - s.x⃗[1]
+                @test issorted(s.x⃗)
+                @test (s.x⃗[2] - s.x⃗[1]) / w ≈ 1 / φ^2 atol = 1.0f-2
+                @test (s.x⃗[3] - s.x⃗[1]) / w ≈ 1 / φ atol = 1.0f-2
+            end
+        end
+    end
 end
 
 @testset "lcurve_corner" begin
     lcurve_corner_tests()
+end
+
+# The corner search computes the curvature from the Gram fast path, which must agree with the QR path, and ω must be the derivative of the tangent angle.
+function lcurve_geometry_tests(A, b; test_q = true)
+    work = DECAES.lsqnonneg_lcurve_work(A, b)
+    work_D64 = DECAES.lsqnonneg_lcurve_work(Double64.(A), Double64.(b))
+    DECAES.reset_cache!(work.nnls_prob_smooth_cache)
+    DECAES.solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
+    tikh = DECAES.lsqnonneg_tikh_work(A, b)
+    h = √eps()
+    rtol = 1e-6
+    for t in range(-6.0, 2.0; length = 17)
+        DECAES.solve!(tikh, exp(t))
+        ∇ = DECAES.gradient_temps(tikh)
+
+        # `inv_quadratic_form` is defined only after a successful Gram solve. The fallback path leaves the factorization stale and returns NaN, and `lcurve_point` takes q from the QR path there instead.
+        DECAES.nnls_gram_setup!(work)
+        ξ²_gram = DECAES.NNLS.solve!(work.nnls_gram, A, b, exp(t))
+        if !isnan(ξ²_gram) && DECAES.seminorm_sq(tikh) > 0
+            @test ξ²_gram ≈ DECAES.resnorm_sq(tikh) rtol = rtol
+            @test DECAES.NNLS.seminorm_sq(work.nnls_gram) ≈ DECAES.seminorm_sq(tikh) rtol = rtol
+            test_q && @test DECAES.NNLS.inv_quadratic_form(work.nnls_gram) ≈ ∇.xᵀB⁻¹x rtol = rtol
+        end
+
+        # `lcurve_point` is valid on both paths
+        DECAES.nnls_gram_setup!(work)
+        p = DECAES.lcurve_point(work, exp(t))
+        @test exp(p.P[1]) ≈ DECAES.resnorm_sq(tikh) rtol = rtol
+        if DECAES.seminorm_sq(tikh) == 0
+            @test !isfinite(p.P[2]) # x = 0 has no L-curve point at all; the search reaches it only through `is_saturated`
+            continue
+        end
+        @test exp(p.P[2]) ≈ DECAES.seminorm_sq(tikh) rtol = rtol
+        @test p.κ ≈ DECAES.curvature(log, tikh, ∇) rtol = rtol
+
+        # ω = dθ/dt for θ = -atan(ξ²/(μ²η²)), by central difference, where the stencil stays on one active set
+        p₋, p₊ = DECAES.lcurve_point(work_D64, exp(Double64(t) - h)), DECAES.lcurve_point(work_D64, exp(Double64(t) + h))
+        if p₋.sig == p.sig == p₊.sig && isfinite(p₋.P[2]) && isfinite(p₊.P[2])
+            θ(pᵢ, tᵢ) = -atan(exp(pᵢ.P[1] - pᵢ.P[2] - 2 * tᵢ))
+            @test p.ω ≈ (θ(p₊, t + h) - θ(p₋, t - h)) / 2h rtol = rtol
+        end
+    end
+end
+
+@testset "L-curve geometry (Gram path vs QR path)" begin
+    # Well-conditioned overdetermined problems
+    for (m, n) in ((32, 20), (48, 40), (64, 40))
+        lcurve_geometry_tests(rand(m, n), rand(m))
+    end
+
+    # Adversarial sizes, including underdetermined and rank-deficient, which also exercise the QR-solver fallback
+    for (m, n) in NNLS_SIZES
+        lcurve_geometry_tests(rand_NNLS_data(m, n)...)
+    end
+
+    # Exactly duplicated columns: ∇²Jμ = 2AᵀA + 2μ²I ⪰ 2μ²I is strongly convex for every μ > 0, so x and q are unique and this is a conditioning stress test rather than a nonuniqueness exemption
+    A, b = rand_NNLS_data(32, 20)
+    lcurve_geometry_tests([A A], b)
+
+    # An exponential basis at cond(A) ~ 1e17, the regime DECAES actually runs in
+    t, τ = range(0, 2; length = 40), exp10.(range(-1.5, 0.5; length = 24))
+    Aexp = [exp(-tᵢ / τⱼ) for tᵢ in t, τⱼ in τ]
+    lcurve_geometry_tests(Aexp, Aexp * collect(1.0:24) .+ 1e-3 .* sin.(1:40))
+
+    # A diagonal problem with a strictly positive solution keeps its support for every μ, so the ω derivative check rests on a proof rather than on sampled signatures
+    Adiag = diagm(exp10.(range(-1.0, 1.0; length = 12)))
+    lcurve_geometry_tests(Adiag, Adiag * ones(12))
+end
+
+# The μ → 0 tail carries positive limiting curvature η⁴/(2qξ²), so positive curvature alone cannot reject it; the two-sided comparison against the flanking evaluations can.
+# A single column with a residual floor δ isolates the mechanism: the support is {1} for every μ, so κ is smooth, and the plateau grows without bound as δ → 0.
+@testset "L-curve tail rejection" begin
+    A = [1.0; 0.0;;]
+    for δ in (1e-1, 1e-2, 1e-4, 1e-6, 1e-8)
+        b = [1.0, δ]
+        (; mu) = DECAES.lsqnonneg_lcurve(A, b)
+        κ(t) = (w = DECAES.lsqnonneg_tikh_work(A, b); DECAES.solve!(w, exp(t)); DECAES.curvature(log, w))
+
+        # R(μ) = δ² + μ⁴/(1+μ²)², so the plateau is reached once μ ≪ √δ, where κ → 1/(2δ²) analytically: a positive attractor, and an unboundedly large one.
+        # Only its sign and scale are asserted, since evaluating κ against a residual pinned at δ² is prone to cancellation.
+        @test κ(log(δ) / 2 - 5) > 1
+
+        # Either the documented unregularized fallback, or a strict local maximum resolved well above `xtol`
+        @test mu == 0 || κ(log(mu)) > max(κ(log(mu) - 1e-3), κ(log(mu) + 1e-3))
+    end
+end
+
+# A strict local maximum of κ does not exclude the μ → 0 tail. Here N₀b₂/a² exceeds 2, so the linear term of the tail expansion is positive and a strict maximum is forced at small μ, on a support that never changes.
+# The tail maximum has enormous curvature and almost no turning; the broad maximum is the L-curve elbow. The search must not select the tail one.
+@testset "L-curve multi-component tail maximum" begin
+    A = [1.0 0 0; 0 √1000 0; 0 0 √1000; 0 0 0]
+    λ = [1.0, 1000.0, 1000.0]
+    function geom(t, δ)
+        ρ = exp(2t)
+        x = λ ./ (λ .+ ρ)
+        return DECAES.lcurve_geometry(δ^2 + sum(@. (ρ * x / λ)^2 * λ), sum(abs2, x), sum(@. x^2 / (λ + ρ)), exp(t))
+    end
+
+    for (δ, t_tail, κ_tail) in ((1e-1, -6.259206, 4.491026e2), (1e-2, -10.863286, 4.491018e4))
+        # The tail feature is real: a strict local maximum with curvature orders above the broad one, and turning orders below it
+        κ₋, κ₀, κ₊ = geom(t_tail - 1e-3, δ)[1], geom(t_tail, δ)[1], geom(t_tail + 1e-3, δ)[1]
+        @test κ₀ > κ₋ && κ₀ > κ₊
+        @test κ₀ ≈ κ_tail rtol = 1e-5
+        @test geom(t_tail, δ)[2] < 1e-2 < geom(0.7783, δ)[2] # ω separates them where κ does not
+        b = [1.0, √1000, √1000, δ]
+        (; x, mu) = DECAES.lsqnonneg_lcurve(A, b)
+
+        # The production invariant, which any accepted corner must satisfy however the search changes
+        @test mu == 0 || sum(abs2, A * x - b) / (mu^2 * sum(abs2, x)) <= 1.001 * DECAES.LCURVE_SLOPE_MAX_DEFAULT
+        @test mu == 0 || abs(log(mu) - t_tail) > 1 # never this tail maximum
+    end
+end
+
+# On a fixed passive set the strict tail maximum has an exact high-SNR limit. With N = ‖x₀‖², a = x₀ᵀG⁻¹x₀, b₂ = x₀ᵀG⁻²x₀ and D = Nb₂ - 2a² > 0,
+#       ρ* → (D/aN³)R₀²,   R₀|S*| → aN²/D,   ω*/R₀ → 2D/(aN²),
+# so |S*| diverges and ω* vanishes as the residual floor closes: every finite slope guard eventually rejects the asymptotic μ → 0 collapse. A finite-residual admissible maximum is therefore a genuine bend, not collapse.
+@testset "L-curve high-SNR tail asymptotics" begin
+    TE, m = 10e-3, 48
+    T2s = [50e-3, 80e-3, 120e-3]
+    A = [exp(-i * TE / T2) for i in 1:m, T2 in T2s]
+    x₀ = ones(3)
+    G = A'A
+    N, a, b₂ = 3.0, x₀' * (G \ x₀), sum(abs2, G \ x₀)
+    Dc = N * b₂ - 2a^2
+    @test Dc > 0 # the rising-tail condition
+    r = qr(A, ColumnNorm()).Q[:, end]
+    r = all(A * x₀ .+ 0.1 .* r .> 0) ? r : -r
+
+    function tailmax(δ)
+        b = A * x₀ .+ δ .* r
+        function g(t)
+            w = DECAES.lsqnonneg_tikh_work(A, b)
+            DECAES.solve!(w, exp(t))
+            Nv = DECAES.seminorm_sq(w)
+            return Nv == 0 ? (-Inf, 0.0, Inf) : (DECAES.lcurve_geometry(DECAES.resnorm_sq(w), Nv, DECAES.gradient_temps(w).xᵀB⁻¹x, exp(t))..., DECAES.resnorm_sq(w) / (exp(2t) * Nv))
+        end
+        ts = range(-18.0, 2.0; length = 4001)
+        i = argmax([g(t)[1] for t in ts])
+        lo, hi = ts[i-1], ts[i+1]
+        for _ in 1:100
+            p, q = hi - (hi - lo) / Base.MathConstants.φ, lo + (hi - lo) / Base.MathConstants.φ
+            g(p)[1] > g(q)[1] ? (hi = q) : (lo = p)
+        end
+        t = (lo + hi) / 2
+        return (exp(2t), g(t)...)
+    end
+
+    # Convergence to the predicted constants, over two decades of residual floor
+    for δ in (1e-2, 3e-3, 1e-3)
+        R₀ = δ^2
+        ρ★, _, ω★, s★ = tailmax(δ)
+        @test ρ★ / R₀^2 ≈ Dc / (a * N^3) rtol = 1e-2
+        @test R₀ * s★ ≈ a * N^2 / Dc rtol = 1e-2
+        @test ω★ / R₀ ≈ 2Dc / (a * N^2) rtol = 1e-2
+    end
+
+    # The guard's transition is where |S*| crosses τ, near R₀ = aN²/(τD)
+    @test tailmax(0.1)[4] < DECAES.LCURVE_SLOPE_MAX_DEFAULT < tailmax(0.03)[4]
+
+    # δ = 0.1 is a finite-residual bend the guard admits, and the search localizes it; smaller floors are rejected and fall back
+    for (δ, admissible) in ((0.1, true), (0.03, false), (0.01, false))
+        b = A * x₀ .+ δ .* r
+        (; mu) = DECAES.lsqnonneg_lcurve(A, b)
+        ρ★ = tailmax(δ)[1]
+        if admissible
+            @test mu > 0
+            @test log(mu) ≈ log(√ρ★) atol = 1e-3
+        else
+            @test mu == 0
+        end
+    end
+end
+
+# The same mechanism on the production basis, where the search must select the elbow rather than fall back.
+# N₀b₂/a² = 1 + Var_p(λ⁻¹)/E_p[λ⁻¹]² over p = (Qᵀx₀)²/N₀ measures how far κ climbs off the plateau; a coherent exponential family exceeds the threshold of 2 by orders, where the near-orthogonal basis above barely clears it.
+@testset "L-curve tail maximum on an EPG decay basis" begin
+    o = DECAES.mock_t2map_opts(Float64; MatrixSize = (1, 1, 1), nTE = 48, nT2 = 40, Silent = true)
+    A = DECAES.epg_decay_basis(DECAES.restructure(DECAES.default_epg_parameters(o), (; α = deg2rad(180.0))), DECAES.T2_component_times(o))
+    P, x₀ = A[:, round.(Int, range(4, o.nT2 - 3; length = 6))], ones(6)
+    G = P'P
+    N₀, a, b₂ = sum(abs2, x₀), x₀' * (G \ x₀), sum(abs2, G \ x₀)
+    @test N₀ * b₂ > 2 * a^2 # the rising-tail condition, far from tight on a coherent basis
+    r = qr(P, ColumnNorm()).Q[:, end]
+    r = all(P * x₀ .+ 0.1 .* r .> 0) ? r : -r
+    for δ in (0.1, 0.03, 0.01)
+        b = P * x₀ .+ δ .* r
+        (; x, mu) = DECAES.lsqnonneg_lcurve(A, b)
+        @test mu > 0 # a genuine admissible elbow, unlike the toy basis above
+        @test sum(abs2, A * x - b) / (mu^2 * sum(abs2, x)) <= 1.001 * DECAES.LCURVE_SLOPE_MAX_DEFAULT
+    end
+end
+
+# `Ptol` bounds the solution and not only its norm. Monotonicity of ∂F gives (ρ₁+ρ₂)x₁ᵀx₂ ≥ ρ₁N₁ + ρ₂N₂, hence ‖x₁-x₂‖² ≤ (ρ₂-ρ₁)/(ρ₁+ρ₂)·(N₁-N₂), across active-set changes.
+@testset "L-curve Ptol solution-diameter bound" begin
+    for _ in 1:200
+        m, n = rand(4:40), rand(4:40)
+        A, b = rand(m, n), rand(m)
+        ρ₁, ρ₂ = sort(exp.(2 .* (4 .* randn(2) .- 3)))
+        ρ₁ == ρ₂ && continue
+        x₁, x₂ = DECAES.lsqnonneg_tikh(A, b, √ρ₁), DECAES.lsqnonneg_tikh(A, b, √ρ₂)
+        N₁, N₂ = sum(abs2, x₁), sum(abs2, x₂)
+        @test sum(abs2, x₁ .- x₂) <= (ρ₂ - ρ₁) / (ρ₁ + ρ₂) * (N₁ - N₂) + 1e-12
+        N₂ > 0 && @test norm(x₁ - x₂) <= √(1 - N₂ / N₁) * norm(x₁) + 1e-12
+    end
+end
+
+@testset "L-curve geometry (dimensionless form)" begin
+    # The invariant 0 < z ≤ 2 follows from B ⪰ ρI.
+    for _ in 1:100
+        A, b, μ = rand(40, 30), rand(40), exp(4 * randn())
+        w = DECAES.lsqnonneg_tikh_work(A, b)
+        DECAES.solve!(w, μ)
+        N = DECAES.seminorm_sq(w)
+        N == 0 && continue
+        @test 0 < 2 * μ^2 * DECAES.gradient_temps(w).xᵀB⁻¹x / N <= 2 + 1e-12
+    end
+
+    # ω = 2du with u = c - z(c+d) ≤ c and c² + d² = 1, so positive curvature bounds the turning by 2cd ≤ 1, and |S| = c/d bounds it by 2c²/|S| ≤ 2/|S|
+    for _ in 1:100
+        ξ², η², μ = exp(8 * randn()), exp(8 * randn()), exp(4 * randn())
+        q = (η² / μ^2) * rand()
+        κ, ω = DECAES.lcurve_geometry(ξ², η², q, μ)
+        (isfinite(κ) && isfinite(ω) && κ > 0) || continue
+        @test 0 < ω <= 1
+        @test ω <= 2 / (ξ² / (μ^2 * η²)) + 1e-12
+    end
+end
+
+# An exact fit returns the unregularized solution by convention, not because the criterion has no corner: the L-curve runs off to X = -∞ but its curvature can still have a finite interior maximum.
+@testset "L-curve exact fit is a convention" begin
+    A = [0.1 0.0; 0.0 1.0]
+    b = A * [0.1, 0.1]
+    @test DECAES.lsqnonneg_lcurve(A, b).mu == 0
+
+    κ(t) = (w = DECAES.lsqnonneg_tikh_work(A, b); DECAES.solve!(w, exp(t)); DECAES.curvature(log, w))
+    @test κ(-1.675) > κ(-1.8) && κ(-1.675) > κ(-1.55) # a strict interior maximum near μ = 0.187
+    @test κ(-1.675) > 0
+end
+
+# The slope guard confines every admissible corner to an exact interval. Both bounds follow from monotonicity and KKT alone, and the second upper bound is the tighter one whenever ξ²₀/‖b‖² < τ/(τ+2).
+@testset "L-curve admissible domain" begin
+    τ = DECAES.LCURVE_SLOPE_MAX_DEFAULT
+    for _ in 1:50
+        m, n = rand(8:48), rand(8:48)
+        A, b = rand(m, n), abs.(randn(m))
+        x₀ = DECAES.lsqnonneg(A, b)
+        R₀, N₀ = sum(abs2, A * x₀ - b), sum(abs2, x₀)
+        (R₀ <= 0 || N₀ <= 0) && continue
+        t₀ = (log(R₀) - log(N₀)) / 2
+        Bn, C = sum(abs2, b), sum(cᵢ -> max(cᵢ, 0.0)^2, A' * b)
+        ρmax = C * min(τ / R₀, (τ + 2) / Bn)
+
+        # Admissibility forces ξ²₀ ≤ (τ/4)‖Ax₀‖² ≤ (τ/4)√(CN₀), which places the seed inside the interval for every 1 < τ < 6 + 2√17 unless no point of the path is admissible at all
+        R₀ / Bn <= τ / (τ + 4) && @test t₀ < log(ρmax) / 2
+        for t in range(t₀ - 6, t₀ + 20; length = 40)
+            w = DECAES.lsqnonneg_tikh_work(A, b)
+            DECAES.solve!(w, exp(t))
+            N = DECAES.seminorm_sq(w)
+            N == 0 && continue
+            @test exp(2t) * N <= (Bn - R₀) / 4 + 1e-9 # ρη² ≤ ‖Ax₀‖²/4, from unregularized KKT
+            DECAES.resnorm_sq(w) / (exp(2t) * N) <= τ || continue
+            @test t >= t₀ - log(τ) / 2 - 1e-9
+            @test exp(2t) <= ρmax * (1 + 1e-9)
+        end
+
+        # The search never returns a point outside its own admissible domain
+        (; mu) = DECAES.lsqnonneg_lcurve(A, b)
+        mu > 0 && @test t₀ - log(τ) / 2 - 1e-9 <= log(mu) <= log(ρmax) / 2 + 1e-9
+    end
+end
+
+# The sweep ranks brackets by tangent rotation, which is exact only because the tangent direction is continuous across an active-set transition while κ is not.
+# dη²/dρ = -2q and dξ²/dρ = 2ρq share the factor q, which jumps, so dP/dρ is discontinuous while the direction (ρη², -ξ²) is not. Hence θ is continuous and θᵢ₊₁ - θᵢ is the exact net signed rotation of an interval, whatever transitions it contains.
+@testset "L-curve tangent is continuous where curvature is not" begin
+    A, b = rand(24, 30), abs.(randn(24))
+    work = DECAES.lsqnonneg_lcurve_work(A, b)
+    DECAES.reset_cache!(work.nnls_prob_smooth_cache)
+    DECAES.solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
+    p(t) = (DECAES.nnls_gram_setup!(work); DECAES.lcurve_point(work, exp(t)))
+    ts = range(-6.0, 2.0; length = 200)
+    k = findfirst(i -> p(ts[i]).sig != p(ts[i+1]).sig, 1:length(ts)-1)
+    @test k !== nothing # the path must cross at least one active-set transition
+    lo, hi, slo = ts[k], ts[k+1], p(ts[k]).sig
+    for _ in 1:50
+        mid = (lo + hi) / 2
+        p(mid).sig == slo ? (lo = mid) : (hi = mid)
+    end
+    p₋, p₊ = p(lo), p(hi)
+    @test hi - lo < 1e-12 # the transition is bracketed far tighter than the quantities compared across it
+    @test DECAES.tangent_angle(p₊, hi) ≈ DECAES.tangent_angle(p₋, lo) atol = 1e-8
+    @test norm(p₊.P - p₋.P) < 1e-8
+    @test p₊.sig != p₋.sig # and it is a genuine transition, not a resampling of one branch
+end
+
+@testset "L-curve sweep fallback" begin
+    f = build_lcurve_corner_cached_fun()
+    max_log_slope = log(1e6) # the mock function's slope is e^{2t}, so this admits the corner at t = 0
+
+    # The mock curve is unimodal with its maximum at t = 0, so any bracket containing it is certified
+    @test DECAES.lcurve_sweep!(f, -3.0, 3.0, max_log_slope; nsweep = 32, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) ≈ 0 atol = 1e-3
+    @test DECAES.lcurve_sweep!(f, -3.0, 3.0, max_log_slope; nsweep = 2, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) |> isnan # too few samples to bracket anything
+
+    # Only certified corners are returned, never a sample: on a grid whose nearest point is 0.43 away the answer is still localized to `xtol`
+    @test DECAES.lcurve_sweep!(empty!(f), -3.0, 3.0, max_log_slope; nsweep = 8, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) ≈ 0 atol = 1e-4
+
+    # A domain lying entirely to one side of the maximum leaves the sampled sequence monotone, and a monotone sequence has no interior maximum to certify
+    @test DECAES.lcurve_sweep!(empty!(f), 1.0, 4.0, max_log_slope; nsweep = 32, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) |> isnan
+
+    # The slope guard still applies to whatever the sweep finds: the mock's corner has |S| = 1, so any τ < 1 rejects it
+    @test DECAES.lcurve_sweep!(empty!(f), -3.0, 3.0, log(0.5); nsweep = 32, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) |> isnan
+end
+
+# A residual at the level of the arithmetic is treated as an exact fit: ξ²₀ ≤ ε²‖b‖² reads ‖Ax₀ - b‖ ≤ ε‖b‖.
+@testset "L-curve near-exact fit policy" begin
+    for (δ, exact) in ((eps() / 2, true), (2 * eps(), false))
+        A, b = [1.0; 0.0;;], [1.0, δ]
+        work = DECAES.lsqnonneg_lcurve_work(A, b)
+        (; mu, chi2) = DECAES.lsqnonneg_lcurve!(work)
+        if exact
+            @test mu == 0 && chi2 == 1 # returned without evaluating the curve
+            @test length(work.lcurve_point_cache) == 0
+        else
+            @test length(work.lcurve_point_cache) > 0 # the curve is searched normally
+        end
+    end
+end
+
+# ρη² ≤ ‖Ax₀‖²/4 holds everywhere on the path, so |S| ≥ 4ξ²₀/(‖b‖² - ξ²₀) and ξ²₀/‖b‖² > τ/(τ+4) certifies that no point is admissible.
+# For A = I the path is x_ρ = b₊/(1+ρ) and the bound is nearly attained: min|S| = 2√(u(1+u)) + 2u = 4u + 1 - 1/(4u) + O(u⁻²) against a guarantee of 4u, for u = ‖b₋‖²/‖b₊‖².
+@testset "L-curve no-corner certificate" begin
+    τ = DECAES.LCURVE_SLOPE_MAX_DEFAULT
+    A = Matrix(1.0 * LinearAlgebra.I, 8, 8)
+    for c in (0.1, 0.5, 1.0, 2.0, 5.0)
+        b = [fill(-1.0, 7); c]
+        R₀, B₀ = sum(abs2, min.(b, 0.0)), sum(abs2, b)
+        w = DECAES.lsqnonneg_tikh_work(A, b)
+        smin = minimum(range(-8.0, 8.0; length = 2001)) do t
+            DECAES.solve!(w, exp(t))
+            η² = DECAES.seminorm_sq(w)
+            return η² == 0 ? Inf : DECAES.resnorm_sq(w) / (exp(2t) * η²)
+        end
+        @test 4 * R₀ / (B₀ - R₀) <= smin * (1 + 1e-9)
+
+        work = DECAES.lsqnonneg_lcurve_work(A, b)
+        (; mu) = DECAES.lsqnonneg_lcurve!(work)
+        if R₀ / B₀ > τ / (τ + 4)
+            @test smin > τ # no point of the path is admissible
+            @test mu == 0 # so the unregularized solution is returned
+            @test length(work.lcurve_point_cache) == 0 # without evaluating the curve at all
+        else
+            @test length(work.lcurve_point_cache) > 0
+        end
+    end
+end
+
+# Past 128 columns the active-set digest is no longer an exact mask, so equality is a probabilistic statement. The search must still terminate and return a valid solution.
+@testset "lsqnonneg_lcurve (n > 128)" begin
+    A, b = rand(64, 200), abs.(randn(64))
+    @test allunique(DECAES.NNLS.column_digest.(1:1000)) # distinct columns take distinct digests well past the exactly representable range
+    (; x, mu, chi2) = DECAES.lsqnonneg_lcurve(A, b)
+    @test all(>=(0), x) && isfinite(mu) && mu >= 0
+    @test mu == 0 || isapprox(x, DECAES.lsqnonneg_tikh(A, b, mu); rtol = 1e-6, atol = 1e-10)
 end
 
 function lsqnonneg_lcurve_tests(m, n)
@@ -485,10 +892,11 @@ function lsqnonneg_lcurve_tests(m, n)
         @test x ≈ DECAES.lsqnonneg_tikh(A, b, mu) rtol = 1e-8 atol = 1e-12 * norm(b)
         @test chi2 >= 1 - √eps() # res²(μ)/res²(0) ≥ 1 up to roundoff between the two evaluation paths
 
-        # Slope-collapse guard invariant: the accepted corner never sits in the near-vertical μ → 0 tail:
-        # log-log tangent slope |S| = res²/(‖x‖²μ²) ≤ (1 + ϵ) * slope_max.
+        w = DECAES.lsqnonneg_tikh_work(A, b)
+        DECAES.solve!(w, mu)
+        @test DECAES.curvature(log, w) > 0
         η² = sum(abs2, x)
-        @test η² == 0 || sum(abs2, A * x - b) / (η² * mu^2) < 1.01 * DECAES.LCURVE_SLOPE_MAX[]
+        @test η² == 0 || sum(abs2, A * x - b) / (η² * mu^2) < 1.001 * DECAES.LCURVE_SLOPE_MAX_DEFAULT
     else
         @test chi2 == 1
     end
@@ -511,7 +919,7 @@ function lsqnonneg_reginska_tests(m, n)
         # Self-consistency: the returned solution is the exact Tikhonov-NNLS solution at the returned μ
         @test x ≈ DECAES.lsqnonneg_tikh(A, b, mu) rtol = 1e-8 atol = 1e-12 * norm(b)
 
-        # Stationarity of the minimum-product criterion: at the selected μ the log-log L-curve tangent slope is -1, i.e. the balance point res² = μ²‖x‖² holds with |log S| ≤ (local slope of g) × (brent xatol = 1e-4 on logμ).
+        # Stationarity of the minimum-product criterion: at the selected μ the log-log L-curve tangent slope is -1, so the balance point res² = μ²‖x‖² holds with |log S| bounded by the local slope of g times the Brent abscissa tolerance.
         S = sum(abs2, A * x - b) / (sum(abs2, x) * mu^2)
         @test 0.9999 < S < 1.0001
         @test chi2 >= 1
@@ -732,7 +1140,7 @@ function test_gcv_gridded_interp()
                 @test DECAES.gcv_dof_interp(interp, αnode, M, N, μ) ≈ DECAES.gcv_dof(M, N, γ²node, μ) rtol = 1e-12
             end
 
-            # The selected μ then agrees only to the search tolerance: the exact path reaches the spectrum through `svdvals` and the interpolator's slices through `svd`, and a roundoff-level dof difference can move the Brent result by up to `atol` on a flat objective
+            # The selected μ agrees only to the search tolerance: the exact path reaches the spectrum through `svdvals` and the interpolator's slices through `svd`, and a roundoff-level dof difference can move the Brent result by up to `atol` on a flat objective
             r_node_exact = DECAES.lsqnonneg_gcv!(DECAES.NNLSGCVRegProblem(Aα(αnode), b); method = :brent)
             r_node_interp = DECAES.lsqnonneg_gcv!(DECAES.NNLSGCVRegProblem(Aα(αnode), b, nothing, (interp, Ref(αnode))); method = :brent)
             @test r_node_exact.mu ≈ r_node_interp.mu rtol = 1e-3
@@ -791,7 +1199,7 @@ end
 
 # Scale covariance. Since ‖sAx − sb‖² + μ²‖x‖² = s²(‖Ax − b‖² + (μ/s)²‖x‖²), the Tikhonov path satisfies x_μ(sA, sb) = x_{μ/s}(A, b), so every selection rule must return s·μ* with x* and chi2 unchanged.
 # The rules themselves are covariant: chi2 and mdp equate quantities that both scale as s², and the Regińska and L-curve criteria are invariant under the translation s induces on the log-log curve.
-# Only the search does not follow: `lsqnonneg_gcv` and `lsqnonneg_lcurve` minimize over a hardcoded logμ window, which no scaling moves, so they fail once s carries μ* outside it.
+# Only `lsqnonneg_gcv` does not follow: it minimizes over a hardcoded logμ window, which no scaling moves, so it fails once s carries μ* outside it.
 @testset "scale covariance of reg methods" begin
     m, n = 48, 40
     t = range(0, 2; length = m)
@@ -808,6 +1216,7 @@ end
         ("chi2", 5e-3, (A, b, s) -> DECAES.lsqnonneg_chi2(A, b, 1.02)),
         ("mdp", 5e-3, (A, b, s) -> DECAES.lsqnonneg_mdp(A, b, s * δ)),
         ("reginska", 1e-9, (A, b, s) -> DECAES.lsqnonneg_reginska(A, b)),
+        ("lcurve", 1e-9, (A, b, s) -> DECAES.lsqnonneg_lcurve(A, b)),
     )
     for (name, rtol, f) in methods
         r = f(A, b, 1.0)
@@ -819,8 +1228,8 @@ end
         end
     end
 
-    # Broken by the hardcoded logμ windows, not by the criteria. These become `Unexpectedly Pass` the moment the windows are replaced by scale-adaptive brackets.
-    for (name, f) in (("lcurve", DECAES.lsqnonneg_lcurve), ("gcv", DECAES.lsqnonneg_gcv))
+    # Broken by the hardcoded logμ window, not by the criterion. This becomes `Unexpectedly Pass` the moment the window is replaced by a scale-adaptive bracket.
+    let f = DECAES.lsqnonneg_gcv
         r = f(A, b)
         for scale in (1e-9, 1e9)
             rs = f(scale .* A, scale .* b)
@@ -1007,9 +1416,9 @@ end
     end
 end
 
-# The μ-selection methods on adversarial (ill-conditioned / rank-deficient / degenerate) inputs.
-# Each method's Gram fast path has conditioning/iteration guards that fall back to the exact QR solve; those guards fire only on ill-conditioned inputs, which the strictly-positive random data of the per-method testsets above never produces.
-# Returns are certified: the returned x must be KKT-optimal for the Tikhonov problem min_{x≥0} ‖Ax−b‖² + μ²‖x‖² at the returned μ, which at μ = 0 is the unregularized problem. By strong convexity, the Double64 dual/complementarity certificate is sufficient. This exercises the guarded Gram path + exact-QR final solve.
+# The μ-selection methods on ill-conditioned, rank-deficient, and degenerate inputs.
+# Each method's Gram fast path has conditioning and iteration guards that fall back to the QR solve. They fire only on ill-conditioned inputs, which the strictly-positive random data of the per-method testsets above never produces.
+# The returned x must be KKT-optimal for min_{x≥0} ‖Ax−b‖² + μ²‖x‖² at the returned μ, which at μ = 0 is the unregularized problem. Strong convexity makes the Double64 dual and complementarity certificate sufficient.
 function verify_reg_kkt(A0, b0, x, mu)
     D64 = Double64
     A, b, x = D64.(A0), D64.(b0), D64.(x)

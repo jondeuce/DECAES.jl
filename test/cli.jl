@@ -232,13 +232,13 @@ function test_field!(allpassed, x, y, prefix = "failed:"; atol = 0.0, rtol = ato
 end
 field_error_string(x, y) = size(x) != size(y) ? "size(x) = $(size(x)), size(y) = $(size(y))" : "size = $(size(y)), max val = $(maximum(abs, y)), max diff = $(maximum(abs, x.-y)), rel diff = $(maximum(abs, (x.-y)./y))"
 
-# Compare t2map results for approximately equality
-function test_compare_t2map(maps1, dist1, maps2, dist2; kwargs...)
+# Compare t2map results for approximately equality. Fields named in `skip` are not compared; see the L-curve nonuniqueness note in `run_cli_tests`.
+function test_compare_t2map(maps1, dist1, maps2, dist2; skip = (), kwargs...)
     allpassed = Ref(true)
     for s in keys(maps1)
-        haskey(maps2, s) && test_field!(allpassed, maps1[s], maps2[s], "maps failed: $s"; kwargs...)
+        haskey(maps2, s) && s ∉ skip && test_field!(allpassed, maps1[s], maps2[s], "maps failed: $s"; kwargs...)
     end
-    test_field!(allpassed, dist1, dist2, "dist failed"; kwargs...)
+    "dist" ∉ skip && test_field!(allpassed, dist1, dist2, "dist failed"; kwargs...)
     return allpassed[]
 end
 
@@ -321,8 +321,8 @@ function run_cli_tests()
             settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
             cli_t2map_args = construct_args(paramdict; settings_kwargs_cli...)
 
-            b1_used = B1map && !("--SetFlipAngle" ∈ cli_t2map_args)
-            if b1_used
+            B1_passed = B1map && !("--SetFlipAngle" ∈ cli_t2map_args)
+            if B1_passed
                 # Write reference B1map computed above to file and pass filename to DECAES CLI
                 B1mapfilename = joinpath(path, "B1" * file_suffix)
                 write_image(B1mapfilename, t2map["alpha"])
@@ -332,13 +332,17 @@ function run_cli_tests()
             t2maps_cli, t2dist_cli, t2parts_cli = run_main(image, cli_t2map_args; make_settings_file)
 
             # A B1 map run skips the flip-angle search, so its T2-stage unregularized solve is unseeded and follows a different arithmetic path. The α used to construct the bases has also been converted to degrees and back, perturbing it by up to one ulp.
-            # Methods that select μ by root-finding a residual level are more robust to these types of perturbations. `gcv` and `lcurve` instead select extrema, which are unstable if the residual does not have a noise floor:
-            # at nTE < nT2 the basis may interpolate the data, so R(μ) → 0 as μ → 0, the L-curve corner flattens, and 𝒢 = R/dof² approaches a finite limit rather than diverging. μ is then determined no better than the width of the flat regions.
-            cli_rtol = !b1_used ? 1e-14 :
-                       paramdict[:nTE] >= paramdict[:nT2] ? 1e-8 :
-                       paramdict[:Reg] ∈ ("gcv", "lcurve") ? 1e-3 : 1e-8
-            t2map_passed = test_compare_t2map(t2map, t2dist, t2maps_cli, t2dist_cli; rtol = cli_rtol)
-            t2part_passed = test_compare_t2part(t2part, t2parts_cli; rtol = cli_rtol)
+            # Methods that select μ by root-finding a residual level are robust to such perturbations. `gcv` instead selects an extremum, which may be unstable when the residual has no noise floor:
+            # at nTE < nT2 the basis may interpolate the data, so R(μ) → 0 as μ → 0 and 𝒢 = R/dof² approaches a finite limit rather than diverging, pinning μ no better than the width of the flat regions.
+            # `lcurve` reports no corner on such a basis, since the curvature attains its maximum on the μ → 0 tail, which `lcurve_corner` rejects, so the unregularized solution is returned.
+            # That solution is not unique when the basis interpolates: permuting the columns of A changes it while leaving the residual fixed.
+            # `dist`, the moments computed from it, and `fnr` inherit that nonuniqueness, so their comparison is skipped. `fnr` divides `gdn` = Σⱼxⱼ by the residual.
+            # `snr` is unique, the fitted vector Ax being the projection of b onto the convex cone AR₊ⁿ, but it divides by a residual an interpolating basis pins at the roundoff floor, leaving a ratio of order 1/eps, so its comparison is skipped too.
+            # The flip angle, the bases, the times and the residual norm are unique and well scaled, and are compared.
+            nonunique = B1_passed && paramdict[:Reg] == "lcurve" && paramdict[:nTE] < paramdict[:nT2]
+            cli_rtol = !B1_passed ? 1e-14 : paramdict[:nTE] < paramdict[:nT2] && paramdict[:Reg] == "gcv" ? 1e-3 : 1e-8
+            t2map_passed = test_compare_t2map(t2map, t2dist, t2maps_cli, t2dist_cli; rtol = cli_rtol, skip = nonunique ? ("dist", "gdn", "ggm", "gva", "fnr", "snr") : ())
+            t2part_passed = nonunique || test_compare_t2part(t2part, t2parts_cli; rtol = cli_rtol)
             if !(t2map_passed && t2part_passed)
                 println("\n ------------------------------- \n")
                 @error "CLI with --T2map and --T2part failed"

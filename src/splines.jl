@@ -730,7 +730,7 @@ function reset!(state::DiscreteSurrogateSearcher)
 end
 
 function initialize!(surr::AbstractSurrogate{D}, state::DiscreteSurrogateSearcher{D}; mineval::Int, maxeval::Int) where {D}
-    # Neighbouring gridpoints have similar loss-function state, for instance nearby decay bases in the NNLS surrogate search, so evaluating in sorted order lets warm starts chain through small parameter jumps instead of bouncing across the grid.
+    # Neighbouring gridpoints have similar loss-function state, such as the nearby decay bases of the NNLS surrogate search, so evaluating in sorted order chains warm starts through small parameter jumps.
     planned = plan_initialize!(state; mineval, maxeval)
     for I in planned
         update!(surr, state, I; maxeval)
@@ -762,7 +762,7 @@ function plan_initialize!(state::DiscreteSurrogateSearcher{D}; mineval::Int, max
     return planned
 end
 
-# Dry-run mirror of the recursive initialization, recording the indices that `evaluate_box!` and `update!` would evaluate, without evaluating anything; membership in `planned` plays the role of `state.seen` and `state.numeval`.
+# Dry-run mirror of the recursive initialization: record the indices `evaluate_box!` and `update!` would evaluate, evaluating nothing. Membership in `planned` plays the role of `state.seen` and `state.numeval`.
 function plan_initialize!(planned::Vector{CartesianIndex{D}}, box::BoundingBox{D}, depth::Int; mineval::Int, maxeval::Int) where {D}
     depth <= 0 && return planned
     cs = corners(box)
@@ -870,7 +870,7 @@ function converged(::DiscreteSurrogateSearcher{D}, box::BoundingBox{D}) where {D
 end
 
 function is_resolved(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D, T}) where {D, T}
-    # Resolved is defined as: `x` is an evaluated node, or sits in a cell whose corners are all evaluated. `minimal_bounding_box` only searches the dyadic hierarchy, so it can miss a qualifying cell and call a resolved `x` unresolved, causing the search to evaluate more points than necessary.
+    # Resolved means `x` is an evaluated node, or sits in a cell whose corners are all evaluated. `minimal_bounding_box` searches only the dyadic hierarchy, so it can miss a qualifying cell and call a resolved `x` unresolved, costing extra evaluations.
     box = minimal_bounding_box(state, x)
     is_evaluated(state, box) && return true
     return any(I -> @inbounds(state.seen[I] && state.grid[I] == x), corners(box))
@@ -1071,19 +1071,19 @@ end
 
 load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T} = copyto!(prob.b, b)
 
-# Fully reset warm-start state: the next `loss!` solves cold and every per-gridpoint seed is discarded, both this-voxel and cross-voxel, so results are independent of any prior state. Used to isolate a search for reproducibility.
+# Fully reset warm-start state: the next `loss!` solves cold and every per-gridpoint seed is discarded, this-voxel and cross-voxel alike, so the search is independent of any prior state.
 reset_warmstart!(prob::NNLSDiscreteSurrogateSearch) = (empty!(prob.seen_pts); fill!(prob.seen_stamp, 0); prob.voxel[] = 1; prob)
 
-# Advance to the next voxel without discarding the per-gridpoint active sets. Each grid point last evaluated in the previous voxel has the same decay basis `As` and a nearby signal `b`,
-# so it seeds the same grid point this voxel; see `loss!`. Only the this-voxel `seen_pts` list is cleared. NNLS converges to the same solution from any seed, so this changes solve speed, not results.
+# Advance to the next voxel without discarding the per-gridpoint active sets. A grid point last evaluated in the previous voxel has the same decay basis `As` and a nearby signal `b`, so it seeds the same grid point this voxel; see `loss!`.
+# Only the this-voxel `seen_pts` list is cleared. NNLS converges to the same solution from any seed, so this changes solve speed, not results.
 advance_warmstart!(prob::NNLSDiscreteSurrogateSearch) = (prob.voxel[] += 1; empty!(prob.seen_pts); prob)
 
 function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) where {D, T}
     (; As, b, nnls_work, seen_pts, seen_idx, seen_nsetp, seen_stamp, voxel) = prob
     lin = LinearIndices(size(prob.u))[I]
 
-    # Choose the warm-start seed, in order of preference. First, this grid point's active set from the immediately-previous voxel, which has the same decay basis and a nearby signal and is usually the best seed available.
-    # Otherwise the nearest grid point already evaluated during this voxel's search, since nearby parameters have nearly identical decay bases and hence nearly identical active sets, and even a far seed beats a cold solve. Otherwise solve cold.
+    # Choose the warm-start seed in order of preference. First this grid point's active set from the immediately-previous voxel, which shares its decay basis and has a nearby signal.
+    # Otherwise the nearest grid point already evaluated this voxel, since nearby parameters have nearly identical decay bases and hence nearly identical active sets, and even a far seed beats a cold solve. Otherwise solve cold.
     seedlin = 0
     @inbounds begin
         prevstamp = seen_stamp[lin]
@@ -1104,7 +1104,7 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) wh
     end
     np0 = seedlin == 0 ? 0 : @inbounds(seen_nsetp[seedlin])
 
-    # Precomputed-Gram fast path (reads the seed out of seen_idx before it is overwritten below); exact QR solve on toggle-off, legacy mode, or a conditioning/iteration guard failure
+    # Precomputed-Gram fast path, reading the seed out of seen_idx before it is overwritten below. The exact QR solve takes over on toggle-off, legacy mode, or a conditioning or iteration guard failure.
     solved = SURROGATE_USE_FAST_GRAM[] && !prob.legacy && @views loss_gram!(prob, I, lin, seen_idx[:, max(seedlin, 1)], np0)
     @inbounds if !solved
         if np0 > 0
@@ -1158,7 +1158,7 @@ function loss_with_grad!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIn
 end
 
 # Evaluate the loss at grid point I via the precomputed-Gram fast path, seeded with the active set idx0[1:np0] (np0 = 0 solves cold).
-# On success the solution, active set, and exact residual norm are written into the NNLS workspace - the quantities every downstream consumer reads (`∇loss!`, the warm-start records in `loss!`, and the chi2-stage seed) - and `true` is returned; `false` means the caller must run the exact QR solver instead.
+# On success the solution, active set, and exact residual norm are written into the NNLS workspace, which is everything the downstream consumers read, and `true` is returned. `false` means the caller must run the exact QR solver instead.
 function loss_gram!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}, lin::Int, idx0, np0::Int) where {D, T}
     (; As, Gs, b, nnls_work, nnls_gram) = prob
     A, G = view(As, :, :, I), view(Gs, :, :, lin)

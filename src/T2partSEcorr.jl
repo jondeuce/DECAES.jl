@@ -48,7 +48,7 @@ function T2partSEcorr(T2distributions::Array{T, 4}, opts::T2partOptions{T}) wher
     # Initial output
     maps = T2Parts(opts)
 
-    # For each worker in the worker pool, allocate a separete thread-local buffer, then run the work function `work!`
+    # For each worker in the worker pool, allocate a separate thread-local buffer, then run the work function `work!`
     function with_thread_buffer(work!)
         thread_buffer = thread_buffer_maker(opts)
         return work!(thread_buffer)

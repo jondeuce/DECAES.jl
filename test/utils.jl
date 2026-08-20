@@ -21,6 +21,16 @@ Random.seed!(0) # reproducible randomized tests
     end
 
     c = GrowableCache{Float64, Float64}()
+    push!(c, (1.0, 2.0))
+    push!(c, (3.0, 4.0))
+    push!(c, (5.0, 6.0))
+    @test popfirst!(c) == (1.0, 2.0)
+    @test length(c) == 2 && collect(keys(c)) == [3.0, 5.0]
+    @test popfirst!(c) == (3.0, 4.0)
+    push!(c, (7.0, 8.0))
+    @test collect(keys(c)) == [5.0, 7.0] # entries pushed after a removal queue behind the survivors
+
+    c = GrowableCache{Float64, Float64}()
     c[1.5] = 2.0
     @test c[1.5] == 2.0
     c[1.5] = 3.0

@@ -198,7 +198,7 @@ end
 
 # Cache of the squared singular spectrum of a parameterized matrix family A(α) on a grid of α values, together with its spectral α-derivatives.
 # Consumers interpolate a smooth spectral function between the two bracketing grid slices rather than interpolating the singular values themselves; see `gcv_dof_interp` for the GCV dof(μ, α).
-# Grid slices are computed lazily, once per workspace lifetime; when the family depends only on grid parameters (never on per-solve data, e.g. the flip-angle decay bases), the cost amortizes to zero across solves.
+# Grid slices are computed lazily, once per workspace lifetime, so a family depending only on grid parameters and never on per-solve data - as the flip-angle decay bases do - amortizes the cost to zero across solves.
 struct GriddedSpectrumInterpolator{T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}}
     As::TA              # M×N×ngrid matrix family
     ∇As::TdA            # M×N×D×ngrid α-derivative bases; [:, :, 1, i] is ∂A(αᵢ)/∂α (D = 1)
@@ -283,6 +283,17 @@ function Base.push!(c::GrowableCache, (x, v))
         push!(c.values, v)
     end
     return c
+end
+
+# The corner search stores its unexplored branches oldest-first and retires them in that order; see `lcurve_certify!`.
+function Base.popfirst!(c::GrowableCache)
+    n = c.length[]
+    @inbounds x, v = c.keys[1], c.values[1]
+    @inbounds for i in 1:n-1
+        c.keys[i], c.values[i] = c.keys[i+1], c.values[i+1]
+    end
+    c.length[] = n - 1
+    return (x, v)
 end
 
 function Base.get!(f, c::GrowableCache, x)

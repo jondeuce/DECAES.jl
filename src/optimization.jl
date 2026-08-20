@@ -13,6 +13,8 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 =#
 
+@inline sort_bracket(x₁::T, x₂::T, y₁::T, y₂::T) where {T} = x₁ <= x₂ ? ((x₁, x₂), (y₁, y₂)) : ((x₂, x₁), (y₂, y₁))
+
 #### Bisection
 
 function bisect_root(f, a::Number, b::Number; xatol = nothing, xrtol = nothing, ftol = nothing, maxiters::Int = 100)
@@ -25,14 +27,14 @@ function bisect_root(f, a::Number, b::Number; xatol = nothing, xrtol = nothing, 
         xrtol = xrtol === nothing ? zero(T) : T(xrtol),
         ftol = ftol === nothing ? zero(T) : T(ftol),
         maxiters,
-    )[3:4]
+    )
 end
 
 function bisect_root(f, x₁::T, x₂::T, y₁::T, y₂::T; xatol::T = zero(T), xrtol::T = zero(T), ftol::T = zero(T), maxiters::Int = 100) where {T}
     if x₁ == x₂ || y₁ * y₂ >= 0
         # Degenerate interval; return endpoint closest to zero
         xₘ, yₘ = abs(y₁) <= abs(y₂) ? (x₁, y₁) : (x₂, y₂)
-        return (x₁, y₁, xₘ, yₘ, x₂, y₂)
+        return (xₘ, yₘ, sort_bracket(x₁, x₂, y₁, y₂)...)
     end
 
     if y₂ < 0
@@ -63,15 +65,15 @@ function bisect_root(f, x₁::T, x₂::T, y₁::T, y₂::T; xatol::T = zero(T), 
         end
     end
 
-    return (x₁, y₁, xₘ, yₘ, x₂, y₂)
+    return (xₘ, yₘ, sort_bracket(x₁, x₂, y₁, y₂)...)
 end
 
 #### Brent's method (root-finding)
 
 function brent_root(f, x₀::T, x₁::T, fx₀::T = f(x₀), fx₁::T = f(x₁); xatol::T = zero(T), xrtol::T = zero(T), ftol::T = zero(T), maxiters::Int = 100) where {T}
     # Assert bracketing
-    fx₀ == 0 && return (x₀, fx₀)
-    fx₁ == 0 && return (x₁, fx₁)
+    fx₀ == 0 && return (x₀, fx₀, (x₀, x₀))
+    fx₁ == 0 && return (x₁, fx₁, (x₁, x₁))
     @assert fx₀ * fx₁ < 0 "Root must be bracketed, but f(x = $x₀) = $fx₀ and f(x = $x₁) = $fx₁"
 
     # Initialize Brent state
@@ -83,7 +85,7 @@ function brent_root(f, x₀::T, x₁::T, fx₀::T = f(x₀), fx₁::T = f(x₁);
 
     for iter in 1:maxiters
         # Check for sufficiently small bracketing interval
-        abs(b - a) <= 2 * (xatol + xrtol * abs(b)) && return (b, fb)
+        abs(b - a) <= 2 * (xatol + xrtol * abs(b)) && return (b, fb, minmax(a, b))
 
         # Next step depends on points; inverse quadratic
         s::T = inverse_quadratic_step(a, b, c, fa, fb, fc)
@@ -108,9 +110,9 @@ function brent_root(f, x₀::T, x₁::T, fx₀::T = f(x₀), fx₁::T = f(x₁);
         end
 
         fs::T = f(s)
-        iszero(fs) && return (s, fs) # exact root found
-        (isnan(fs) || isinf(fs)) && return (b, fb) # function failed; return current best guess
-        abs(fs) <= ftol && return (s, fs) # function value is below tolerance
+        iszero(fs) && return (s, fs, (s, s)) # exact root found
+        (isnan(fs) || isinf(fs)) && return (b, fb, minmax(a, b)) # function failed; return current best guess
+        abs(fs) <= ftol && return (s, fs, minmax(a, b)) # function value is below tolerance
 
         c, fc, d = b, fb, c
         if sign(fa) * sign(fs) < 0
@@ -124,15 +126,15 @@ function brent_root(f, x₀::T, x₁::T, fx₀::T = f(x₀), fx₁::T = f(x₁);
         end
     end
 
-    return (b, fb)
+    return (b, fb, minmax(a, b))
 end
 
 #### Newton's method with bisection
 
 function newton_bisect_root(f_∂f, x0::T, x1::T, x2::T, y1::T = f_∂f(x1)[1], y2::T = f_∂f(x2)[1]; xrtol::T = √eps(T), xatol::T = eps(T), ftol::T = zero(T), maxiters::Int = 100) where {T <: AbstractFloat}
     # Check initial points
-    y1 == 0 && return (x1, y1)
-    y2 == 0 && return (x2, y2)
+    y1 == 0 && return (x1, y1, (x1, x1))
+    y2 == 0 && return (x2, y2, (x2, x2))
     @assert y1 * y2 < 0 "Root must be bracketed, but f(x = $x1) = $y1 and f(x = $x2) = $y2"
     (y1 > 0) && ((x1, x2, y1, y2) = (x2, x1, y2, y1))
 
@@ -144,7 +146,7 @@ function newton_bisect_root(f_∂f, x0::T, x1::T, x2::T, y1::T = f_∂f(x1)[1], 
     for iter in 1:maxiters
         # Evaluate function and derivative at the current estimate
         y, dy = f_∂f(x)
-        abs(y) <= ftol && return (x, y)
+        abs(y) <= ftol && return (x, y, minmax(x1, x2))
 
         # Update bracketing interval
         if y < 0
@@ -169,7 +171,7 @@ function newton_bisect_root(f_∂f, x0::T, x1::T, x2::T, y1::T = f_∂f(x1)[1], 
         min(abs(Δx), abs(x - x_old)) <= Δx_tol && break
     end
 
-    return (x, y)
+    return (x, y, minmax(x1, x2))
 end
 
 #### Root-finding helper functions
@@ -316,6 +318,7 @@ Optim.jl is licensed under the MIT License:
 
 #### Brent's method (minimization)
 
+# Note: the stopping rule |x - xₘ| + (x₂ - x₁)/2 ≤ 2τ, with xₘ the bracket midpoint and τ = xatol + xrtol·|x|, bounds the returned bracket by 4τ and no better, since |x - xₘ| can reach (x₂ - x₁)/2.
 function brent_minimize(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
     @assert x₁ < x₂ "x₁ must be less than x₂"
 
@@ -409,7 +412,7 @@ function brent_minimize(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = �
         end
     end
 
-    return (x, y)
+    return (x, y, (x₁, x₂))
 end
 
 # Given a function `f_∂f` which returns both the function value and its derivative at a given point,
@@ -510,7 +513,7 @@ function brent_newton_minimize(f_∂f, a::T, b::T, x0::T, f0::T = f_∂f(x0)[1],
         end
     end
 
-    return (x_new, f_new)
+    return (x_new, f_new, (a, b))
 end
 
 function newton_bisect_minimize(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxdepth::Int = 5, kwargs...) where {T <: AbstractFloat}

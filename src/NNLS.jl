@@ -244,7 +244,7 @@ end
 # Load the data rows of b into the workspace, snapshot them into b0 as the reference for residual and dual computations, and compute the initial dual w = A[1:m, :]'b.
 # The initial residual is exactly b0, so this is the round-0 dual and callers pass `init_dual = false` to the solver.
 # A itself is not copied; the solver reads pristine column data directly from the caller's matrix.
-# For the unregularized problem m = size(A, 1), while for the Tikhonov-padded problem A = [A₀; λI] only the top m = M - N data rows contribute, since x = 0 on the padded rows.
+# For the unregularized problem m = size(A, 1); for the Tikhonov-padded A = [A₀; λI] only the top m = M - N data rows contribute, since b = 0 on the padded rows.
 function init_dual!(work::NNLSWorkspace{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, m::Int = size(work.A, 1)) where {T}
     @assert size(A) == size(work.A)
     @assert size(b) == size(work.b)
@@ -286,8 +286,8 @@ end
 """
     NormalEquationCholesky <: LinearAlgebra.Factorization
 
-Cholesky factorization of the normal equations `AₚᵀAₚ` restricted to the positive components of the last solve, where `Aₚ = A[:, components(work)]`.
-Obtained from `cholesky(NormalEquation(), work)` and usable with `ldiv!`; the factor itself is the triangular factor the solver already maintains, so no additional factorization is performed.
+Cholesky factorization of the normal equations `AₚᵀAₚ`, where `Aₚ = A[:, components(work)]` holds the positive components of the last solve.
+Obtained from `cholesky(NormalEquation(), work)` and usable with `ldiv!`. The factor is the triangular factor the solver already maintains, so nothing is refactorized.
 """
 struct NormalEquationCholesky{T, W <: NNLSWorkspace{T}} <: Factorization{T}
     work::W
@@ -377,8 +377,8 @@ function nnls!(
     return solution(work)
 end
 
-# Warm-started Tikhonov solve: seed the passive set with the columns idx0[1:nsetp0], typically cached `components(work)` indices from a solve with a similar λ value.
-# The seeded columns are entered without the positivity check, infeasible ones are dropped again by a feasibility pass, and the standard algorithm then runs to convergence, so the result is identical in quality to a cold solve.
+# Warm-started Tikhonov solve: seed the passive set with the columns idx0[1:nsetp0], typically `components(work)` cached from a solve at a nearby λ.
+# Seeds enter without the positivity check, a feasibility pass drops the infeasible ones, and the standard algorithm then runs to convergence, so the result matches a cold solve in quality.
 function nnls!(
     work::NNLSWorkspace{T},
     A::AbstractMatrix{T},
@@ -404,8 +404,8 @@ function nnls!(
     return solution(work)
 end
 
-# Warm-started unregularized solve: seed the passive set with the columns idx0[1:nsetp0], typically cached `components(work)` indices from a solve with a similar matrix.
-# Same protocol as the Tikhonov warm start: seeds are entered without the positivity check, infeasible ones are dropped by a feasibility pass, and the standard algorithm runs to convergence.
+# Warm-started unregularized solve: seed the passive set with the columns idx0[1:nsetp0], typically `components(work)` cached from a solve against a similar matrix.
+# Same seeding protocol as the Tikhonov warm start above.
 function nnls!(
     work::NNLSWorkspace{T},
     A::AbstractMatrix{T},
@@ -514,7 +514,7 @@ function apply_transforms!(c::AbstractVector{T}, work::NNLSWorkspace{T}) where {
     return c
 end
 
-# Apply the single stored Householder reflection t to column `col` of C (used to keep staged candidates reduced as earlier block members enter).
+# Apply the single stored Householder reflection t to column `col` of C, which keeps staged candidates reduced as earlier block members enter.
 @inline function apply_householder_to_col!(C::AbstractMatrix{T}, col::Int, work::NNLSWorkspace{T}, t::Int) where {T}
     (; H, htau, hpos, hm1) = work
     @inbounds begin
@@ -566,10 +566,10 @@ function compute_dual!(work::NNLSWorkspace{T}, A0::AbstractMatrix{T}, nsetp::Int
 end
 
 # Attempt to move a candidate column into the passive set at position ip = nsetp + 1.
-# On input c (= work.zz, used as scratch) holds the candidate column in original row coordinates (rows 1:m1; the caller zeroes inactive padded rows and places any λ entry).
-# The candidate is reduced against the current Q via the transforms, then a Householder reflection is constructed on rows ip:m1 and the classic entering-column checks are performed (sufficient independence and positivity of the proposed new coefficient).
-# On acceptance: the reflection is appended to the log and applied to b, and the new U column is written at position ip (pristine column data is never moved: kernels read it from the caller's matrix via `idx`).
-# Returns tau >= 0 on acceptance, -1 on rejection, and -2 if the Householder panel is full (pathological; treated like iteration exhaustion by the caller).
+# On input the scratch vector c, which is `work.zz`, holds the candidate column in original row coordinates over rows 1:m1; the caller zeroes inactive padded rows and places any λ entry.
+# The candidate is reduced against the current Q via the transforms, a Householder reflection is built on rows ip:m1, and the classic entering-column checks follow: sufficient independence and positivity of the proposed new coefficient.
+# On acceptance the reflection is appended to the log and applied to b, and the new U column is written at position ip. Pristine column data is never moved; kernels read it from the caller's matrix via `idx`.
+# Returns tau >= 0 on acceptance, -1 on rejection, and -2 when the Householder panel is full, which the caller treats like iteration exhaustion.
 function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int, m1::Int, check::Bool = true, reduce::Bool = true) where {T}
     (; A, b, H, htau, hpos, hm1, hlen, transforms) = work
 
@@ -626,7 +626,7 @@ function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int
         tau = zero(T) # single-row reflection acts as the identity (matches the classic algorithm)
     end
 
-    # Write the new U column at position ip: reduced head, -beta on the diagonal (or the reduced value itself in the trivial single-row case), and zeros below (the Householder tail lives in the H panel, not in A).
+    # Write the new U column at position ip: reduced head, -beta on the diagonal or the reduced value itself in the trivial single-row case, then zeros below. The Householder tail lives in the H panel, not in A.
     @inbounds @simd ivdep for i in 1:ip-1
         A[i, ip] = c[i]
     end
@@ -844,8 +844,9 @@ function unsafe_nnls!(
     rfresh = false # r = b0 - A0[:, idx[1:nsetp]]*x₊ is current for the final passive set (see the rnorm epilogue)
 
     # ******  WARM START  ******
-    # Seed the passive set with the stashed columns, skipping the positivity check; a feasibility pass below drops any that come out non-positive (mirrors the warm start of the Tikhonov method, without the λ rows).
-    # Panel-QR seeding: all seed columns are staged upfront in spare columns of H and kept reduced column-parallel as each accepted seed's reflection is constructed (right-looking), instead of each seed replaying the whole transforms sequentially (`apply_transforms!` is latency-bound and dominated warm-started solves).
+    # Seed the passive set with the stashed columns, skipping the positivity check; a feasibility pass below drops any that come out non-positive. This mirrors the Tikhonov warm start without the λ rows.
+    # Panel-QR seeding: all seed columns are staged upfront in spare columns of H and kept reduced column-parallel as each accepted seed's reflection is built, right-looking.
+    # `apply_transforms!` is latency-bound, so replaying the whole transform log once per seed instead would dominate the cost of a warm-started solve.
     if nwarm > 0
         hcap = size(H, 2)
         sbase = hcap - nwarm # staging columns sbase+1:sbase+nwarm; reflections built during seeding occupy slots 1:nwarm <= sbase
@@ -919,7 +920,7 @@ function unsafe_nnls!(
             break
         end
 
-        # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W() from the pristine set Z columns and the current passive-set residual (unless the caller preloaded w for the first round).
+        # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W() from the pristine set Z columns and the current passive-set residual, unless the caller preloaded w for the first round.
         if use_stale_w
             use_stale_w = false
         else
@@ -1078,7 +1079,7 @@ function unsafe_nnls!(
 
     # Compute the norm of the final residual from the untransformed residual r = b0 - A0[:, idx[1:nsetp]]*x₊.
     # The transformed free rows of b lose relative accuracy when a nearly dependent column enters, for instance a duplicated column, whereas r is accurate to working precision.
-    # r is already current when termination followed the dual computation; otherwise recompute it; when all rows are triangularized the residual is zero by convention, matching the classic algorithm's empty free-row sum.
+    # r is already current when termination followed the dual computation, and is recomputed otherwise. When all rows are triangularized the residual is zero by convention, matching the classic algorithm's empty free-row sum.
     sm = zero(T)
     if nsetp < m
         if !rfresh
@@ -1138,7 +1139,8 @@ function unsafe_nnls!(
     # ******  WARM START  ******
     # Seed the passive set with the stashed columns, skipping the positivity check; a feasibility pass below drops any that come out non-positive.
     # Panel-QR seeding (see the unregularized solver): seed columns are staged upfront and kept reduced column-parallel as each accepted seed's reflection is constructed, replacing the per-seed sequential log replay.
-    # λ-entry placement: a pre-activated λ row (rj != 0) lies within the range of earlier reflections, so it must be placed at staging time; a fresh λ row is assigned at entry time (row m + 1) and lies strictly above the rows of every reflection built so far, so lazy placement commutes with the reduction.
+    # λ-entry placement: a pre-activated λ row, rj != 0, lies within the range of earlier reflections and must therefore be placed at staging time.
+    # A fresh λ row is assigned at entry time, row m + 1, and lies strictly above the rows of every reflection built so far, so lazy placement commutes with the reduction.
     if nwarm > 0
         hcap = size(H, 2)
         sbase = hcap - nwarm # staging columns sbase+1:sbase+nwarm; reflections built during seeding occupy slots 1:nwarm <= sbase
@@ -1225,7 +1227,7 @@ function unsafe_nnls!(
         end
 
         # COMPUTE COMPONENTS OF THE DUAL (NEGATIVE GRADIENT) VECTOR W() from the pristine set Z columns and the current passive-set residual.
-        # Only the data rows contribute: a set Z column's λ row is inactive (or its coefficient is zero), so the padded rows drop out.
+        # Only the data rows contribute: a set Z column's λ row is inactive or its coefficient is zero, so the padded rows drop out.
         if use_stale_w # caller preloaded w for the first round
             use_stale_w = false
         elseif iszero(λ) && nsetp >= m0
@@ -1442,9 +1444,9 @@ end
 #### Gram matrix-based fast path for the Tikhonov-regularized problem
 ####
 
-# The Gram matrix of the active columns is μ-independent, so evaluating the Tikhonov-regularized NNLS residual norm at a new μ with a warm active set costs only a p×p Cholesky factorization (p = active-set size) plus one KKT-verification GEMV, instead of a full QR factor rebuild.
-# The KKT conditions are verified with the exact residual dual w = A'(b - A_P x), so accepted solutions are genuine NNLS solutions up to normal-equation roundoff (κ(A_P)² amplification, tamed by the μ² shift of the Gram matrix - the μ-search evaluates μ well above the conditioning danger zone, and the root tolerance is many orders coarser than the roundoff).
-# Conditioning trouble (non-positive or tiny Cholesky pivots) or an exhausted iteration budget returns NaN, and the caller falls back to the exact QR solver.
+# The Gram matrix of the active columns is μ-independent, so evaluating the Tikhonov-regularized NNLS residual norm at a new μ with a warm active set costs one Cholesky factorization over the p active columns plus one KKT-verification GEMV, rather than a full QR rebuild.
+# The KKT conditions are verified against the exact residual dual w = A'(b - A_P x), so accepted solutions are genuine NNLS solutions up to normal-equation roundoff. The κ(A_P)² amplification is tamed by the μ² shift of the Gram matrix, and the root tolerances are many orders coarser than the error that remains.
+# Non-positive or tiny Cholesky pivots and an exhausted iteration budget both return NaN, on which the caller falls back to the exact QR solver.
 struct NNLSGram{T}
     P::Vector{Int}           # active set (original column indices) in P[1:np]
     inP::Vector{Bool}        # membership mask of P[1:np]
@@ -1457,6 +1459,7 @@ struct NNLSGram{T}
     r::Vector{T}             # residual b - A_P x (length m)
     w::Vector{T}             # dual A'r (length n)
     dinv::Vector{T}          # reciprocals of the Cholesky diagonal, so the O(p²) column updates multiply instead of divide
+    y::Vector{T}             # scratch for the triangular solve in `inv_quadratic_form` (length n)
 end
 
 function NNLSGram(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
@@ -1465,11 +1468,11 @@ function NNLSGram(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
         zeros(Int, n), fill(false, n), Ref(0),
         zeros(T, n, n), zeros(T, n, n),
         zeros(T, n), Ref(zero(T)),
-        zeros(T, n), zeros(T, m), zeros(T, n), zeros(T, n),
+        zeros(T, n), zeros(T, m), zeros(T, n), zeros(T, n), zeros(T, n),
     )
 end
 
-# Load the μ-independent right-hand side data c = A'b (once per problem/voxel)
+# Load the μ-independent right-hand side data c = A'b, once per problem
 function load!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     (; c) = gp
     m, n = size(A)
@@ -1550,7 +1553,7 @@ end
     return s
 end
 
-# ||x(μ)||² from the Gram path's active-set solution (valid immediately after a successful `solve!`: xp[1:np] holds the coefficients on P[1:np])
+# ||x(μ)||² from the Gram path's active-set solution, valid immediately after a successful `solve!`, which leaves xp[1:np] holding the coefficients on P[1:np]
 @inline function seminorm_sq(gp::NNLSGram{T}) where {T}
     s = zero(T)
     @inbounds @simd for i in 1:gp.np[]
@@ -1559,9 +1562,43 @@ end
     return s
 end
 
+# xᵀB⁻¹x = ||L⁻ᵀx||² with B = A_PᵀA_P + μ²I = L'L, the quadratic form carrying the first-order geometry of the Tikhonov path: dR/dμ = 4μ³xᵀB⁻¹x and dN/dμ = -4μxᵀB⁻¹x.
+# Valid immediately after a successful `solve!`, which leaves L[1:np, 1:np] current for the returned active set.
+@inline function inv_quadratic_form(gp::NNLSGram{T}) where {T}
+    (; L, xp, dinv, y, np) = gp
+    s = zero(T)
+    @inbounds for i in 1:np[]
+        t = xp[i]
+        @simd for k in 1:i-1
+            t = t - L[k, i] * y[k]
+        end
+        yi = t * dinv[i]
+        y[i] = yi
+        s = muladd(yi, yi, s)
+    end
+    return s
+end
+
+# Digest of the active set, exclusive-or'd so that it does not depend on the order the columns are stored in. Equal digests mean equal sets up to a 2⁻¹²⁸ collision, possible only among columns past 128, the only ones without a bit of their own.
+# Equal digests do not mean the set is constant between the two μ: a component can leave and re-enter, each passive coefficient being rational in μ² with several possible positive roots.
+@inline function splitmix(x::UInt64)
+    x = (x ⊻ (x >> 30)) * 0xbf58476d1ce4e5b9
+    x = (x ⊻ (x >> 27)) * 0x94d049bb133111eb
+    return x ⊻ (x >> 31)
+end
+@inline column_digest(j::Int) = j <= 128 ? UInt128(1) << (j - 1) : UInt128(splitmix(UInt64(j))) << 64 | UInt128(splitmix(~UInt64(j)))
+
+@inline function active_signature(gp::NNLSGram)
+    s = zero(UInt128)
+    @inbounds for i in 1:gp.np[]
+        s ⊻= column_digest(gp.P[i])
+    end
+    return s
+end
+
 # Solve min ||Ax - b||² + μ²||x||² s.t. x ≥ 0 via active-set iteration on the cached Gram data, warm-started from the current active set.
-# Returns the squared data residual ||Ax - b||² (the chi2 functional; the μ²||x||² penalty is excluded, matching `resnorm_sq`), or NaN on failure (caller falls back to the exact solver).
-# On success the active set is left at the solution (warm start for the next μ).
+# Returns the squared data residual ||Ax - b||², excluding the μ²||x||² penalty so as to match `resnorm_sq`, or NaN on failure, on which the caller falls back to the exact solver.
+# On success the active set is left at the solution, warm-starting the next μ.
 function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ::T) where {T}
     (; P, inP, np, GP, L, c, xp, r, w, dinv) = gp
     m, n = size(A)
@@ -1570,7 +1607,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
     # Dual tolerance for accepting a KKT point, relative to the scale of A'b.
     # The objective is flat along the degenerate directions of near-collinear columns, so a dual violation of size δ admits an active set whose
     # objective is suboptimal only by O(δ²) but whose ‖Ax-b‖² and ‖x‖² individually move by O(δ).
-    # Callers read those two separately and amplify: a transversal root-find by O(1), a smooth minimization by O(√·), a curvature maximization more still.
+    # Callers read those two separately and amplify the error: a transversal root-find by O(δ), a smooth minimization by O(√δ), a curvature maximization by more still.
     wtol = eps(T)^(3//4) * gp.cscale[]
 
     # Cholesky pivot guard: a length-p accumulated dot product carries relative error O(p·eps), so the threshold scales with the problem size.
@@ -1586,7 +1623,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
 
         # Upper Cholesky L'L = GP[1:p, 1:p] + μ²I, with a conditioning guard on the pivots.
         # Left-looking column-oriented: column jcol is computed from GP[:, jcol] and the previous columns of L only,
-        # so recomputation can resume from the first column invalidated by an active-set change (μ is fixed for the duration of this call)
+        # so recomputation can resume from the first column invalidated by an active-set change, μ being fixed for the duration of this call
         jcol = lvalid + 1
         while jcol <= p
             if jcol + 1 <= p
@@ -1595,6 +1632,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
                     L[k, jcol] = GP[k, jcol]
                     L[k, jcol+1] = GP[k, jcol+1]
                 end
+
                 for k in 1:jcol-1
                     a = L[k, jcol]
                     b2 = L[k, jcol+1]
@@ -1607,10 +1645,12 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
                     L[k, jcol] = a * dk
                     L[k, jcol+1] = b2 * dk
                 end
+
                 s = GP[jcol, jcol] + μ²
                 @simd for k in 1:jcol-1
                     s = s - L[k, jcol] * L[k, jcol]
                 end
+
                 s <= ϵpiv * (GP[jcol, jcol] + μ²) && return T(NaN)
                 Ljj = sqrt(s)
                 L[jcol, jcol] = Ljj
@@ -1619,11 +1659,13 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
                 @simd for k2 in 1:jcol-1
                     s2 = s2 - L[k2, jcol] * L[k2, jcol+1]
                 end
+
                 L[jcol, jcol+1] = s2 * dinv[jcol]
                 s = GP[jcol+1, jcol+1] + μ²
                 @simd for k in 1:jcol
                     s = s - L[k, jcol+1] * L[k, jcol+1]
                 end
+
                 s <= ϵpiv * (GP[jcol+1, jcol+1] + μ²) && return T(NaN)
                 L[jcol+1, jcol+1] = sqrt(s)
                 dinv[jcol+1] = inv(L[jcol+1, jcol+1])
@@ -1636,10 +1678,12 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
                     end
                     L[k, jcol] = s2 * dinv[k]
                 end
+
                 s = GP[jcol, jcol] + μ²
                 @simd for k in 1:jcol-1
                     s = s - L[k, jcol] * L[k, jcol]
                 end
+
                 s <= ϵpiv * (GP[jcol, jcol] + μ²) && return T(NaN)
                 L[jcol, jcol] = sqrt(s)
                 dinv[jcol] = inv(L[jcol, jcol])
@@ -1656,6 +1700,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
             end
             xp[i] = s * dinv[i]
         end
+
         for i in p:-1:1
             s = xp[i]
             @simd for k in i+1:p
@@ -1693,6 +1738,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
             end
             tt += 2
         end
+
         if tt <= p
             xt = xp[tt]
             jt = P[tt]
@@ -1710,6 +1756,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
         @simd for jj in 1:n
             w[jj] = zero(T)
         end
+
         for jj in 1:n
             inP[jj] && continue
             s = zero(T)
@@ -1729,7 +1776,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
         end
 
         if jmax > 0
-            # Enter the worst violator plus up to 3 further strong violators in one batch (adds are cheap - a few Gram dots each - while every feasibility round costs a residual build and a dual GEMV; the feasibility drops above handle any overshoot)
+            # Enter the worst violator plus up to 3 further strong violators in one batch. An add costs a few Gram dots, whereas every feasibility round costs a residual build and a dual GEMV, and the feasibility drops above absorb any overshoot.
             p >= min(m, n) && return T(NaN) # cannot grow the active set further; fall back
             add_active!(gp, A, jmax)
             wthresh = max(wtol, T(0.2) * wmax)
@@ -1757,15 +1804,15 @@ end
 ####
 
 # Precomputed-Gram fast path for unregularized NNLS solves against a fixed set of bases.
-# The bases depend only on the grid parameters, never on the signal b, so the Gram matrices Gᵢ = AᵢᵀAᵢ are signal-independent and are supplied by the caller from shared read-only storage; this workspace holds only the mutable solve scratch.
-# Each evaluation costs one GEMV c = Aᵢᵀb plus an active-set iteration entirely in Gram space: a resumable p×p Cholesky of G_P, feasibility drops, and the KKT dual w = c − G[:, P]x_P at n·p flops - the m·n dual GEMV per round of the QR solver disappears.
+# The bases depend only on the grid parameters, never on the signal b, so the Gram matrices Gᵢ = AᵢᵀAᵢ come from shared read-only storage supplied by the caller and this workspace holds only the mutable solve scratch.
+# Each evaluation costs one GEMV c = Aᵢᵀb plus an active-set iteration entirely in Gram space: a resumable p×p Cholesky of G_P, feasibility drops, and the KKT dual w = c − G[:, P]x_P at n·p flops, replacing the m·n dual GEMV per round of the QR solver.
 # Unlike `NNLSGram` there is no μ² diagonal shift to condition the normal equations, so a tiny or non-positive Cholesky pivot, a full active set, or an exhausted iteration budget returns `false` and the caller falls back to the exact QR solver.
 struct NNLSGridGram{T}
     c::Vector{T}             # Aᵢᵀb for the current evaluation
     cscale::Base.RefValue{T} # maximum(abs, c); scale for the dual tolerance
     P::Vector{Int}           # active set (original column indices) in P[1:np]
     inP::Vector{Bool}        # membership mask of P[1:np]
-    rejected::Vector{Bool}   # candidates rejected during the current solve: numerically dependent on the active set (Schur complement d ≤ ϵ·Gⱼⱼ) or immediately infeasible after entry; mirrors the exact solver's `w[pos] = 0` candidate rejection and prevents add→drop cycling at the dual tolerance boundary
+    rejected::Vector{Bool}   # candidates rejected for the remainder of the current solve; see `solve!`
     np::Base.RefValue{Int}   # active-set size
     GP::Matrix{T}            # gathered active-set Gram block (both triangles)
     L::Matrix{T}             # upper Cholesky factor of GP
@@ -1875,10 +1922,10 @@ end
 
 # Solve min ||Ax - b||² s.t. x ≥ 0 on the cached Gram data of one grid point, warm-started from the current active set.
 # This is the Lawson-Hanson iteration in Gram (normal-equations) form, cf. FNNLS (Bro & de Jong 1997):
-#   - entering candidates pass a bordering pre-check: with L'L = G_P and u = L'⁻¹G_{P,j}, the Schur complement d = Gⱼⱼ − ‖u‖² must exceed ϵ·Gⱼⱼ (numerical independence; the proposed new coefficient is wⱼ/d > 0), and u then extends the Cholesky factor in place - no refactorization on adds;
+#   - entering candidates pass a bordering pre-check: with L'L = G_P and u = L'⁻¹G_{P,j}, the Schur complement d = Gⱼⱼ − ‖u‖² must exceed ϵ·Gⱼⱼ for numerical independence, the proposed new coefficient being wⱼ/d > 0. Accepting extends the Cholesky factor in place with u, so adds never refactorize;
 #   - infeasible solves run the classic secondary-loop interpolation toward the last feasible iterate, so the objective strictly decreases and add→drop cycling cannot occur;
-#   - candidates that fail the pre-check or come out infeasible immediately after entry are rejected for the remainder of the solve (their attainable improvement is at the dual tolerance level), mirroring the exact solver's `w[pos] = 0` handling.
-# Returns `true` with the solution in xp[1:np] on P[1:np], or `false` on a conditioning/iteration guard (caller falls back to the exact QR solver).
+#   - candidates that fail the pre-check or come out infeasible immediately after entry stay rejected for the remainder of the solve, their attainable improvement being at the dual tolerance level. This mirrors the exact solver's `w[pos] = 0` handling.
+# Returns `true` with the solution in xp[1:np] on P[1:np], or `false` when a conditioning or iteration guard trips, on which the caller falls back to the exact QR solver.
 function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
     (; c, P, inP, rejected, np, GP, L, dinv, xp, xcur, u, w) = gp
     n = size(G, 1)
@@ -2018,7 +2065,7 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
         feasible = true
         jentered = 0
 
-        # KKT dual w = c − G[:, P]x_P, two active columns per pass so each load of w feeds both (n·p flops on contiguous Gram columns)
+        # KKT dual w = c − G[:, P]x_P at n·p flops on contiguous Gram columns, two active columns per pass so each load of w feeds both
         @simd ivdep for j in 1:n
             w[j] = c[j]
         end
