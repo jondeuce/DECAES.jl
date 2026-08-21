@@ -19,7 +19,7 @@ end
 solve!(work::NNLSProblem, args...; kwargs...) = solve!(work, work.A, work.b, args...; kwargs...)
 # solve!(work::NNLSProblem, A::AbstractMatrix, b::AbstractVector, args...; kwargs...) = NNLS.nnls!(work.nnls_work, A, b, args...; kwargs...)
 
-# The nnls algorithm selects candidate x[j] based on the largest negative gradient of ||Ax - b||, i.e. j = argmax_j w[j] where w = -A'(Ax - b) is the dual vector.
+# The nnls algorithm selects candidate x[j] based on the largest negative gradient of ‖Ax - b‖, i.e. j = argmax_j w[j] where w = -A'(Ax - b) is the dual vector.
 # In DECAES, the initial dual vector w_0 = A'b is sorted because A[i, j], b[j] >= 0 and A[i, j+1] > A[i, j], and thus the last column of A will always be chosen first.
 # Thence j = n and we can bypass the first iteration and initialize the gradient with x_0 = [0; x[n]], where x[n] >= 0 due to the nonnegativity of A, b.
 #   NOTE: This will not fail even for generic A and b, it just forces NNLS to start with column j = n. From there, it may remove the column if necessary.
@@ -423,26 +423,26 @@ end
 
 @inline loss(work::NNLSTikhonovRegProblem) = NNLS.residualnorm(work.nnls_prob.nnls_work)^2
 
-regnorm(work::NNLSTikhonovRegProblem) = regparam(work)^2 * seminorm_sq(work) # μ²||x||²
-∇regnorm(work::NNLSTikhonovRegProblem) = 2 * regparam(work) * seminorm_sq(work) + regparam(work)^2 * ∇seminorm_sq(work) # d/dμ [μ²||x||²] = 2μ||x||² + μ² d/dμ [||x||²]
+regnorm(work::NNLSTikhonovRegProblem) = regparam(work)^2 * seminorm_sq(work) # μ²‖x‖²
+∇regnorm(work::NNLSTikhonovRegProblem) = 2 * regparam(work) * seminorm_sq(work) + regparam(work)^2 * ∇seminorm_sq(work) # d/dμ [μ²‖x‖²] = 2μ‖x‖² + μ² d/dμ [‖x‖²]
 
-resnorm(work::NNLSTikhonovRegProblem) = √(resnorm_sq(work)) # ||Ax-b||
-resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - regnorm(work), 0) # ||Ax-b||²
-∇resnorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = 4 * ∇.μ^3 * ∇.xᵀB⁻¹x # d/dμ [||Ax-b||²]
-∇²resnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 12 * ∇².μ^2 * ∇².xᵀB⁻¹x - 24 * ∇².μ^4 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [||Ax-b||²]
+resnorm(work::NNLSTikhonovRegProblem) = √(resnorm_sq(work)) # ‖Ax-b‖
+resnorm_sq(work::NNLSTikhonovRegProblem) = max(loss(work) - regnorm(work), 0) # ‖Ax-b‖²
+∇resnorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = 4 * ∇.μ^3 * ∇.xᵀB⁻¹x # d/dμ [‖Ax-b‖²]
+∇²resnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 12 * ∇².μ^2 * ∇².xᵀB⁻¹x - 24 * ∇².μ^4 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [‖Ax-b‖²]
 
-seminorm(work::NNLSTikhonovRegProblem) = √(seminorm_sq(work)) # ||x||
-seminorm_sq(work::NNLSTikhonovRegProblem) = sum(abs2, NNLS.positive_solution(work.nnls_prob.nnls_work)) # ||x||²
-∇seminorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = -4 * ∇.μ * ∇.xᵀB⁻¹x # d/dμ [||x||²]
-∇²seminorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = -4 * ∇².xᵀB⁻¹x + 24 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [||x||²]
+seminorm(work::NNLSTikhonovRegProblem) = √(seminorm_sq(work)) # ‖x‖
+seminorm_sq(work::NNLSTikhonovRegProblem) = sum(abs2, NNLS.positive_solution(work.nnls_prob.nnls_work)) # ‖x‖²
+∇seminorm_sq(work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = -4 * ∇.μ * ∇.xᵀB⁻¹x # d/dμ [‖x‖²]
+∇²seminorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = -4 * ∇².xᵀB⁻¹x + 24 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x # d²/dμ² [‖x‖²]
 
-solution_gradnorm(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = √(solution_gradnorm_sq(work, ∇²)) # ||dx/dμ|| = ||-2μ * B⁻¹x|| = 2μ * ||B⁻¹x||
-solution_gradnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 4 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x # ||dx/dμ||² = ||-2μ * B⁻¹x||² = 4μ² * xᵀB⁻ᵀB⁻¹x
+solution_gradnorm(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = √(solution_gradnorm_sq(work, ∇²)) # ‖dx/dμ‖ = ‖-2μ * B⁻¹x‖ = 2μ * ‖B⁻¹x‖
+solution_gradnorm_sq(work::NNLSTikhonovRegProblem, ∇² = hessian_temps(work)) = 4 * ∇².μ^2 * ∇².xᵀB⁻ᵀB⁻¹x # ‖dx/dμ‖² = ‖-2μ * B⁻¹x‖² = 4μ² * xᵀB⁻ᵀB⁻¹x
 
-# L-curve: (ξ(μ), η(μ)) = (||Ax-b||^2, ||x||^2)
+# L-curve: (ξ(μ), η(μ)) = (‖Ax-b‖^2, ‖x‖^2)
 curvature(::typeof(identity), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = inv(2 * ∇.xᵀB⁻¹x * √(1 + ∇.μ^4)^3)
 
-# L-curve: (ξ̄(μ), η̄(μ)) = (log||Ax-b||^2, log||x||^2)
+# L-curve: (ξ̄(μ), η̄(μ)) = (log‖Ax-b‖^2, log‖x‖^2)
 curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work)) = lcurve_geometry(resnorm_sq(work), seminorm_sq(work), ∇.xᵀB⁻¹x, ∇.μ)[1]
 
 # Curvature κ and turning rate ω = θ̇ of the log-log L-curve P(t) = (log ξ², log η²) at t = log μ, from ξ² = ‖Ax-b‖², η² = ‖x‖², q = xᵀB⁻¹x.
@@ -469,7 +469,7 @@ function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
 
         μ = regparam(work)
         NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
-        xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
+        xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ‖U'\x‖^2
 
         return (; μ, xᵀB⁻¹x)
     end
@@ -484,10 +484,10 @@ function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
 
         μ = regparam(work)
         NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
-        xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ||U'\x||^2
+        xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ‖U'\x‖^2
 
         NNLS.solve_triangular_system!(tmp, B, Val(false)) # tmp = U\(U'\x) = (U'U)\x
-        xᵀB⁻ᵀB⁻¹x = sum(abs2, tmp) # x'B'\B\x = ||B\x||^2 = ||(U'U)\x||^2
+        xᵀB⁻ᵀB⁻¹x = sum(abs2, tmp) # x'B'\B\x = ‖B\x‖^2 = ‖(U'U)\x‖^2
 
         return (; μ, xᵀB⁻¹x, xᵀB⁻ᵀB⁻¹x)
     end
@@ -582,7 +582,7 @@ function nnls_gram_setup!(work)
     return nnls_gram
 end
 
-# Evaluate (‖Ax(μ)-b‖², ‖x(μ)‖²) on the Gram fast path, warm-chained across μ, falling back to the exact QR solver when a conditioning or iteration guard trips.
+# Evaluate (‖Ax(μ)-b‖², ‖x(μ)‖²) on the Gram fast path, warm-chained across μ, falling back to the QR solver when a conditioning or iteration guard trips.
 # The gcv and lcurve searches evaluate through this, then recompute the selected μ with `nnls_gram_polish_solve!`.
 function nnls_gram_losses!(work, μ::T) where {T}
     (; nnls_gram) = work
@@ -597,7 +597,7 @@ function nnls_gram_losses!(work, μ::T) where {T}
     return res², NNLS.seminorm_sq(nnls_gram)
 end
 
-# Exact final solve at the selected μ, seeded from the Gram path's active set and written to a fresh μ-cache slot so that `solution(work)` finds it.
+# Final solve via QR at the selected μ, seeded from the Gram path's active set and written to a fresh μ-cache slot so that `solution(work)` finds it.
 function nnls_gram_polish_solve!(work, μ::T) where {T}
     (; nnls_gram) = work
     cache = work.nnls_prob_smooth_cache
@@ -728,7 +728,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
         end
 
     elseif method === :brent
-        # Search evaluations use the exact QR solver through the μ-cache, the same evaluation path as the reference implementation, so the selected μ tracks it to solver roundoff. Warm-starting across μ perturbs that roundoff but not the active set.
+        # Search evaluations use the QR solver via the μ-cache, the same evaluation path as the reference implementation, so the selected μ tracks it to solver roundoff. Warm-starting across μ perturbs that roundoff but not the active set.
         function f_brent(logμ)
             solve!(work.nnls_prob_smooth_cache, exp(logμ))
             return chi2_relerr!(work.nnls_prob_smooth_cache[], res²_target, logμ)
@@ -908,7 +908,7 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
 
     res²_max = sum(abs2, work.nnls_prob.b)
     if δ >= √res²_max
-        # Limit as δ -> ||b|| from below is the infinitely regularized solution, i.e. x = 0, since ||A * x(μ -> +∞) - b|| -> ||b||.
+        # Limit as δ -> ‖b‖ from below is the infinitely regularized solution, i.e. x = 0, since ‖A * x(μ -> +∞) - b‖ -> ‖b‖.
         x_final = work.nnls_prob_smooth_cache[].buffers.null_soln # zero solution
         return (; x = x_final, mu = T(Inf), chi2 = res²_max / res²_min)
     end
@@ -1015,17 +1015,17 @@ lsqnonneg_lcurve_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = not
 function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; max_slope = LCURVE_SLOPE_MAX_DEFAULT, kwargs...) where {T}
     reset_cache!(work.nnls_prob_smooth_cache)
 
-    # Search points come from the Gram fast path, which also supplies κ, ω and the active set; the selected μ is recomputed exactly by `nnls_gram_polish_solve!`.
+    # Search points come from the Gram fast path, which also supplies κ, ω and the active set; the selected μ is recomputed via QR by `nnls_gram_polish_solve!`.
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
     nnls_gram_setup!(work)
 
-    # A point on the L-curve is given by (ξ(μ), η(μ)) = (log||Ax-b||^2, log||x||^2)
+    # A point on the L-curve is given by (ξ(μ), η(μ)) = (log‖Ax-b‖^2, log‖x‖^2)
     # Note: squaring the norms is convenient for computing gradients of (ξ(μ), η(μ)); this scales the L-curve, but does not change μ* = argmax κ(ξ(μ), η(μ)).
     ξ²₀, η²₀, b² = resnorm_sq(work.nnls_prob), seminorm_sq(work.nnls_prob), sum(abs2, work.b)
 
     # A zero solution puts log η² at -∞ and reduces the curve to a single point; a fit exact to working precision puts log ξ² there and leaves only roundoff to read curvature from.
     # Exactness is judged as ‖Ax₀ - b‖ ≤ ε‖b‖: declining to regularize is a convention, applied only where the residual has reached the level of the arithmetic.
-    (ξ²₀ <= eps(T)^2 * b² || η²₀ <= 0) && return (; x = solution(work.nnls_prob), mu = zero(T), chi2 = one(T))
+    (ξ²₀ <= eps(T) * b² || η²₀ <= 0) && return (; x = solution(work.nnls_prob), mu = zero(T), chi2 = one(T))
 
     # Seed at the balance point ξ²₀ = μ²η²₀ from the unregularized solution.
     f = LCurveCornerCachedFunction(CachedFunction(logμ -> lcurve_point(work, exp(logμ)), empty!(work.lcurve_point_cache)), empty!(work.lcurve_state_stack))
@@ -1061,7 +1061,7 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; max_slope = LCURVE_SLO
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
 end
 
-# The L-curve at μ: the log-log point, its exact κ and ω, and a digest of the active set.
+# The L-curve at μ: the log-log point, its analytic κ and ω, and a digest of the active set.
 function lcurve_point(work::NNLSLCurveRegProblem{T}, μ::T) where {T}
     (; nnls_gram) = work
     ξ² = NNLS.solve!(nnls_gram, work.A, work.b, μ)
@@ -1079,9 +1079,9 @@ function lcurve_point(work::NNLSLCurveRegProblem{T}, μ::T) where {T}
 end
 
 struct LCurveCornerPoint{T}
-    P::SVector{2, T} # log-log L-curve point (log||Ax-b||², log||x||²)
-    κ::T # exact signed curvature of the log-log curve; see `lcurve_geometry`
-    ω::T # exact angular velocity dθ/dt of the tangent, t = logμ
+    P::SVector{2, T} # log-log L-curve point (log‖Ax-b‖², log‖x‖²)
+    κ::T # analytic signed curvature of the log-log curve; see `lcurve_geometry`
+    ω::T # analytic angular velocity dθ/dt of the tangent, t = logμ
     sig::UInt128 # digest of the active set; see `NNLS.active_signature`
 end
 
@@ -1107,12 +1107,12 @@ Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.state_stack)
 Locate a corner of the L-curve, following Cultrera and Callegaro (2020)[1] with a dynamically bracketed search.
 
 `f(t)` returns the L-curve point at ``t = \log\mu`` with its curvature, angular velocity, and active-set digest; `P₀` and `sig₀` correspond to the unregularized solution at which the curve terminates.
-Returns ``\log\mu`` at a corner, or `NaN` if none is found. A returned corner has positive curvature, satisfies the slope guard, and exceeds the curvature at the neighbouring points the search evaluated on either side of it.
+Returns ``\log\mu`` at a corner, or `NaN` if none is found. A returned corner has positive curvature, is a local maximum, and satisfies the `max_slope` guard.
 
 # Keyword arguments
 
   - `init_width`: width in ``\log\mu`` of the initial bracket, and the scale at which the first corner is sought.
-  - `xtol`, `Ptol`: absolute tolerances on ``\log\mu`` and on arc length of the log-log curve; contraction stops when either is met.
+  - `xtol`, `Ptol`: absolute tolerances on ``\log\mu`` and on the chord between log-log curve evaluation points.
   - `max_expand`, `max_backtrack`, `nsweep`, `max_candidates`: search budgets.
   - `max_slope`: reject corners whose log-log tangent slope exceeds this.
   - `bounds`: interval of ``\log\mu`` to search within.
@@ -1136,7 +1136,7 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, t₀::T, P₀::SVector{
     x⃗ = SA[tₛ-Δ/φ^2, tₛ, tₛ+Δ/φ^3, tₛ+Δ/φ]
     init = golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], SA[T(Inf), T(Inf)])
 
-    # A reversal brackets a curvature basin at the Menger scale, but only proposes it: the exact κ may have no maximum inside it and genuine maxima outside.
+    # A reversal brackets a curvature basin at the Menger scale, but only proposes it: the analytic κ may have no maximum inside it and genuine maxima outside.
     # Contraction and backtracking both stay within the candidate, so a failed certification resumes expanding outward; otherwise the search could never leave a basin it had entered.
     best = init
     for left in (contract_left(init), !contract_left(init))
@@ -1263,7 +1263,7 @@ function expand_to_reversal(f::LCurveCornerCachedFunction{T}, state::LCurveCorne
     return (false, state, state, best, budget)
 end
 
-# Contract the bracket until a point certifies as a local maximum of the exact curvature, returning NaN if none does.
+# Contract the bracket until a point certifies as a local maximum of the analytic curvature, returning NaN if none does.
 function lcurve_localize!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}; xtol::T, Ptol::T, max_log_slope::T) where {T}
     while true
         (; x⃗, p⃗) = state
@@ -1299,7 +1299,7 @@ is_admissible(p::LCurveCornerPoint{T}, x::T, max_log_slope::T) where {T} = p.κ 
 # Contract toward the higher state-local curvature. A negative right-hand curvature places the corner to the left regardless, which is the positive-curvature safeguard of Cultrera-Callegaro; exact equality resolves right.
 contract_left(state::LCurveCornerState) = state.C[2] < 0 || state.C[1] > state.C[2]
 
-# Whether all four abscissas returned the same active set, which gates the exact-curvature maximization.
+# Whether all four abscissas returned the same active set, which gates the analytic-curvature maximization.
 is_equal_signature(state::LCurveCornerState) = state.p⃗[1].sig == state.p⃗[2].sig == state.p⃗[3].sig == state.p⃗[4].sig
 
 # Contraction stops when the abscissas span less than `xtol` or the endpoints span less than `Ptol` of L-curve arc. The two are not comparable: `xtol` resolves the abscissa, `Ptol` the solution.
@@ -1315,7 +1315,7 @@ is_saturated(p::LCurveCornerPoint{T}, P₀::SVector{2, T}, sig₀::UInt128) wher
 isfinite_else(x::T, y::T) where {T} = isfinite(x) ? x : y
 
 # Ranking of the states visited during expansion, consulted only when both directions reach an endpoint without ever reversing.
-# ω leads rather than κ: the two share a sign, but ω weights curvature by arc length, and vanishing arc length is what marks the μ → 0 tail. Ties fall to the higher state-local curvature, then to the tighter state.
+# ω leads rather than κ: the two share a sign, but ω weights curvature by the speed |dP/dt|, and vanishing speed is what marks the μ → 0 tail. Ties fall to the higher state-local curvature, then to the tighter state.
 rank(state::LCurveCornerState{T}) where {T} = (max(zero(T), isfinite_else(state.p⃗[2].ω, zero(T)), isfinite_else(state.p⃗[3].ω, zero(T))), max(isfinite_else(state.C[1], typemin(T)), isfinite_else(state.C[2], typemin(T))), state.x⃗[1] - state.x⃗[4])
 
 golden_state(x⃗::SVector{4, T}, p⃗::SVector{4, LCurveCornerPoint{T}}, κ⃗ₒ::SVector{2, T}) where {T} = LCurveCornerState(x⃗, p⃗, SA[state_curvature(p⃗[1], p⃗[2], p⃗[3]), state_curvature(p⃗[2], p⃗[3], p⃗[4])], κ⃗ₒ)
@@ -1677,34 +1677,50 @@ lsqnonneg_gcv_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothin
 # Off by default: the exact per-voxel spectrum costs one SVD, and the interpolant's error grows as μ → 0, where dof stiffens in α.
 const GCV_INTERP_DOF = Ref(false)
 
-function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0, bounds = (-8.0, 2.0), rtol = 0.0, atol = 1e-4, maxiters = 20) where {T}
+function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, rtol = 0.0, atol = 1e-4, maxiters = 20) where {T}
     # Find μ by minimizing the function G(μ) (GCV method)
-    @assert bounds[1] < init < bounds[2] "Initial value must be within bounds"
-    logμ₋, logμ₊ = T.(bounds)
-    logμ₀ = T(init)
-
     # Precompute the squared singular values, which are all that dof(μ) needs. The opt-in alternative instead interpolates dof across the α-grid slices at each evaluation; see `gcv_dof_interp`.
     dof_interpolator = work.dof_interpolator
     use_dof_interp = dof_interpolator !== nothing && GCV_INTERP_DOF[] && method === :brent
     use_dof_interp || eigvals!(work)
+    𝒟(μ) = use_dof_interp ? gcv_dof_interp(dof_interpolator[1], dof_interpolator[2][], work.m, work.n, μ) : gcv_dof(work.m, work.n, work.γ², μ)
 
-    # `:brent`, the default, evaluates 𝒢(μ) = ‖Ax(μ)-b‖² / dof(μ)² on the Gram fast path. Only the residual needs an NNLS solve, dof being cheap in μ once the singular values are known.
-    # The gradient-based methods keep the exact μ-cache solves, since ∇resnorm_sq needs the QR triangular factor, roughly doubling the cost per evaluation.
-    # Curvature would not repay that either, as 𝒢 is C¹ but not C²: d‖x‖²/dμ = 2Σⱼ xⱼx'ⱼ survives a passive-set change because the component entering or leaving does so at xⱼ = 0, whereas d²‖x‖²/dμ² carries (x'ⱼ)² and jumps.
-    # The final solution is always recomputed via QR.
+    # `:brent`, the default, evaluates 𝒢(μ) = ‖Ax(μ)-b‖² / dof(μ)² on the Gram fast path. Only the residual needs an NNLS solve; dof is a cheap function of μ once the singular values are known.
+    # The final solution is always recomputed via QR for accuracy.
     use_gram = method === :brent
     reset_cache!(work.nnls_prob_smooth_cache)
-    if use_gram
-        solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # unregularized solution seeds the Gram fast path
-        nnls_gram_setup!(work)
+    solve_unreg!(work.nnls_prob, work.nnls_prob_seed) # the unregularized solution anchors the search interval and seeds the Gram fast path
+    nnls_gram_setup!(work) # also loads Aᵀb, which the search interval needs
+
+    b², R₀, N₀ = sum(abs2, work.b), resnorm_sq(work.nnls_prob), seminorm_sq(work.nnls_prob)
+    r₀ = NNLS.residual(work.nnls_prob.nnls_work)
+    Ax₀² = sum(i -> abs2(work.b[i] - r₀[i]), eachindex(work.b))
+    d = max(work.m - work.n, 0) # dof(0⁺), the limit `gcv_dof` takes as μ → 0
+
+    # x₀ = 0 forces x_μ = 0 for every μ since ‖x_μ‖ is nonincreasing.
+    N₀ <= 0 && return (; x = solution(work.nnls_prob), mu = zero(T), chi2 = one(T))
+
+    # On a fit exact to working precision 𝒢 = R₀/dof² has approximately zero numerator, and its infimum R₀/d² = 0 is attained at μ = 0 whenever d > 0.
+    # For d = 0 this is not necessarily the case: dof vanishes at μ = 0, too, and thus 𝒢 tends to a finite plateau, and the infimum can sit at μ = ∞.
+    R₀ <= eps(T) * b² && d > 0 && return (; x = solution(work.nnls_prob), mu = zero(T), chi2 = one(T))
+
+    c₊ = sqrt(sum(cⱼ -> max(cⱼ, zero(T))^2, work.nnls_gram.c))
+    logμ₋, logμ₊ = gcv_bracket(𝒟, work.m, d, b², R₀, N₀, Ax₀², c₊, (log(R₀) - log(N₀)) / 2)
+
+    if isnan(logμ₋)
+        # If the bracket is not certified, anchor on the envelope balance point ‖Ax₀‖² = μ²N₀, which remains finite if R₀ vanishes.
+        t₀ = (log(Ax₀²) - log(N₀)) / 2
+        logμ₀, (logμ₋, logμ₊) = t₀, (t₀ - 5, t₀ + 5)
+    else
+        logμ₀ = (logμ₋ + logμ₊) / 2
     end
+
     # 𝒢 needs no guard: it is strictly positive for μ > 0 and b ≠ 0, since KKT complementarity gives xᵀd = 0, hence (Ax)ᵀr = μ²‖x‖², and with Ax = b − r this reads bᵀr = res² + μ²‖x‖², so res² = 0 would force x = 0 and then b = 0.
     function 𝒢(logμ)
         use_gram || return gcv!(work, logμ)
         μ = exp(logμ)
         res², _ = nnls_gram_losses!(work, μ)
-        dof = use_dof_interp ? gcv_dof_interp(dof_interpolator[1], dof_interpolator[2][], work.m, work.n, μ) : gcv_dof(work.m, work.n, work.γ², μ)
-        return res² / dof^2
+        return res² / 𝒟(μ)^2
     end
     𝒢_and_∇𝒢(logμ) = gcv_and_dgcv_dlogμ!(work, logμ)
 
@@ -1746,13 +1762,44 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, init = -4.0
         error("Unknown minimization method: $method")
     end
 
-    # Return the final regularized solution, recomputed exactly. The Gram path already ran the unregularized solve above to seed itself.
+    # Return the final regularized solution, (re)computed via QR
     mu_final = exp(logmu_final)
     x_final = use_gram ? nnls_gram_polish_solve!(work, mu_final) : solve!(work.nnls_prob_smooth_cache, mu_final)
-    use_gram || solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
 
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
+end
+
+# Search interval for the GCV minimizer, certified against a bound U ≥ inf 𝒢 that costs no NNLS solve. Returns NaN endpoints where no such certificate exists.
+# The feasible ray s·x₀ supplies U: complementarity gives ‖A(s·x₀) - b‖² = R₀ + (1-s)²‖Ax₀‖², so minimizing that plus μ²s²N₀ over s bounds 𝒢 above by Φ.
+# Below, R ≥ R₀ forces dof(μ) ≥ √(R₀/U) at every minimizer, which bounds μ since dof increases from d to m.
+# Above, KKT gives (Aᵀb)ᵀx_μ = ‖Ax_μ‖² + μ²‖x_μ‖², which with (Aᵀb)ᵀx_μ ≤ ‖(Aᵀb)₊‖·‖x_μ‖ yields ‖Ax_μ‖ ≤ ‖(Aᵀb)₊‖/2μ and ‖x_μ‖ ≤ ‖(Aᵀb)₊‖/μ².
+# Either R ≥ (‖b‖ - ‖Ax_μ‖)₊² or R ≥ ‖b‖² - 2‖(Aᵀb)₊‖²/μ², against dof ≤ m, then bounds μ from above.
+# Both endpoints scale like A, so the interval translates rigidly by log s under A → s·A.
+function gcv_bracket(𝒟, m::Int, d::Int, b²::T, R₀::T, N₀::T, Ax₀²::T, c₊::T, t_bal::T) where {T}
+    # Φ ≥ 𝒢 pointwise, so every value of Φ is admissible as U; the smallest U certifies the tightest interval.
+    # Φ inherits 𝒢's own endpoint limits, Φ(0⁺) = R₀/d² and Φ(∞) = ‖b‖²/m², since ‖Ax₀‖² = ‖b‖² - R₀ by complementarity; Φ dips below them iff a certificate exists.
+    function Φ(t)
+        μ = exp(t)
+        ρN₀ = μ^2 * N₀
+        return (R₀ + Ax₀² * ρN₀ / (Ax₀² + ρN₀)) / 𝒟(μ)^2
+    end
+    tΦ₁, tΦ₂ = bracket_minimum(Φ, t_bal, one(T); dilate = T(1.5), maxiters = 12)
+    isnan(tΦ₁) && return (T(NaN), T(NaN)) # Φ descends without turning, so its infimum is one of the endpoint limits and nothing interior is certified
+    _, U = brent_minimize(Φ, tΦ₁, tΦ₂; xatol = T(1e-2), xrtol = zero(T)) # Φ is smooth at its minimum, so the error in U falls off as the square of the resolution in the argmin
+
+    # A finite minimizer exists only where U undercuts both endpoint limits, 𝒢(0⁺) = R₀/d² and 𝒢(∞) = ‖b‖²/m².
+    # Writing the left condition through dof rather than through R₀/d² covers d = 0, where A has full row rank and dof(0⁺) vanishes.
+    𝒟min = sqrt(R₀ / U)
+    (d < 𝒟min < m && m^2 * U < b²) || return (T(NaN), T(NaN))
+
+    Δ𝒟(t) = 𝒟(exp(t)) - 𝒟min
+    t₁, t₂, Δ₁, Δ₂ = bracket_root_monotonic(Δ𝒟, t_bal, one(T); dilate = T(1.5), mono = +1, maxiters = 12)
+    Δ₁ * Δ₂ > 0 && return (T(NaN), T(NaN)) # dof never reaches √(R₀/U), so A is more rank deficient than d = max(m - n, 0) assumes
+    _, _, (t₋, _), _ = bisect_root(Δ𝒟, t₁, t₂, Δ₁, Δ₂; xatol = T(1e-3), maxiters = 100) # the lower end of the final bracket keeps dof ≤ √(R₀/U), so it remains a valid bound
+
+    t₊ = log(c₊ * min(sqrt(2 / (b² - m^2 * U)), inv(2 * (sqrt(b²) - m * sqrt(U)))))
+    return t₋ < t₊ ? (t₋, t₊) : (T(NaN), T(NaN))
 end
 
 # Implements equation (32) from:
@@ -1772,7 +1819,7 @@ function gcv!(work::NNLSGCVRegProblem, logμ)
     cache = work.nnls_prob_smooth_cache[]
 
     # Compute GCV
-    res² = resnorm_sq(cache) # squared residual norm ||A * x(μ) - b||^2
+    res² = resnorm_sq(cache) # squared residual norm ‖A * x(μ) - b‖^2
     dof = gcv_dof(m, n, γ², μ) # degrees of freedom
     gcv = res² / dof^2
 
@@ -1790,7 +1837,7 @@ function gcv_and_dgcv_dlogμ!(work::NNLSGCVRegProblem, logμ)
     cache = work.nnls_prob_smooth_cache[]
 
     # Compute primal
-    res² = resnorm_sq(cache) # squared residual norm ||A * x(μ) - b||^2
+    res² = resnorm_sq(cache) # squared residual norm ‖A * x(μ) - b‖^2
     dof = gcv_dof(m, n, γ², μ) # degrees of freedom
     gcv = res² / dof^2
 

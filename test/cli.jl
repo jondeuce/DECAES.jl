@@ -339,8 +339,10 @@ function run_cli_tests()
             # `dist`, the moments computed from it, and `fnr` inherit that nonuniqueness, so their comparison is skipped. `fnr` divides `gdn` = Σⱼxⱼ by the residual.
             # `snr` is unique, the fitted vector Ax being the projection of b onto the convex cone AR₊ⁿ, but it divides by a residual an interpolating basis pins at the roundoff floor, leaving a ratio of order 1/eps, so its comparison is skipped too.
             # The flip angle, the bases, the times and the residual norm are unique and well scaled, and are compared.
-            nonunique = B1_passed && paramdict[:Reg] == "lcurve" && paramdict[:nTE] < paramdict[:nT2]
-            cli_rtol = !B1_passed ? 1e-14 : paramdict[:nTE] < paramdict[:nT2] && paramdict[:Reg] == "gcv" ? 1e-3 : 1e-8
+            # Both exemptions are keyed to a basis that actually interpolates, witnessed by `snr` = max(signal)/std(residual) reaching the roundoff floor's order 1/eps, rather than to nTE < nT2, which permits interpolation without implying it.
+            interpolating = any(>(inv(√eps(Float64))), t2map["snr"])
+            nonunique = B1_passed && paramdict[:Reg] == "lcurve" && interpolating
+            cli_rtol = !B1_passed ? 1e-14 : paramdict[:Reg] == "gcv" && interpolating ? 1e-3 : 1e-8
             t2map_passed = test_compare_t2map(t2map, t2dist, t2maps_cli, t2dist_cli; rtol = cli_rtol, skip = nonunique ? ("dist", "gdn", "ggm", "gva", "fnr", "snr") : ())
             t2part_passed = nonunique || test_compare_t2part(t2part, t2parts_cli; rtol = cli_rtol)
             if !(t2map_passed && t2part_passed)

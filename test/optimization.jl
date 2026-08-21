@@ -43,6 +43,30 @@ end
     @test abs(x - π) <= 1e-7 * π
 end
 
+@testset "bracket_minimum" begin
+    f = abs2 ∘ sin
+
+    # A minimum already straddled by the first three points is returned without stepping
+    @test DECAES.bracket_minimum(f, 3.1, 0.5) == (2.6, 3.6)
+
+    # Otherwise the walk descends in whichever direction is downhill, from either side, and dilation only lengthens its reach
+    for dilate in (1.0, 1.5, 2.0), a in (-1.0, 0.7, 6.0, 9.0)
+        x₁, x₂ = DECAES.bracket_minimum(f, a, 0.1; dilate)
+        x, _ = DECAES.brent_minimize(f, x₁, x₂; xatol = 1e-8, xrtol = 0.0)
+        @test x₁ < x < x₂
+        @test f(x) <= 1e-14
+    end
+
+    # A function that descends without turning has no bracket, and the walk gives up rather than running away
+    @test all(isnan, DECAES.bracket_minimum(exp, 0.0, 1.0; dilate = 1.5, maxiters = 12))
+    @test all(isnan, DECAES.bracket_minimum(x -> -atan(x), 0.0, 1.0; dilate = 2.0, maxiters = 20))
+
+    # A minimum further out than `maxiters` steps of dilation will be missed
+    g = x -> abs2(x - 1e6)
+    @test all(isnan, DECAES.bracket_minimum(g, 0.0, 1.0; dilate = 1.5, maxiters = 12))
+    @test !any(isnan, DECAES.bracket_minimum(g, 0.0, 1.0; dilate = 1.5, maxiters = 40))
+end
+
 @testset "brent_newton_minimize" begin
     f_df = sincos
     x, fx = DECAES.brent_newton_minimize(f_df, 4.0, 5.8, 5.1; xatol = 1e-6, xrtol = 0.0)
@@ -86,4 +110,21 @@ end
     @test lo <= x <= hi
     @test hi - lo <= 4e-6
     @test x ≈ 0.3 atol = 1e-5
+
+    # The returned value belongs to the returned point, whether the solver stopped on the value, on the step size, or on the iteration cap
+    f_df = sincos
+    for maxiters in (1, 2, 4, 100), (x0, a, b) in ((3.7, 3.0, 4.5), (2.7, 2.0, 3.5))
+        x, y = DECAES.newton_bisect_root(f_df, x0, a, b; xatol = 1e-6, xrtol = 0.0, ftol = 0.0, maxiters)
+        @test y == f_df(x)[1]
+    end
+
+    for (a, b) in ((0.0, 2.0), (2.0, 0.0))
+        x, y = DECAES.bisect_root(f, a, b, f(a), f(b); xatol = 1e-8)
+        @test y == f(x)
+        x, y = DECAES.brent_root(f, a, b; xatol = 1e-10)
+        @test y == f(x)
+    end
+
+    x, y = DECAES.brent_minimize(g, -1.0, 1.0; xatol = 1e-6, xrtol = 0.0, maxiters = 100)
+    @test y == g(x)
 end

@@ -139,7 +139,6 @@ function newton_bisect_root(f_∂f, x0::T, x1::T, x2::T, y1::T = f_∂f(x1)[1], 
     (y1 > 0) && ((x1, x2, y1, y2) = (x2, x1, y2, y1))
 
     # Initialize the estimate for the root
-    y = T(NaN)
     x = x_old = x0
     Δx = Δx_old = x2 - x1
 
@@ -171,7 +170,8 @@ function newton_bisect_root(f_∂f, x0::T, x1::T, x2::T, y1::T = f_∂f(x1)[1], 
         min(abs(Δx), abs(x - x_old)) <= Δx_tol && break
     end
 
-    return (x, y, minmax(x1, x2))
+    # Both exits from the loop advance x past the last evaluation; recompute f(x) at the returned point
+    return (x, f_∂f(x)[1], minmax(x1, x2))
 end
 
 #### Root-finding helper functions
@@ -218,6 +218,27 @@ function bracket_root_monotonic(f, a::T, δ::T; dilate = 1, mono = +1, maxiters:
         cnt += 1
     end
     return a < b ? (a, b, fa, fb) : (b, a, fb, fa)
+end
+
+function bracket_minimum(f, a::T, δ::T; dilate = 1, maxiters::Int = 100) where {T <: AbstractFloat}
+    # Find bracketing interval for a local minimum of `f`. Begin at point `a`, step by `δ` in whichever of the two directions descends, and continue until `f` turns back up.
+    # The step size is multiplied by `dilate` after each step. A NaN interval is returned if `f` descends for `maxiters` steps without turning.
+    @assert δ > 0 "Initial step size must be positive"
+    @assert dilate >= 1 "Dilation factor must be at least 1"
+    y₋, y₀, y₊ = f(a - δ), f(a), f(a + δ)
+    y₀ <= y₋ && y₀ <= y₊ && return (a - δ, a + δ)
+    sgn_δ, y₂ = y₋ < y₊ ? (-one(T), y₋) : (one(T), y₊)
+    x₁, x₂ = a, a + sgn_δ * δ
+
+    for _ in 1:maxiters
+        δ *= T(dilate)
+        x₃ = x₂ + sgn_δ * δ
+        y₃ = f(x₃)
+        y₃ >= y₂ && return minmax(x₁, x₃)
+        x₁, x₂, y₂ = x₂, x₃, y₃
+    end
+
+    return (T(NaN), T(NaN))
 end
 
 function bracket_local_minimum(f, ∂f_∂²f, x1::T, x2::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxdepth::Int = 5) where {T <: AbstractFloat}

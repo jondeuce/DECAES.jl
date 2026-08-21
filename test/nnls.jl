@@ -443,6 +443,7 @@ end
 
 # Mock L-curve (ξ(t), η(t)) = (e^t, e^{-t}), whose exact geometry is v² = e^{2t} + e^{-2t}, κ = 2/v³ and ω = κv = 2/v².
 # The active-set signature is constant, so the search sees one analytic branch, and `sig₀` below is chosen distinct from it so the unregularized endpoint is never reached.
+# This is an arbitrary planar curve, not a Tikhonov path, so `tangent_angle` does not read its tangent; it exercises the golden-state mechanics only. See `build_tikhonov_corner_cached_fun` for the rotation-based sweep.
 function build_lcurve_corner_cached_fun(::Type{T} = Float64) where {T}
     function mock_lcurve_point(t)
         v² = exp(2t) + exp(-2t)
@@ -786,48 +787,73 @@ end
 
 # The sweep ranks brackets by tangent rotation, which is exact only because the tangent direction is continuous across an active-set transition while κ is not.
 # dη²/dρ = -2q and dξ²/dρ = 2ρq share the factor q, which jumps, so dP/dρ is discontinuous while the direction (ρη², -ξ²) is not. Hence θ is continuous and θᵢ₊₁ - θᵢ is the exact net signed rotation of an interval, whatever transitions it contains.
+# The transition is placed exactly rather than searched for: a support mask need not vary monotonically in μ, so bisecting the predicate sig(t) == sig(t₋) is not guaranteed to isolate one.
+# With AᵀA = [1 1/2; 1/2 1] and Aᵀb = [1, 2/5], the support {1} carries x = (4/5, 0) with the second component's dual 2/5 - (1/2)(4/5) reaching zero at ρ = 1/4, where it enters at x₂ = 0.
+# x is unchanged there, so ξ² and η² are continuous, while q = x_PᵀB_P⁻¹x_P jumps from (4/5)²/(5/4) = 0.512 to (4/5)²(5/4)/((5/4)² - (1/2)²) ≈ 0.6095.
 @testset "L-curve tangent is continuous where curvature is not" begin
-    A, b = rand(24, 30), abs.(randn(24))
+    A = [1.0 0.5; 0.0 sqrt(0.75)] # AᵀA = [1 1/2; 1/2 1]
+    b = A' \ [1.0, 0.4]
     work = DECAES.lsqnonneg_lcurve_work(A, b)
     DECAES.reset_cache!(work.nnls_prob_smooth_cache)
     DECAES.solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
-    p(t) = (DECAES.nnls_gram_setup!(work); DECAES.lcurve_point(work, exp(t)))
-    ts = range(-6.0, 2.0; length = 200)
-    k = findfirst(i -> p(ts[i]).sig != p(ts[i+1]).sig, 1:length(ts)-1)
-    @test k !== nothing # the path must cross at least one active-set transition
-    lo, hi, slo = ts[k], ts[k+1], p(ts[k]).sig
-    for _ in 1:50
-        mid = (lo + hi) / 2
-        p(mid).sig == slo ? (lo = mid) : (hi = mid)
+    p(ρ) = (DECAES.nnls_gram_setup!(work); DECAES.lcurve_point(work, sqrt(ρ)))
+    ρ₋, ρ₊ = 0.25 - 1e-9, 0.25 + 1e-9
+    p₋, p₊ = p(ρ₋), p(ρ₊)
+    @test p₊.sig != p₋.sig # the second component has entered, so this is a genuine transition
+    @test norm(p₊.P - p₋.P) < 1e-7 # ξ² and η² carry across
+    @test DECAES.tangent_angle(p₊, log(ρ₊) / 2) ≈ DECAES.tangent_angle(p₋, log(ρ₋) / 2) atol = 1e-7 # and so does the tangent direction
+    @test abs(p₊.κ - p₋.κ) > 1e-2 # while κ jumps, by orders more than either of those moved
+end
+
+# The sweep ranks brackets by the net rotation of the tangent, which `tangent_angle` reads off the Tikhonov identity θ = -arctan(ξ²/(μ²η²)); only an actual Tikhonov path makes that the curve's tangent.
+# A = [diagm(γ); 0ᵀ] with b = [γ .* x; δ] keeps every component of x_ρ = γ²x/(γ² + ρ) positive, so NNLS coincides with ridge on one branch and ξ², η², q are exact.
+function build_tikhonov_corner_cached_fun(γ, x, δ, ::Type{T} = Float64) where {T}
+    function tikhonov_lcurve_point(t)
+        ρ = exp(2t)
+        xᵨ = (γ .^ 2 .* x) ./ (γ .^ 2 .+ ρ)
+        ξ² = sum(((γ .* x .* ρ) ./ (γ .^ 2 .+ ρ)) .^ 2) + δ^2
+        η² = sum(abs2, xᵨ)
+        q = sum((xᵨ .^ 2) ./ (γ .^ 2 .+ ρ))
+        return LCurveCornerPoint(SA{T}[log(ξ²), log(η²)], DECAES.lcurve_geometry(ξ², η², q, exp(t))..., UInt128(1))
     end
-    p₋, p₊ = p(lo), p(hi)
-    @test hi - lo < 1e-12 # the transition is bracketed far tighter than the quantities compared across it
-    @test DECAES.tangent_angle(p₊, hi) ≈ DECAES.tangent_angle(p₋, lo) atol = 1e-8
-    @test norm(p₊.P - p₋.P) < 1e-8
-    @test p₊.sig != p₋.sig # and it is a genuine transition, not a resampling of one branch
+    f = CachedFunction(tikhonov_lcurve_point, GrowableCache{T, LCurveCornerPoint{T}}(64, isapprox))
+    return LCurveCornerCachedFunction(f, GrowableCache{Int, LCurveCornerState{T}}(64))
 end
 
+# Two singular values two decades apart put a single admissible corner at t✶ ≈ -3.4384, where |S| ≈ 0.081.
 @testset "L-curve sweep fallback" begin
-    f = build_lcurve_corner_cached_fun()
-    max_log_slope = log(1e6) # the mock function's slope is e^{2t}, so this admits the corner at t = 0
+    f() = build_tikhonov_corner_cached_fun([1.0, 1e-2], [1.0, 1.0], 1e-6)
+    sweep(g, L, U, τ; nsweep = 32) = DECAES.lcurve_sweep!(g, L, U, log(τ); nsweep, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4)
+    t✶ = -3.4384
 
-    # The mock curve is unimodal with its maximum at t = 0, so any bracket containing it is certified
-    @test DECAES.lcurve_sweep!(f, -3.0, 3.0, max_log_slope; nsweep = 32, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) ≈ 0 atol = 1e-3
-    @test DECAES.lcurve_sweep!(f, -3.0, 3.0, max_log_slope; nsweep = 2, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) |> isnan # too few samples to bracket anything
+    # The curve is unimodal on [-6, -1], so any bracket containing the corner certifies it
+    @test sweep(f(), -6.0, -1.0, 1e6) ≈ t✶ atol = 1e-4
+    @test sweep(f(), -6.0, -1.0, 1e6; nsweep = 2) |> isnan # two samples span one interval, leaving no interior sample to bracket a maximum
 
-    # Only certified corners are returned, never a sample: on a grid whose nearest point is 0.43 away the answer is still localized to `xtol`
-    @test DECAES.lcurve_sweep!(empty!(f), -3.0, 3.0, max_log_slope; nsweep = 8, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) ≈ 0 atol = 1e-4
+    # Only certified corners are returned, never a sample: on a grid whose nearest point is 0.29 away the answer is still localized to `xtol`
+    g = f()
+    @test sweep(g, -6.0, -1.0, 1e6; nsweep = 8) ≈ t✶ atol = 1e-4
+    @test g(t✶).κ > g(t✶ - 1e-3).κ && g(t✶).κ > g(t✶ + 1e-3).κ # and it is a strict maximum of the exact curvature
 
-    # A domain lying entirely to one side of the maximum leaves the sampled sequence monotone, and a monotone sequence has no interior maximum to certify
-    @test DECAES.lcurve_sweep!(empty!(f), 1.0, 4.0, max_log_slope; nsweep = 32, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) |> isnan
+    # A domain lying entirely to one side of the corner leaves the sampled sequence monotone, and a monotone sequence has no interior maximum to certify
+    @test sweep(f(), -1.0, 2.0, 1e6) |> isnan
 
-    # The slope guard still applies to whatever the sweep finds: the mock's corner has |S| = 1, so any τ < 1 rejects it
-    @test DECAES.lcurve_sweep!(empty!(f), -3.0, 3.0, log(0.5); nsweep = 32, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4) |> isnan
+    # The slope guard still applies to whatever the sweep finds: the corner has |S| ≈ 0.081, so any τ below that rejects it
+    @test sweep(f(), -6.0, -1.0, 0.05) |> isnan
 end
 
-# A residual at the level of the arithmetic is treated as an exact fit: ξ²₀ ≤ ε²‖b‖² reads ‖Ax₀ - b‖ ≤ ε‖b‖.
+# Three singular values two decades apart put admissible corners at t ≈ -8.0588, where |S| ≈ 0.042, and t ≈ -3.4385, where |S| ≈ 0.081.
+# Every interval of largest tangent rotation surrounds the right corner, so a slope guard admitting only the left one forces the sweep past its top-ranked candidates.
+@testset "L-curve sweep reaches a lower-ranked candidate" begin
+    sweep(τ) = DECAES.lcurve_sweep!(build_tikhonov_corner_cached_fun([1.0, 1e-2, 1e-4], [1.0, 1.0, 1.0], 1e-9), -11.0, -1.0, log(τ); nsweep = 32, max_candidates = 8, xtol = 1e-6, Ptol = 1e-6, max_backtrack = 4)
+    @test sweep(1e6) ≈ -3.4385 atol = 1e-3 # unguarded, the top-ranked candidate certifies
+    @test sweep(0.06) ≈ -8.0588 atol = 1e-3 # the top-ranked candidates are all rejected, and a later one certifies
+    @test sweep(0.03) |> isnan # neither corner is admissible
+end
+
+# A residual at the level of the arithmetic is treated as an exact fit: ξ²₀ ≤ ε‖b‖² reads ‖Ax₀ - b‖ ≤ √ε‖b‖.
 @testset "L-curve near-exact fit policy" begin
-    for (δ, exact) in ((eps() / 2, true), (2 * eps(), false))
+    for (δ, exact) in ((√eps() / 2, true), (2 * √eps(), false))
         A, b = [1.0; 0.0;;], [1.0, δ]
         work = DECAES.lsqnonneg_lcurve_work(A, b)
         (; mu, chi2) = DECAES.lsqnonneg_lcurve!(work)
@@ -1199,7 +1225,7 @@ end
 
 # Scale covariance. Since ‖sAx − sb‖² + μ²‖x‖² = s²(‖Ax − b‖² + (μ/s)²‖x‖²), the Tikhonov path satisfies x_μ(sA, sb) = x_{μ/s}(A, b), so every selection rule must return s·μ* with x* and chi2 unchanged.
 # The rules themselves are covariant: chi2 and mdp equate quantities that both scale as s², and the Regińska and L-curve criteria are invariant under the translation s induces on the log-log curve.
-# Only `lsqnonneg_gcv` does not follow: it minimizes over a hardcoded logμ window, which no scaling moves, so it fails once s carries μ* outside it.
+# `lsqnonneg_gcv` follows for the same reason, its criterion being covariant and its search interval derived from the data; see `gcv_bracket`.
 @testset "scale covariance of reg methods" begin
     m, n = 48, 40
     t = range(0, 2; length = m)
@@ -1210,30 +1236,20 @@ end
     b = A * x .+ 1e-3 .* sin.(1:m)
     δ = 1e-2 * norm(b) # scaled alongside A and b, since the discrepancy level is a residual norm
 
-    # `rtol` is the accuracy of each search, not of the invariant: chi2 and mdp locate their root to a tolerance in logμ, which leaves a relative drift of that size in μ.
-    methods = (
+    for (name, rtol, f) in [
         ("unreg", 1e-12, (A, b, s) -> (; mu = 0.0, x = DECAES.lsqnonneg(A, b), chi2 = 1.0)),
-        ("chi2", 5e-3, (A, b, s) -> DECAES.lsqnonneg_chi2(A, b, 1.02)),
-        ("mdp", 5e-3, (A, b, s) -> DECAES.lsqnonneg_mdp(A, b, s * δ)),
+        ("chi2", 1e-3, (A, b, s) -> DECAES.lsqnonneg_chi2(A, b, 1.02)),
+        ("mdp", 1e-3, (A, b, s) -> DECAES.lsqnonneg_mdp(A, b, s * δ)),
         ("reginska", 1e-9, (A, b, s) -> DECAES.lsqnonneg_reginska(A, b)),
         ("lcurve", 1e-9, (A, b, s) -> DECAES.lsqnonneg_lcurve(A, b)),
-    )
-    for (name, rtol, f) in methods
+        ("gcv", 1e-3, (A, b, s) -> DECAES.lsqnonneg_gcv(A, b)),
+    ]
         r = f(A, b, 1.0)
         for scale in (1e-9, 1e9)
             rs = f(scale .* A, scale .* b, scale)
-            @test rs.mu / scale ≈ r.mu rtol = rtol atol = 1e-14
+            @test rs.mu / scale ≈ r.mu rtol = rtol atol = 1e-12
             @test rs.x ≈ r.x rtol = rtol atol = 1e-12
             @test rs.chi2 ≈ r.chi2 rtol = rtol
-        end
-    end
-
-    # Broken by the hardcoded logμ window, not by the criterion. This becomes `Unexpectedly Pass` the moment the window is replaced by a scale-adaptive bracket.
-    let f = DECAES.lsqnonneg_gcv
-        r = f(A, b)
-        for scale in (1e-9, 1e9)
-            rs = f(scale .* A, scale .* b)
-            @test_broken isapprox(rs.mu / scale, r.mu; rtol = 1e-3, atol = 1e-14) && isapprox(rs.x, r.x; rtol = 1e-3, atol = 1e-12)
         end
     end
 end
