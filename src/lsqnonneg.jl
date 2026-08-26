@@ -862,7 +862,7 @@ Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{
 X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
 ```
 
-where ``\mu`` is chosen using Morozov's Discrepency Principle (MDP)[1,2]:
+where ``\mu`` is chosen using Morozov's Discrepancy Principle (MDP)[1,2]:
 
 ```math
 \mu = \operatorname{sup}\; \left\{ \nu \ge 0 : ||AX_{\nu} - b|| \le \delta \right\}.
@@ -1545,8 +1545,8 @@ function lsqnonneg_reginska!(
     # An exact unregularized fit makes the minimum-product criterion zero at μ = 0. The test must be relative rather than res²_min == 0, since a computed exact fit leaves a roundoff-level residual and Φ(0) would be a ratio of noise.
     # A consistent system solved in floating point leaves ‖r‖ ≲ ε·κ₂(A)·‖b‖, so res² ≤ eps(T)·‖b‖² admits relative residual norms up to √ε, which is that bound at κ₂(A) ≃ ε^(-1/2).
     # The threshold is a conditioning assumption rather than a free tolerance: a basis conditioned worse than ε^(-1/2) needs it loosened.
-    b_nrm² = sum(abs2, work.b)
-    if res²_min <= eps(T) * b_nrm² || ncomponents(work.nnls_prob) == 0
+    b² = sum(abs2, work.b)
+    if res²_min <= eps(T) * b² || ncomponents(work.nnls_prob) == 0
         return (; x = x_unreg, mu = zero(T), chi2 = one(T))
     end
     η²_unreg = sum(abs2, x_unreg)
@@ -1570,7 +1570,7 @@ function lsqnonneg_reginska!(
     # No upper bound is needed either: complementarity gives bᵀr = res² + μ²‖x‖², which at a balance point reads bᵀr = 2·res², and Cauchy-Schwarz bounds res² ≤ ‖b‖²/4 there.
     # res² is nondecreasing, so the first scan point exceeding ‖b‖²/4 proves no balance point lies at or beyond it, and res² → ‖b‖² makes that test eventually fire.
     logμ₀ = (log(res²_min) - log(η²_unreg)) / 2
-    res²_max = b_nrm² / 4
+    res²_max = b² / 4
 
     a, ga = logμ₀, g(logμ₀)
     if ga <= 0
@@ -1900,3 +1900,37 @@ function ∇gcv_dof(m::Int, n::Int, γ²::AbstractVector{T}, λ::T) where {T}
     return ∇dof
 end
 ∇gcv_dof(A::AbstractMatrix{T}, λ::T) where {T} = ∇gcv_dof(size(A)..., svdvals(A) .^ 2, λ)
+
+####
+#### ℓ¹-regularized NNLS problem
+####
+
+@inline solution(work::NNLS.NNLSLassoWorkspace) = NNLS.solution(work)
+@inline ncomponents(work::NNLS.NNLSLassoWorkspace) = NNLS.ncomponents(work)
+@inline resnorm_sq(work::NNLS.NNLSLassoWorkspace) = sum(abs2, NNLS.residual(work))
+@inline seminorm(work::NNLS.NNLSLassoWorkspace) = sum(NNLS.solution(work)) # ‖x‖₁ = 𝟙ᵀx where x ≥ 0
+
+@doc raw"""
+    lsqnonneg_lasso(A::AbstractMatrix, b::AbstractVector, μ::Real)
+
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+
+```math
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1.
+```
+
+Nonnegativity makes ``||x||_1 = \mathbf{1}^T x`` linear, so this is a smooth bound-constrained convex quadratic program, solved by a Lawson-Hanson active-set method.
+
+# Arguments
+
+  - `A::AbstractMatrix`: Left hand side matrix acting on `x`
+  - `b::AbstractVector`: Right hand side vector
+  - `μ::Real`: Regularization parameter
+
+# Outputs
+
+  - `X::AbstractVector`: NNLS solution
+"""
+lsqnonneg_lasso(A::AbstractMatrix, b::AbstractVector, μ::Real; kwargs...) = lsqnonneg_lasso!(lsqnonneg_lasso_work(A, b), μ; kwargs...)
+lsqnonneg_lasso_work(A::AbstractMatrix, b::AbstractVector) = NNLS.NNLSLassoWorkspace(A, b)
+lsqnonneg_lasso!(work::NNLS.NNLSLassoWorkspace, μ::Real; kwargs...) = NNLS.solve!(NNLS.reset!(work), μ; kwargs...)

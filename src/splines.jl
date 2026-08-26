@@ -1024,7 +1024,7 @@ nearest_interior_gridpoint(state::DiscreteSurrogateSearcher{D, T}, x::SVector{D,
 #### Global optimization for NNLS problem
 ####
 
-# Runtime toggle for the precomputed-Gram fast path of the surrogate search's NNLS evaluations (see `NNLS.NNLSGridGram`); `false` recovers the exact-QR evaluation path for every solve.
+# Runtime toggle for the precomputed-Gram fast path of the surrogate search's NNLS evaluations (see `NNLS.NNLSPrecomputedGram`); `false` recovers the exact-QR evaluation path for every solve.
 const SURROGATE_USE_FAST_GRAM = Ref(true)
 
 struct NNLSDiscreteSurrogateSearch{D, T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}, Tb <: AbstractVector{T}, W, WG}
@@ -1062,11 +1062,12 @@ function NNLSDiscreteSurrogateSearch(
     αs = meshgrid(SVector{D, T}, αs...)
     u = zeros(T, size(αs))
     nnls_work = lsqnonneg_work(zeros(T, M, N), zeros(T, M))
+    nnls_gram = NNLS.NNLSPrecomputedGram(T, N)
     seen_pts = sizehint!(CartesianIndex{D}[], length(αs))
     seen_idx = zeros(Int, N, length(αs))
     seen_nsetp = zeros(Int, length(αs))
     seen_stamp = zeros(Int, length(αs))
-    return NNLSDiscreteSurrogateSearch(As, ∇As, Gs, αs, b, u, nnls_work, NNLS.NNLSGridGram(T, N), seen_pts, seen_idx, seen_nsetp, seen_stamp, Ref(1), legacy)
+    return NNLSDiscreteSurrogateSearch(As, ∇As, Gs, αs, b, u, nnls_work, nnls_gram, seen_pts, seen_idx, seen_nsetp, seen_stamp, Ref(1), legacy)
 end
 
 load!(prob::NNLSDiscreteSurrogateSearch{D, T}, b::AbstractVector{T}) where {D, T} = copyto!(prob.b, b)

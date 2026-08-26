@@ -42,7 +42,7 @@ using LinearAlgebra: LinearAlgebra, Factorization, UpperTriangular, ldiv!, norm
 using MuladdMacro: MuladdMacro, @muladd
 
 export nnls, nnls!, load!
-export NNLSWorkspace, NNLSGram, NormalEquation, NormalEquationCholesky
+export NNLSWorkspace, NNLSGram, NNLSLassoWorkspace, NormalEquation, NormalEquationCholesky
 
 @muladd begin
 
@@ -1446,7 +1446,7 @@ end
 
 # The Gram matrix of the active columns is μ-independent, so evaluating the Tikhonov-regularized NNLS residual norm at a new μ with a warm active set costs one Cholesky factorization over the p active columns plus one KKT-verification GEMV, rather than a full QR rebuild.
 # The KKT conditions are verified against the exact residual dual w = A'(b - A_P x), so accepted solutions are genuine NNLS solutions up to normal-equation roundoff. The κ(A_P)² amplification is tamed by the μ² shift of the Gram matrix, and the root tolerances are many orders coarser than the error that remains.
-# Non-positive or tiny Cholesky pivots and an exhausted iteration budget both return NaN, on which the caller falls back to the exact QR solver.
+# Non-positive or tiny Cholesky pivots and an exhausted iteration budget both return NaN, on which the caller falls back to the QR-based solver.
 struct NNLSGram{T}
     P::Vector{Int}           # active set (original column indices) in P[1:np]
     inP::Vector{Bool}        # membership mask of P[1:np]
@@ -1597,7 +1597,7 @@ end
 end
 
 # Solve min ||Ax - b||² + μ²||x||² s.t. x ≥ 0 via active-set iteration on the cached Gram data, warm-started from the current active set.
-# Returns the squared data residual ||Ax - b||², excluding the μ²||x||² penalty so as to match `resnorm_sq`, or NaN on failure, on which the caller falls back to the exact solver.
+# Returns the squared data residual ||Ax - b||², excluding the μ²||x||² penalty so as to match `resnorm_sq`, or NaN on failure, on which the caller falls back to the QR-based solver.
 # On success the active set is left at the solution, warm-starting the next μ.
 function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ::T) where {T}
     (; P, inP, np, GP, L, c, xp, r, w, dinv) = gp
@@ -1800,31 +1800,30 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
 end
 
 ####
-#### Gram matrix-based fast path for a fixed grid of unregularized problems
+#### Unregularized NNLS against a caller-supplied Gram matrix
 ####
 
-# Precomputed-Gram fast path for unregularized NNLS solves against a fixed set of bases.
-# The bases depend only on the grid parameters, never on the signal b, so the Gram matrices Gᵢ = AᵢᵀAᵢ come from shared read-only storage supplied by the caller and this workspace holds only the mutable solve scratch.
-# Each evaluation costs one GEMV c = Aᵢᵀb plus an active-set iteration entirely in Gram space: a resumable p×p Cholesky of G_P, feasibility drops, and the KKT dual w = c − G[:, P]x_P at n·p flops, replacing the m·n dual GEMV per round of the QR solver.
-# Unlike `NNLSGram` there is no μ² diagonal shift to condition the normal equations, so a tiny or non-positive Cholesky pivot, a full active set, or an exhausted iteration budget returns `false` and the caller falls back to the exact QR solver.
-struct NNLSGridGram{T}
+# `NNLSGram` assembles G_P from `A` at each active-set change and tests the KKT conditions against the data-space dual w = Aᵀ(b - A_P x_P); this workspace instead takes G = AᵀA as an argument to `solve!` and never references `A`, so the whole iteration runs in Gram space.
+# The caller owns G, making this a fast path when many signals are solved against the same fixed set of bases, as this workspace need only hold the mutable solve scratch.
+# The price is that `A` is unavailable to cross-check the normal equations and there is no μ² shift to better condition G. Therefore, for tiny or non-positive Cholesky pivot, a full active set, or an exhausted iteration budget, `solve!` returns `false` and the caller should fall back to the QR-based solver.
+struct NNLSPrecomputedGram{T}
     c::Vector{T}             # Aᵢᵀb for the current evaluation
     cscale::Base.RefValue{T} # maximum(abs, c); scale for the dual tolerance
-    P::Vector{Int}           # active set (original column indices) in P[1:np]
+    P::Vector{Int}           # active set in P[1:np]
     inP::Vector{Bool}        # membership mask of P[1:np]
     rejected::Vector{Bool}   # candidates rejected for the remainder of the current solve; see `solve!`
     np::Base.RefValue{Int}   # active-set size
-    GP::Matrix{T}            # gathered active-set Gram block (both triangles)
+    GP::Matrix{T}            # gathered active-set Gram block
     L::Matrix{T}             # upper Cholesky factor of GP
     dinv::Vector{T}          # reciprocals of the Cholesky diagonal, so the O(p²) column updates and the triangular solves multiply instead of divide
     xp::Vector{T}            # unconstrained-on-P solution of the current round
-    xcur::Vector{T}          # feasible iterate aligned with P (Lawson-Hanson secondary-loop interpolation state)
+    xc::Vector{T}            # feasible iterate aligned with P
     u::Vector{T}             # bordering scratch: u = L'⁻¹G_{P,j} for the entering-column pre-check / factor extension
     w::Vector{T}             # dual c − G[:, P]x_P
 end
 
-function NNLSGridGram(::Type{T}, n::Int) where {T}
-    return NNLSGridGram(
+function NNLSPrecomputedGram(::Type{T}, n::Int) where {T}
+    return NNLSPrecomputedGram(
         zeros(T, n), Ref(zero(T)), zeros(Int, n), fill(false, n), fill(false, n), Ref(0),
         zeros(T, n, n), zeros(T, n, n), zeros(T, n), zeros(T, n), zeros(T, n), zeros(T, n), zeros(T, n),
     )
@@ -1832,7 +1831,7 @@ end
 
 # Load the signal-dependent right-hand side data c = Aᵀb, once per grid point per signal.
 # Columns are processed in blocks of 4 sharing each load of b, cf. `compute_dual_block!`.
-function load!(gp::NNLSGridGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+function load!(gp::NNLSPrecomputedGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     (; c) = gp
     m, n = size(A)
     j = 1
@@ -1865,7 +1864,7 @@ function load!(gp::NNLSGridGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) 
 end
 
 # Set the active set to idx0[1:np0] and gather its Gram block
-function set_active!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, idx0, np0::Int) where {T}
+function set_active!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, idx0, np0::Int) where {T}
     (; P, inP, rejected, GP) = gp
     fill!(inP, false)
     fill!(rejected, false)
@@ -1883,7 +1882,7 @@ function set_active!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, idx0, np0::Int) 
     return gp
 end
 
-@inline function add_active!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, j::Int) where {T}
+@inline function add_active!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, j::Int) where {T}
     (; P, inP, GP, np) = gp
     p = np[] + 1
     @inbounds begin
@@ -1899,14 +1898,14 @@ end
     return gp
 end
 
-@inline function remove_active!(gp::NNLSGridGram, i::Int)
-    (; P, inP, GP, np, xcur) = gp
+@inline function remove_active!(gp::NNLSPrecomputedGram, i::Int)
+    (; P, inP, GP, np, xc) = gp
     p = np[]
     @inbounds begin
         inP[P[i]] = false
-        if i < p # swap-remove row/column i with the last (xcur rides along with P)
+        if i < p # swap-remove row/column i with the last (xc rides along with P)
             P[i] = P[p]
-            xcur[i] = xcur[p]
+            xc[i] = xc[p]
             @simd ivdep for s in 1:p
                 GP[s, i] = GP[s, p]
             end
@@ -1924,10 +1923,10 @@ end
 # This is the Lawson-Hanson iteration in Gram (normal-equations) form, cf. FNNLS (Bro & de Jong 1997):
 #   - entering candidates pass a bordering pre-check: with L'L = G_P and u = L'⁻¹G_{P,j}, the Schur complement d = Gⱼⱼ − ‖u‖² must exceed ϵ·Gⱼⱼ for numerical independence, the proposed new coefficient being wⱼ/d > 0. Accepting extends the Cholesky factor in place with u, so adds never refactorize;
 #   - infeasible solves run the classic secondary-loop interpolation toward the last feasible iterate, so the objective strictly decreases and add→drop cycling cannot occur;
-#   - candidates that fail the pre-check or come out infeasible immediately after entry stay rejected for the remainder of the solve, their attainable improvement being at the dual tolerance level. This mirrors the exact solver's `w[pos] = 0` handling.
-# Returns `true` with the solution in xp[1:np] on P[1:np], or `false` when a conditioning or iteration guard trips, on which the caller falls back to the exact QR solver.
-function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
-    (; c, P, inP, rejected, np, GP, L, dinv, xp, xcur, u, w) = gp
+#   - candidates that fail the pre-check or come out infeasible immediately after entry stay rejected for the remainder of the solve, their attainable improvement being at the dual tolerance level. This mirrors the QR-based solver's `w[pos] = 0` handling.
+# Returns `true` with the solution in xp[1:np] on P[1:np], or `false` when a conditioning or iteration guard trips, on which the caller falls back to the QR-based solver.
+function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
+    (; c, P, inP, rejected, np, GP, L, dinv, xp, xc, u, w) = gp
     n = size(G, 1)
 
     # Dual tolerance for accepting a KKT point, relative to the scale of Aᵀb.
@@ -1940,7 +1939,7 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
     maxiter = 3 * n
     iters = 0
     lvalid = 0 # leading columns of L that are current; accepted adds extend the factor, drops invalidate from the removed column
-    feasible = false # xcur[1:np] holds a feasible iterate; false until the first all-positive solve, so the seed feasibility pass drops most-negative coefficients without interpolation
+    feasible = false # xc[1:np] holds a feasible iterate; false until the first all-positive solve, so the seed feasibility pass drops most-negative coefficients without interpolation
     jentered = 0 # column entered by the most recent accept; rejected if the immediately-following solve drops it
     @inbounds while true
         iters += 1
@@ -1956,6 +1955,7 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
                     L[k, jcol] = GP[k, jcol]
                     L[k, jcol+1] = GP[k, jcol+1]
                 end
+
                 for k in 1:jcol-1
                     a1 = L[k, jcol]
                     a2 = L[k, jcol+1]
@@ -1968,10 +1968,12 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
                     L[k, jcol] = a1 * dk
                     L[k, jcol+1] = a2 * dk
                 end
+
                 s = GP[jcol, jcol]
                 @simd for k in 1:jcol-1
                     s = s - L[k, jcol] * L[k, jcol]
                 end
+
                 s <= ϵpiv * GP[jcol, jcol] && return false
                 Ljj = sqrt(s)
                 L[jcol, jcol] = Ljj
@@ -1980,11 +1982,13 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
                 @simd for k2 in 1:jcol-1
                     s2 = s2 - L[k2, jcol] * L[k2, jcol+1]
                 end
+
                 L[jcol, jcol+1] = s2 * dinv[jcol]
                 s = GP[jcol+1, jcol+1]
                 @simd for k in 1:jcol
                     s = s - L[k, jcol+1] * L[k, jcol+1]
                 end
+
                 s <= ϵpiv * GP[jcol+1, jcol+1] && return false
                 Ljj = sqrt(s)
                 L[jcol+1, jcol+1] = Ljj
@@ -1998,10 +2002,12 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
                     end
                     L[k, jcol] = s2 * dinv[k]
                 end
+
                 s = GP[jcol, jcol]
                 @simd for k in 1:jcol-1
                     s = s - L[k, jcol] * L[k, jcol]
                 end
+
                 s <= ϵpiv * GP[jcol, jcol] && return false
                 Ljj = sqrt(s)
                 L[jcol, jcol] = Ljj
@@ -2019,6 +2025,7 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
             end
             xp[i] = s * dinv[i]
         end
+
         for i in p:-1:1
             s = xp[i]
             @simd for k in i+1:p
@@ -2034,22 +2041,25 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
                 imv, xmin = i, xp[i]
             end
         end
+
         if imv > 0
             if feasible
                 # Secondary loop: interpolate the feasible iterate toward xp until the first coefficient hits zero and drop that column
                 α = one(T)
                 for i in 1:p
                     if xp[i] <= 0
-                        t = xcur[i] / (xcur[i] - xp[i])
+                        t = xc[i] / (xc[i] - xp[i])
                         if t < α
                             α, imv = t, i
                         end
                     end
                 end
+
                 for i in 1:p
-                    xcur[i] = xcur[i] + α * (xp[i] - xcur[i])
+                    xc[i] = xc[i] + α * (xp[i] - xc[i])
                 end
-                xcur[imv] = zero(T)
+
+                xc[imv] = zero(T)
                 P[imv] == jentered && (rejected[jentered] = true) # the entering column came straight back out, so its dual is marginal at the tolerance boundary; reject it for the rest of the solve
             end
             jentered = 0
@@ -2060,7 +2070,7 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
 
         # All positive: xp is the new feasible iterate
         for i in 1:p
-            xcur[i] = xp[i]
+            xc[i] = xp[i]
         end
         feasible = true
         jentered = 0
@@ -2069,6 +2079,7 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
         @simd ivdep for j in 1:n
             w[j] = c[j]
         end
+
         t = 1
         while t + 1 <= p
             x1, x2 = xp[t], xp[t+1]
@@ -2078,6 +2089,7 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
             end
             t += 2
         end
+
         if t <= p
             xt = xp[t]
             jt = P[t]
@@ -2109,24 +2121,416 @@ function solve!(gp::NNLSGridGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
                 u[i] = s
                 d = d - s * s
             end
+
             if d <= ϵpiv * G[jmax, jmax] # numerically dependent on the active set
                 rejected[jmax] = true
                 continue
             end
+
             add_active!(gp, G, jmax)
             pnew = np[]
             @simd ivdep for i in 1:p
                 L[i, pnew] = u[i]
             end
+
             Ljj = sqrt(d)
             L[pnew, pnew] = Ljj
             dinv[pnew] = inv(Ljj)
             lvalid = pnew
-            xcur[pnew] = zero(T)
+            xc[pnew] = zero(T)
             jentered = jmax
             break
         end
     end
+end
+
+"""
+    NNLSLassoWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T})
+
+Preallocated workspace for the ``\\ell^1``-regularized nonnegative least squares problem
+
+```math
+\\min_{x \\ge 0} ||Ax - b||_2^2 + \\mu ||x||_1
+```
+
+for an `m × n` matrix `A`, reusable across solves so that repeated calls to `solve!` are allocation-free.
+`A` and `b` are held by reference; callers that overwrite either must call `reset!` before the next solve.
+"""
+struct NNLSLassoWorkspace{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}}
+    A::TA                    # left hand side matrix
+    b::Tb                    # right hand side vector
+    m::Int                   # number of rows of A
+    n::Int                   # number of columns of A
+    x::Vector{T}             # solution, zero off the active set
+    r::Vector{T}             # residual b - Ax
+    w::Vector{T}             # dual Aᵀr - λ𝟙
+    P::Vector{Int}           # active set in P[1:np]
+    inP::Vector{Bool}        # membership mask of P[1:np]
+    np::Base.RefValue{Int}   # active-set size
+    QR::Matrix{T}            # m×n buffer; QR[1:m, 1:np] is the packed Householder QR of the active columns, holding the strict upper triangle of R above the reflectors
+    Rdiag::Vector{T}         # diagonal of R
+    f::Vector{T}             # length-m buffer; Qᵀb
+    z::Vector{T}             # length-n buffer; R⁻ᵀ𝟙, overwritten in place by the passive solution
+    cnrm::Vector{T}          # column norms ‖Aⱼ‖; the scale of the numerical rank tolerance
+    cscale::Base.RefValue{T} # max_j |Aⱼᵀb|; the scale of the dual tolerance
+    μmax::Base.RefValue{T}   # smallest μ at which x = 0 is optimal
+end
+function NNLSLassoWorkspace(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
+    m, n = size(A)
+    @assert size(b) == (m,)
+    return NNLSLassoWorkspace(A, b, m, n, zeros(T, n), zeros(T, m), zeros(T, n), zeros(Int, n), fill(false, n), Ref(0), zeros(T, m, n), zeros(T, n), zeros(T, m), zeros(T, n), zeros(T, n), Ref(zero(T)), Ref(zero(T)))
+end
+
+@inline solution(work::NNLSLassoWorkspace) = work.x
+@inline ncomponents(work::NNLSLassoWorkspace) = work.np[]
+@inline residual(work::NNLSLassoWorkspace) = work.r
+@inline regparam_max(work::NNLSLassoWorkspace) = work.μmax[]
+
+# Empty the active set and refresh the quantities derived from `A` and c = Aᵀb:
+# column norms set the numerical rank tolerance scale, max_j |cⱼ| sets the dual tolerance scale, and μ ≥ 2 max_j cⱼ implies that x = 0 satisfies the KKT conditions with residual ‖b‖².
+function reset!(work::NNLSLassoWorkspace{T}) where {T}
+    (; A, b, m, n, x, inP, np, cnrm, cscale, μmax) = work
+    cmax, cpos = zero(T), zero(T)
+    @inbounds for j in 1:n
+        cⱼ, aⱼ = zero(T), zero(T)
+        @simd for i in 1:m
+            cⱼ += A[i, j] * b[i]
+            aⱼ += A[i, j] * A[i, j]
+        end
+        cmax = max(cmax, abs(cⱼ))
+        cpos = max(cpos, cⱼ)
+        cnrm[j] = √aⱼ
+        x[j] = 0
+        inP[j] = false
+    end
+    np[] = 0
+    cscale[] = cmax
+    μmax[] = 2 * cpos
+    return work
+end
+
+# Reset the workspace and seed the initial active set and solution with `x₀`.
+function reset!(work::NNLSLassoWorkspace{T}, x₀::AbstractVector{T}) where {T}
+    reset!(work)
+    (; n, x, P, inP, np) = work
+    p = 0
+    @inbounds for j in 1:n
+        x₀[j] <= 0 && continue
+        p += 1
+        P[p] = j
+        inP[j] = true
+        x[j] = x₀[j]
+    end
+    np[] = p
+    return work
+end
+
+@inline function add_active!(work::NNLSLassoWorkspace, j::Int)
+    (; P, inP, np) = work
+    p = np[] + 1
+    @inbounds P[p], inP[j] = j, true
+    np[] = p
+    return work
+end
+
+# Swap-remove position `i`
+@inline function remove_active!(work::NNLSLassoWorkspace, i::Int)
+    (; P, inP, np) = work
+    p = np[]
+    @inbounds inP[P[i]] = false
+    @inbounds i < p && (P[i] = P[p])
+    np[] = p - 1
+    return work
+end
+
+# r = b - A_P x_P
+function residual!(work::NNLSLassoWorkspace{T}) where {T}
+    (; A, b, m, x, r, P, np) = work
+    @inbounds @simd ivdep for i in 1:m
+        r[i] = b[i]
+    end
+    @inbounds for t in 1:np[]
+        j = P[t]
+        xⱼ = x[j]
+        @simd for i in 1:m
+            r[i] -= A[i, j] * xⱼ
+        end
+    end
+    return r
+end
+
+# w = Aᵀr - λ𝟙, the negative gradient of ½‖Ax - b‖² + λ𝟙ᵀx
+function dual!(work::NNLSLassoWorkspace{T}, λ::T) where {T}
+    (; A, m, n, r, w) = work
+    @inbounds for j in 1:n
+        wⱼ = zero(T)
+        @simd for i in 1:m
+            wⱼ += A[i, j] * r[i]
+        end
+        w[j] = wⱼ - λ
+    end
+    return w
+end
+
+# Unconstrained minimizer of ½‖A_P z - b‖² + λ𝟙ᵀz over the active columns, returned in `z[1:np]`.
+# With the thin QR A_P = QR, stationarity RᵀRz = RᵀQᵀb - λ𝟙 reduces to Rz = Qᵀb - λR⁻ᵀ𝟙, so one Householder factorization and two triangular solves suffice; the Gram matrix is never formed.
+# Returns zero on success, or the position of the first negligible pivot at which the active columns are numerically dependent.
+function passive_solve!(work::NNLSLassoWorkspace{T}, λ::T) where {T}
+    (; A, b, m, P, np, QR, Rdiag, f, z, cnrm) = work
+    p = np[]
+
+    @inbounds for t in 1:p
+        j = P[t]
+        @simd ivdep for i in 1:m
+            QR[i, t] = A[i, j]
+        end
+    end
+    @inbounds @simd ivdep for i in 1:m
+        f[i] = b[i]
+    end
+
+    # Householder QR of the active columns, applied to `f` as it goes
+    @inbounds for k in 1:p
+        σ = zero(T)
+        @simd for i in k:m
+            σ += QR[i, k] * QR[i, k]
+        end
+        ρ = √σ # magnitude of the new diagonal, exactly zero once k > m, where the m reflectors already applied have annihilated the whole column
+
+        # ρ/‖A_{P[k]}‖ is the sine of the angle between the new column and the span of its predecessors, so the rank tolerance is invariant to column rescaling and interpretable as an angle
+        if ρ <= eps(T)^(3//4) * cnrm[P[k]]
+            # A_{P[k]} lies in the span of its predecessors; leave the coefficients c of A_{P[k]} = A_{P[1:k-1]} c in z[1:k-1] for `resolve_dependency!`
+            for i in k-1:-1:1
+                cᵢ = QR[i, k]
+                for t in i+1:k-1
+                    cᵢ -= QR[i, t] * z[t]
+                end
+                z[i] = cᵢ / Rdiag[i]
+            end
+            return k
+        end
+
+        α = QR[k, k] >= 0 ? -ρ : ρ # the sign that avoids cancellation in v = x - αe₁
+        Rdiag[k] = α
+        QR[k, k] -= α
+        β = -α * QR[k, k] # ‖v‖²/2, positive by the sign choice above
+        for t in k+1:p
+            vᵀy = zero(T)
+            @simd for i in k:m
+                vᵀy += QR[i, k] * QR[i, t]
+            end
+
+            γ = vᵀy / β
+            @simd for i in k:m
+                QR[i, t] -= γ * QR[i, k]
+            end
+        end
+
+        vᵀf = zero(T)
+        @simd for i in k:m
+            vᵀf += QR[i, k] * f[i]
+        end
+
+        γ = vᵀf / β
+        @simd for i in k:m
+            f[i] -= γ * QR[i, k]
+        end
+    end
+
+    # Compute z = R⁻ᵀ𝟙 by forward substitution, then z = R⁻¹(Qᵀb - λz) by back substitution
+    @inbounds for i in 1:p
+        s = one(T)
+        @simd for k in 1:i-1
+            s -= QR[k, i] * z[k]
+        end
+        z[i] = s / Rdiag[i]
+    end
+
+    @inbounds for i in p:-1:1
+        s = f[i] - λ * z[i]
+        for k in i+1:p
+            s -= QR[i, k] * z[k]
+        end
+        z[i] = s / Rdiag[i]
+    end
+
+    return 0
+end
+
+# Take the active column at position `k`, which `passive_solve!` found to lie in the span of its predecessors, out of the degeneracy.
+# Moving an amount δ of mass into x_{P[k]} along direction -c leaves Ax fixed and changes 𝟙ᵀx by δ(1 - 𝟙ᵀc), so for 𝟙ᵀc > 1 the largest feasible δ is taken, and the coefficient it zeroes leaves the active set.
+function resolve_dependency!(work::NNLSLassoWorkspace{T}, k::Int, λ::T) where {T}
+    (; x, P, z) = work
+
+    Σc = zero(T)
+    @inbounds @simd for i in 1:k-1
+        Σc += z[i]
+    end
+
+    if λ * (Σc - 1) <= eps(T)^(3//4) * work.cscale[]
+        @inbounds x[P[k]] = 0
+        return remove_active!(work, k)
+    end
+
+    α, imin = T(Inf), 0
+    @inbounds for i in 1:k-1
+        z[i] <= 0 && continue
+        t = x[P[i]] / z[i]
+        t < α && ((α, imin) = (t, i))
+    end
+
+    @inbounds for i in 1:k-1
+        x[P[i]] -= α * z[i]
+    end
+    @inbounds x[P[k]] += α
+    @inbounds x[P[imin]] = 0 # the step is chosen to zero this coefficient exactly
+
+    return remove_active!(work, imin)
+end
+
+# Bring the active set to a feasible passive solution: solve over the active columns, and while any coefficient comes out non-positive, take the largest feasible step toward it, dropping whatever reaches zero.
+function feasible_solve!(work::NNLSLassoWorkspace{T}, λ::T) where {T}
+    (; x, P, np, z) = work
+    while true
+        k = passive_solve!(work, λ)
+        k > 0 && (resolve_dependency!(work, k, λ); continue)
+
+        p = np[]
+        α, imin = T(Inf), 0
+        @inbounds for i in 1:p
+            z[i] > 0 && continue
+            xᵢ = x[P[i]]
+            t = xᵢ / (xᵢ - z[i])
+            t < α && ((α, imin) = (t, i))
+        end
+
+        if imin == 0
+            @inbounds for i in 1:p
+                x[P[i]] = z[i]
+            end
+            return work
+        end
+
+        @inbounds for i in 1:p
+            xᵢ = x[P[i]]
+            x[P[i]] = xᵢ + α * (z[i] - xᵢ)
+        end
+        @inbounds x[P[imin]] = 0 # the step is chosen to zero this coefficient exactly, so at least one column leaves every pass
+        @inbounds for i in p:-1:1
+            x[P[i]] > 0 && continue
+            x[P[i]] = 0
+            remove_active!(work, i)
+        end
+    end
+end
+
+# Lawson-Hanson active set for the ℓ¹-regularized problem
+#
+#   x_μ = argmin_{x ≥ 0} ‖Ax - b‖² + μ‖x‖₁,
+#
+# equivalent to the canonical positive Lasso ½‖Ax - b‖² + λ𝟙ᵀx with λ = μ/2.
+# Its KKT conditions are x ≥ 0, w = Aᵀr - λ𝟙 ≤ 0 where r = b - Ax, and x ⊙ w = 0, differing from plain NNLS only by the shifted dual, thus the algorithm is Lawson-Hanson with `w` in place of Aᵀr and with the λ-shifted passive set solve of `passive_solve!`.
+# Every column with a positive dual therefore admits a move, either the Lawson-Hanson add or the exchange of `resolve_dependency!`, so in exact arithmetic each pass strictly lowers the objective and the iteration terminates at the minimizer; numerically it terminates once the inactive duals fall within the dual tolerance.
+# The active set is warm-started from whatever `reset!` or the preceding solve left it as, so a μ-selection search, which calls this repeatedly at nearby μ on one workspace, costs only a few column exchanges per solve rather than a full active-set rebuild.
+# Feasibility and stationarity on the active set hold by construction of `feasible_solve!`, leaving the inactive duals as the sole condition the loop must reach; exhausting `maxiters` means they were not reached.
+function solve!(work::NNLSLassoWorkspace{T}, μ::Real; maxiters::Int = 3 * work.n + 10) where {T}
+    (; n, w, inP) = work
+    @assert μ >= 0 "μ must be nonnegative, but μ = $μ." # a negative μ rewards mass rather than penalizing it, and makes the problem unbounded whenever A has a nonnegative null direction
+    λ = T(μ) / 2
+    wtol = eps(T)^(3//4) * work.cscale[]
+
+    feasible_solve!(work, λ)
+    residual!(work)
+    dual!(work, λ)
+
+    for _ in 1:maxiters
+        jmax, wmax = 0, wtol
+        @inbounds for j in 1:n
+            !inP[j] && w[j] > wmax && ((jmax, wmax) = (j, w[j]))
+        end
+        jmax == 0 && return solution(work)
+
+        add_active!(work, jmax)
+        feasible_solve!(work, λ)
+        residual!(work)
+        dual!(work, λ)
+    end
+
+    return error("Nonnegative Lasso did not satisfy the KKT conditions within $maxiters iterations.")
+end
+
+# Direction of the affine ℓ¹ path on the current support: u = G_PP⁻¹𝟙 = R⁻¹R⁻ᵀ𝟙, computed as z = R⁻ᵀ𝟙 by forward substitution, accumulating q = 𝟙ᵀu = ‖z‖², then z = R⁻¹z back up, leaving u in z[1:p].
+# Returns q. Reads the factorization left by `solve!` and overwrites the `z` buffer.
+function regparam_direction!(work::NNLSLassoWorkspace{T}) where {T}
+    (; np, QR, Rdiag, z) = work
+    p = np[]
+
+    q = zero(T)
+    @inbounds for i in 1:p
+        s = one(T)
+        @simd for k in 1:i-1
+            s -= QR[k, i] * z[k]
+        end
+        z[i] = s / Rdiag[i]
+        q += z[i] * z[i]
+    end
+
+    @inbounds for i in p:-1:1
+        s = z[i]
+        for k in i+1:p
+            s -= QR[i, k] * z[k]
+        end
+        z[i] = s / Rdiag[i]
+    end
+
+    return q
+end
+
+# The active set determined by `solve!` for a given `μ` is constant over a neighbourhood of μ on which the passive solution is affine,
+#
+#   x_P(μ′) = x_P(μ) - ((μ′ - μ)/2) u,    u = G_{PP}⁻¹𝟙 = R⁻¹R⁻ᵀ𝟙,
+#
+# and so ‖x‖₁ falls at the constant rate q/2 with q = 𝟙ᵀu = ‖R⁻ᵀ𝟙‖² and ‖Ax - b‖² rises at the rate qμ′/2 given by the envelope identity d‖Ax - b‖²/dμ = -μ d‖x‖₁/dμ.
+# The inactive duals are affine on the same interval, w_j(μ′) = w_j(μ) + ((μ′ - μ)/2)ẇ_j with ẇ_j = A_jᵀA_P u - 1.
+# Returns q and the end of the interval, the smallest μ′ > μ at which an active coefficient reaches zero or an inactive dual reaches the threshold that activates its column.
+# Reads the factorization and the dual left by `solve!(work, μ)`, and overwrites the `z` and `f` buffers.
+function regparam_segment!(work::NNLSLassoWorkspace{T}, μ::T) where {T}
+    (; A, m, n, x, w, P, np, inP, f, z) = work
+    p = np[]
+    p == 0 && return zero(T), T(Inf)
+    q = regparam_direction!(work)
+
+    Δ = T(Inf)
+    @inbounds for i in 1:p
+        z[i] <= 0 && continue
+        Δ = min(Δ, 2 * x[P[i]] / z[i]) # an active coefficient reaching zero
+    end
+
+    # f = A_P u, from which the inactive dual slopes A_jᵀf - 1 follow in one pass over the columns
+    @inbounds @simd ivdep for i in 1:m
+        f[i] = zero(T)
+    end
+
+    @inbounds for t in 1:p
+        j, uₜ = P[t], z[t]
+        @simd for i in 1:m
+            f[i] += A[i, j] * uₜ
+        end
+    end
+
+    # An inactive dual reaching the threshold at which `solve!` activates its column, which is where the active set actually changes; measuring instead to zero would close the interval at every column whose dual already sits there, as a duplicate of an active column does
+    wtol = eps(T)^(3//4) * work.cscale[]
+    @inbounds for j in 1:n
+        inP[j] && continue
+        ẇ = -one(T)
+        @simd for i in 1:m
+            ẇ += A[i, j] * f[i]
+        end
+        ẇ <= 0 && continue
+        Δ = min(Δ, 2 * (wtol - w[j]) / ẇ)
+    end
+
+    return q, μ + max(Δ, zero(T)) # both thresholds are reached from below, so the clamp only absorbs the roundoff of a coefficient or dual already sitting on one
 end
 
 end # @muladd

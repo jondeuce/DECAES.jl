@@ -71,7 +71,7 @@ function verify_NNLS(m₀, n, μ = 0.0)
         @test invperm(idx) == invidx
 
         i₊ = idx[1:n₊]
-        i₀ = idx[n₊+1:end]
+        i₀ = idx[(n₊+1):end]
         x₊, x₀ = x[i₊], x[i₀]
         w₀, w₋ = w[i₊], w[i₀]
         A₊, A₀ = A[:, i₊], A[:, i₀]
@@ -126,7 +126,7 @@ function verify_NNLS(m₀, n, μ = 0.0)
 
         @test work.zz[1:n₊] == x₊
         # @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋ #TODO?
-        @test work.zz[n₊+1:end] == work.b[n₊+1:end]
+        @test work.zz[(n₊+1):end] == work.b[(n₊+1):end]
         @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
 
         if n₊ > 0
@@ -224,7 +224,7 @@ function verify_NNLS_tikh(m, n, μ)
             @test invperm(idx) == invidx
 
             i₊ = idx[1:n₊]
-            i₀ = idx[n₊+1:end]
+            i₀ = idx[(n₊+1):end]
             x₊, x₀ = x[i₊], x[i₀]
             w₀, w₋ = w[i₊], w[i₀]
             A₊, A₀ = A[:, i₊], A[:, i₀]
@@ -279,7 +279,7 @@ function verify_NNLS_tikh(m, n, μ)
 
             @test work.zz[1:n₊] == x₊
             # @test work.A[n₊+1:end, i₀]' * work.zz[n₊+1:end] ≈ w₋ #TODO?
-            @test work.zz[n₊+1:end] == work.b[n₊+1:end]
+            @test work.zz[(n₊+1):end] == work.b[(n₊+1):end]
             @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12
 
             if n₊ > 0
@@ -354,7 +354,7 @@ end
         μ > 0 ? NNLS.init_nnls!(work, μ) : NNLS.init_nnls!(work)
         mul!(work.w, A0', b0) # caller-preloaded initial dual w₀ = A₀'b₀
         μ > 0 ? NNLS.unsafe_nnls!(work, A0, μ; init_dual = false) : NNLS.unsafe_nnls!(work, A0; init_dual = false)
-        @test NNLS.solution(work) ≈ x_ref atol = 1e-12 rtol = 1e-8
+        @test NNLS.solution(work) ≈ x_ref atol = 1e-12 rtol = 1e-12
         @test all(isfinite, NNLS.solution(work))
     end
 end
@@ -422,11 +422,11 @@ function verify_NNLS_adversarial(A0, b0, μ = 0.0)
 
         # Reported dual is nonpositive (exact termination invariant), and the reported residual norm matches the definition
         @test all(<=(0), NNLS.dual(work))
-        @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-10 atol = 1e-12 * max(1, norm(b))
+        @test NNLS.residualnorm(work) ≈ norm(A * x - b) rtol = 1e-12 atol = 1e-12 * max(1, norm(b))
 
         # Global optimality certificate at the computed solution
         w64 = D64.(A)' * (D64.(b) - D64.(A) * D64.(x))
-        εw = 1e-10 * max(1, norm(D64.(A)' * D64.(b)))
+        εw = 1e-12 * max(1, norm(D64.(A)' * D64.(b)))
         @test all(<=(εw), w64) # dual feasibility
         @test maximum(abs, x .* w64; init = zero(D64)) <= εw * max(1, maximum(x; init = 0.0)) # complementary slackness
     end
@@ -900,7 +900,7 @@ end
     @test allunique(DECAES.NNLS.column_digest.(1:1000)) # distinct columns take distinct digests well past the exactly representable range
     (; x, mu, chi2) = DECAES.lsqnonneg_lcurve(A, b)
     @test all(>=(0), x) && isfinite(mu) && mu >= 0
-    @test mu == 0 || isapprox(x, DECAES.lsqnonneg_tikh(A, b, mu); rtol = 1e-6, atol = 1e-10)
+    @test mu == 0 || isapprox(x, DECAES.lsqnonneg_tikh(A, b, mu); rtol = 1e-12, atol = 1e-12)
 end
 
 function lsqnonneg_lcurve_tests(m, n)
@@ -915,7 +915,7 @@ function lsqnonneg_lcurve_tests(m, n)
     @test isfinite(mu) && mu >= 0
     if mu > 0
         # Self-consistency: the returned solution is the exact Tikhonov-NNLS solution at the returned μ
-        @test x ≈ DECAES.lsqnonneg_tikh(A, b, mu) rtol = 1e-8 atol = 1e-12 * norm(b)
+        @test x ≈ DECAES.lsqnonneg_tikh(A, b, mu) rtol = 1e-12 atol = 1e-12 * norm(b)
         @test chi2 >= 1 - √eps() # res²(μ)/res²(0) ≥ 1 up to roundoff between the two evaluation paths
 
         w = DECAES.lsqnonneg_tikh_work(A, b)
@@ -943,7 +943,7 @@ function lsqnonneg_reginska_tests(m, n)
     @test isfinite(mu) && mu >= 0
     if mu > 0
         # Self-consistency: the returned solution is the exact Tikhonov-NNLS solution at the returned μ
-        @test x ≈ DECAES.lsqnonneg_tikh(A, b, mu) rtol = 1e-8 atol = 1e-12 * norm(b)
+        @test x ≈ DECAES.lsqnonneg_tikh(A, b, mu) rtol = 1e-12 atol = 1e-12 * norm(b)
 
         # Stationarity of the minimum-product criterion: at the selected μ the log-log L-curve tangent slope is -1, so the balance point res² = μ²‖x‖² holds with |log S| bounded by the local slope of g times the Brent abscissa tolerance.
         S = sum(abs2, A * x - b) / (sum(abs2, x) * mu^2)
@@ -962,7 +962,7 @@ end
 
 # Reginska selects the *leftmost* balance point |S| = 1, the smallest local minimizer of Ψ = res²·‖x‖², certified by the leap scan.
 # Verified against a brute-force reference: the returned μ must equal the leftmost downward crossing of g(logμ) = log res² − log‖x‖² − 2logμ.
-function reginska_expdecay_data(m, n)
+function reginska_expdecay_data(m, n, noise = 1e-3)
     t = range(0, 2; length = m)
     τ = exp10.(range(-1.5, 0.5; length = n))
     A = [exp(-tᵢ / τⱼ) for tᵢ in t, τⱼ in τ]
@@ -970,24 +970,24 @@ function reginska_expdecay_data(m, n)
     for _ in 1:3
         x[rand(1:n)] += rand()
     end
-    return A, A * x .+ 1e-3 .* randn(m)
+    return A, A * x .+ noise .* randn(m)
 end
 
-function reginska_g(A, b, logμ)
+function reginska_log_abs_slope(A, b, logμ)
     x = DECAES.lsqnonneg_tikh(A, b, exp(logμ))
     res², η² = sum(abs2, A * x - b), sum(abs2, x)
     return η² == 0 ? Inf : log(res²) - log(η²) - 2 * logμ
 end
 
-function reginska_leftmost_downcrossing(A, b, logμ_grid = range(-8, 2; length = 1000); atol = 1e-6)
+function reginska_leftmost_downcrossing(f_log_abs_slope, A, b, logμ_grid = range(-8, 2; length = 1000); atol = 1e-6)
     prevpos, prevl = false, first(logμ_grid)
     for logμ in logμ_grid
-        g = reginska_g(A, b, logμ)
+        g = f_log_abs_slope(A, b, logμ)
         if prevpos && g <= 0
             lo, hi = prevl, logμ
             while hi - lo > atol
                 mid = (lo + hi) / 2
-                if reginska_g(A, b, mid) > 0
+                if f_log_abs_slope(A, b, mid) > 0
                     lo = mid
                 else
                     hi = mid
@@ -1005,7 +1005,7 @@ end
         A, b = reginska_expdecay_data(m, n)
         (; mu) = DECAES.lsqnonneg_reginska!(DECAES.lsqnonneg_reginska_work(A, b))
         mu > 0 || continue
-        lc = reginska_leftmost_downcrossing(A, b)
+        lc = reginska_leftmost_downcrossing(reginska_log_abs_slope, A, b)
         @test !isnan(lc) # an interior balance point exists
         @test abs(log(mu) - lc) < 0.001 # the leap scan lands on the leftmost crossing
     end
@@ -1069,6 +1069,230 @@ end
 @testset "lsqnonneg_chi2" begin
     for (m, n) in NNLS_SIZES
         lsqnonneg_chi2_tests(m, n)
+    end
+end
+
+# Positive Lasso: x_μ = argmin_{x ≥ 0} ‖Ax - b‖² + μ‖x‖₁, whose KKT conditions are x ≥ 0, d = Aᵀ(b - Ax) - μ/2 ≤ 0, and x ⊙ d = 0
+lasso_obj(A, b, x, μ) = sum(abs2, A * x - b) + μ * sum(x)
+lasso_dual(A, b, x, μ) = A' * (b - A * x) .- μ / 2
+lasso_regparam_max(A, b) = 2 * max(0, maximum(A' * b))
+
+# Gap against the dual max_y bᵀy - ‖y‖²/2 subject to Aᵀy ≤ (μ/2)𝟙, whose feasible point y = θr carries θ = min(1, μ / (2 max_j Aⱼᵀr)).
+# Weak duality bounds the distance of ½‖Ax - b‖² + (μ/2)𝟙ᵀx from its optimum, and complementarity makes the bound vanish at the solution, providing an independent quantitative suboptimality bound alongside the KKT conditions, which convexity already makes a global certificate.
+function lasso_gap(A, b, x, μ)
+    r, λ = b - A * x, μ / 2
+    θ = maximum(A' * r; init = zero(eltype(r))) > λ ? λ / maximum(A' * r) : one(eltype(r))
+    return (sum(abs2, r) / 2 + λ * sum(x)) - (θ * dot(b, r) - θ^2 * sum(abs2, r) / 2)
+end
+
+# Global minimum by exhaustive support search over linearly independent supports: a minimizer of this polyhedral problem has an extreme-point representation whose active columns are independent, so some enumerated support attains the global objective value, though not necessarily the one the solver returns
+function lasso_brute(A, b, μ)
+    n = size(A, 2)
+    f★, x★ = Inf, zeros(n)
+    for mask in 0:(1<<n-1)
+        S = [j for j in 1:n if mask & (1 << (j - 1)) != 0]
+        AS = A[:, S]
+        rank(AS) < length(S) && continue
+        xS = (AS' * AS) \ (AS' * b .- μ / 2)
+        all(>(0), xS) || continue
+        x = zeros(n)
+        x[S] .= xS
+        f = lasso_obj(A, b, x, μ)
+        f < f★ && ((f★, x★) = (f, x))
+    end
+    return f★, x★
+end
+
+# Certify the KKT and duality-gap certificate of the fixed-μ solver, with ground truth evaluated in Double64.
+function lasso_certify(A, b, x, μ; rtol = 1e-12)
+    A, b, x, μ = Double64.(A), Double64.(b), Double64.(x), Double64(μ)
+    d, scale = lasso_dual(A, b, x, μ), maximum(abs, A' * b)
+    @test all(>=(0), x)
+    @test maximum(d[x .== 0]; init = -Inf) <= rtol * scale
+    @test maximum(abs, d[x .> 0]; init = 0.0) <= rtol * scale
+    return μ > 0 && @test lasso_gap(A, b, x, μ) <= rtol * sum(abs2, b)
+end
+
+function lsqnonneg_lasso_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.lsqnonneg_lasso_work(A, b)
+    μmax = lasso_regparam_max(A, b)
+    scale = maximum(abs, A' * b)
+    R, S = Float64[], Float64[]
+
+    for μrel in (1e-8, 1e-3, 0.1, 0.5, 0.9, 1.0)
+        μ = μrel * μmax
+        x = DECAES.lsqnonneg_lasso!(work, μ)
+        d = lasso_dual(A, b, x, μ)
+        @test minimum(x) >= 0
+        @test maximum(d[x .== 0]; init = -Inf) <= 1e-12 * scale
+        @test maximum(abs, d[x .> 0]; init = 0.0) <= 1e-12 * scale
+        @test DECAES.ncomponents(work) == count(>(0), x)
+        @test DECAES.resnorm_sq(work) ≈ sum(abs2, A * x - b) rtol = 1e-12 atol = 1e-12 * sum(abs2, b)
+
+        # Convexity makes the KKT conditions a global optimality certificate already; the duality gap adds an independent quantitative bound on the objective, computed from different quantities.
+        # Its dual point collapses to zero at μ = 0 for any positive dual residual at all, so the certificate is meaningful only for μ > 0.
+        μ > 0 && @test lasso_gap(A, b, x, μ) <= 1e-12 * sum(abs2, b)
+
+        push!(R, sum(abs2, A * x - b))
+        push!(S, sum(x))
+    end
+
+    # ‖Ax_μ-b‖² is nondecreasing and ‖x_μ‖₁ nonincreasing in μ, which is what brackets the χ² root by construction
+    @test all(>=(-1e-12 * maximum(R)), diff(R))
+    @test all(<=(1e-12 * maximum(S; init = 0.0)), diff(S))
+
+    # x = 0 from the threshold onwards, since the KKT conditions at x = 0 read Aᵀb ≤ (μ/2)𝟙
+    @test all(==(0), DECAES.lsqnonneg_lasso(A, b, μmax))
+    μmax > 0 && @test any(>(0), DECAES.lsqnonneg_lasso(A, b, 0.999 * μmax))
+
+    # μ = 0 is the unregularized problem, whose residual norm is unique even where its minimizer is not
+    DECAES.lsqnonneg_lasso!(work, 0.0)
+    @test DECAES.resnorm_sq(work) ≈ sum(abs2, A * DECAES.lsqnonneg(A, b) - b) rtol = 1e-12 atol = 1e-12 * sum(abs2, b)
+
+    @inferred DECAES.lsqnonneg_lasso!(work, μmax / 2)
+end
+
+@testset "lsqnonneg_lasso" begin
+    for (m, n) in NNLS_SIZES
+        lsqnonneg_lasso_tests(m, n)
+    end
+end
+
+# The separable case A = I, where the objective splits into ‖xⱼ-bⱼ‖² + μxⱼ over each coordinate, pins the convention of μ against a factor of two
+@testset "lsqnonneg_lasso separable oracle" begin
+    n = 8
+    A = Matrix{Float64}(LinearAlgebra.I, n, n)
+    b = collect(range(0.1, 1.0; length = n))
+    for μ in (0.0, 0.05, 2 * b[3], 0.5, 1.0, 3.0)
+        @test DECAES.lsqnonneg_lasso(A, b, μ) ≈ max.(b .- μ / 2, 0)
+    end
+end
+
+# Comparison with exhaustive support search. The `n > m` cases saturate the active set at rank `m`, wherein a column already inside its span can still carry a positive dual,
+# and so only the exchange of `resolve_dependency!` reaches the minimum. Such a column is appended before it is exchanged away, so the active set passes through `m + 1` columns.
+@testset "lsqnonneg_lasso exhaustive support search" begin
+    for (m, n) in ((2, 3), (2, 5), (3, 4), (3, 7), (4, 8), (5, 5), (8, 6)), _ in 1:3
+        A, b = rand_NNLS_data(m, n)
+        μmax = lasso_regparam_max(A, b)
+        μmax == 0 && continue
+        for μrel in (1e-6, 1e-3, 0.1, 0.5, 0.9)
+            μ = μrel * μmax
+            x = DECAES.lsqnonneg_lasso(A, b, μ)
+            f★, _ = lasso_brute(A, b, μ)
+            @test lasso_obj(A, b, x, μ) <= f★ * (1 + 1e-14) + 1e-14
+        end
+    end
+end
+
+# Exactly dependent columns are the case pure ℓ¹ regularization cannot factor away, having no diagonal shift with which to make the Hessian definite.
+# The dependence coefficients decide the outcome: a column reproduced by others as A_k = A_{P\k} c is worth entering exactly when 𝟙ᵀc > 1, since it then carries the same fitted vector at strictly smaller 𝟙ᵀx.
+@testset "lsqnonneg_lasso exact column dependence" begin
+    a₁, a₂ = [1.0, 0.0, 0.5], [0.0, 1.0, 0.5]
+    b = 2 * a₁ + 3 * a₂
+
+    # A duplicate has 𝟙ᵀc = 1 and buys nothing, leaving the split of its coefficient with the solver, so only the invariants of the minimizer are pinned
+    A = [a₁ a₂ a₁]
+    x = DECAES.lsqnonneg_lasso(A, b, 1e-6)
+    @test A * x ≈ b rtol = 1e-5
+    @test sum(x) ≈ 5 rtol = 1e-5
+
+    # A scaled copy has 𝟙ᵀc = 2, so the fit moves onto it entirely and halves that part of 𝟙ᵀx
+    A = [a₁ a₂ 2 * a₁]
+    x = DECAES.lsqnonneg_lasso(A, b, 1e-6)
+    @test x ≈ [0.0, 3.0, 1.0] rtol = 1e-5 atol = 1e-6
+
+    # A sum of two columns likewise has 𝟙ᵀc = 2, and the fit moves onto it as far as nonnegativity of the columns it replaces allows
+    A = [a₁ a₂ a₁+a₂]
+    x = DECAES.lsqnonneg_lasso(A, b, 1e-6)
+    @test x ≈ [0.0, 1.0, 2.0] rtol = 1e-5 atol = 1e-6
+
+    for μ in (1e-3, 0.1, 1.0)
+        f★, _ = lasso_brute(A, b, μ)
+        @test lasso_obj(A, b, DECAES.lsqnonneg_lasso(A, b, μ), μ) <= f★ * (1 + 1e-14) + 1e-14
+    end
+end
+
+# A column already inside the span of the active set is appended before the exchange that removes it, so a full-rank active set passes through m + 1 columns and the QR runs one reflector past the end of its m rows.
+@testset "lsqnonneg_lasso rank saturation" begin
+    A = [0.13217884 0.38673057 0.33919489; 0.87444120 0.41875302 0.08204501]
+    b = [0.92680520, 0.62231336]
+    for μ in (2.239389e-3, 1e-6, 1e-2, 0.1)
+        x = DECAES.lsqnonneg_lasso(A, b, μ)
+        f★, _ = lasso_brute(A, b, μ)
+        @test lasso_obj(A, b, x, μ) <= f★ * (1 + 1e-14) + 1e-14
+        lasso_certify(A, b, x, μ)
+    end
+end
+
+# `NNLS.regparam_segment!` returns q = 𝟙ᵀG_PP⁻¹𝟙 and the end of the interval of μ over which `solve!` keeps the support it just solved on, where the path is affine and
+#
+#   ‖x_ν‖₁ = ‖x_μ‖₁ - (q/2)(ν - μ),
+#   ‖Ax_ν - b‖² = ‖Ax_μ - b‖² + (q/4)(ν² - μ²).
+#
+# Checking both against independent solves exercises the two triangular solves, q itself, the leave events of the active coefficients and the inactive dual slopes at once.
+@testset "NNLS.regparam_segment!" begin
+    for (m, n) in ((6, 4), (12, 8), (8, 12), (24, 20)), _ in 1:4
+        A, b = rand_NNLS_data(m, n)
+        μmax = lasso_regparam_max(A, b)
+        μmax == 0 && continue
+        work = DECAES.lsqnonneg_lasso_work(A, b)
+
+        for μrel in (0.05, 0.2, 0.5, 0.8)
+            μ = μrel * μmax
+            x = copy(DECAES.lsqnonneg_lasso!(work, μ))
+            S = findall(>(0), x)
+            isempty(S) && continue
+            res², seminrm = sum(abs2, A * x - b), sum(x)
+            q, μ_end = DECAES.NNLS.regparam_segment!(work, μ)
+
+            @test q ≈ sum((A[:, S]' * A[:, S]) \ ones(length(S))) rtol = 1e-12
+            @test μ < μ_end
+            @test μ_end <= μmax * (1 + 1e-12) # the last leave event is μmax itself, reached here through 2xᵢ/uᵢ rather than through 2max_j Aⱼᵀb
+
+            ν = (μ + μ_end) / 2
+            y = DECAES.lsqnonneg_lasso(A, b, ν)
+            @test findall(>(0), y) == S
+            @test sum(y) ≈ seminrm - q * (ν - μ) / 2 rtol = 1e-12
+            @test sum(abs2, A * y - b) ≈ res² + q * (ν - μ) * (ν + μ) / 4 rtol = 1e-12
+
+            # The interval ends where the support changes, so the same support cannot survive past it
+            @test findall(>(0), DECAES.lsqnonneg_lasso(A, b, μ_end * (1 + 1e-6))) != S
+        end
+    end
+end
+
+# The ℓ¹ passive solve carries no diagonal shift with which to condition A_P, so the families that stress ordinary NNLS stress it harder.
+# Optimality is certified rather than compared against a reference: on a near-dependent support the normal equations are worse conditioned than the solver whose answer they would judge.
+@testset "Adversarial lsqnonneg_lasso ($name)" for (name, data) in adversarial_NNLS_generators()
+    for (m, n) in ((16, 8), (16, 16), (32, 24))
+        A, b = data(m, n)
+        μmax = lasso_regparam_max(A, b)
+        for μrel in (1e-6, 1e-3, 0.1, 0.5, 0.9)
+            x = DECAES.lsqnonneg_lasso(A, b, μrel * μmax)
+            @test all(isfinite, x)
+            lasso_certify(A, b, x, μrel * μmax; rtol = 1e-9)
+        end
+
+    end
+end
+
+# Check that chains of warm-started solves equal those of cold solves for a non-monotonic sequence of μs.
+# The fitted vector Ax and penalty 𝟙ᵀx are the compared invariants.
+@testset "lsqnonneg_lasso cold and warm solves agree" begin
+    for (m, n) in ((4, 12), (12, 8), (13, 16), (32, 25))
+        A, b = rand_NNLS_data(m, n)
+        μmax = lasso_regparam_max(A, b)
+        μmax == 0 && continue
+        work = DECAES.lsqnonneg_lasso_work(A, b)
+        DECAES.NNLS.reset!(work)
+        for μrel in (0.1, 0.7, 0.3, 0.9, 0.5)
+            μ = μrel * μmax
+            x_warm = copy(DECAES.NNLS.solve!(work, μ)) # keeps the preceding active set
+            x_cold = DECAES.lsqnonneg_lasso(A, b, μ)
+            @test A * x_warm ≈ A * x_cold rtol = 1e-12 atol = 1e-12 * norm(b)
+            @test sum(x_warm) ≈ sum(x_cold) rtol = 1e-12 atol = 1e-12
+        end
     end
 end
 
@@ -1418,7 +1642,7 @@ function NNLSTikhonovRegProblemCache_tests(m, n, ::Val{N} = Val(5)) where {N}
         count += 1
         if count <= N
             @test !any(isnan.(DECAES.regparam.(work.cache[1:count])))
-            @test all(isnan.(DECAES.regparam.(work.cache[count+1:N])))
+            @test all(isnan.(DECAES.regparam.(work.cache[(count+1):N])))
         else
             @test !any(isnan.(DECAES.regparam.(work.cache)))
         end
@@ -1439,8 +1663,8 @@ function verify_reg_kkt(A0, b0, x, mu)
     D64 = Double64
     A, b, x = D64.(A0), D64.(b0), D64.(x)
     w = A' * (b - A * x) .- D64(mu)^2 .* x # dual (negative half-gradient) of the Tikhonov objective
-    ε = 1e-8 * max(1, norm(A' * b))
-    @test all(>=(-1e-10), x) # primal feasibility
+    ε = 1e-14 * max(1, norm(A' * b))
+    @test all(>=(-1e-14), x) # primal feasibility
     @test all(<=(ε), w) # dual feasibility
     @test maximum(abs, x .* w; init = zero(D64)) <= ε * max(1, maximum(x; init = 0.0)) # complementary slackness
 end
