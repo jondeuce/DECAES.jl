@@ -474,8 +474,8 @@ function lcurve_corner_tests()
     φ, t₀, Δ = Base.MathConstants.φ, 0.7, 1.0
     x⃗ = SA[t₀-Δ/φ^2, t₀, t₀+Δ/φ^3, t₀+Δ/φ]
     s = DECAES.golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], SA[Inf, Inf])
-    @test DECAES.move_right(f, DECAES.expand_left(f, s)).x⃗ ≈ s.x⃗
-    @test DECAES.move_left(f, DECAES.expand_right(f, s)).x⃗ ≈ s.x⃗
+    @test DECAES.move_right(f, DECAES.expand_left(f, s)).t⃗ ≈ s.t⃗
+    @test DECAES.move_left(f, DECAES.expand_right(f, s)).t⃗ ≈ s.t⃗
 
     # The branch queue holds the discarded siblings in decreasing width, so retiring its oldest entry examines the largest unexplored region first. `lcurve_certify!` depends on that ordering.
     let f = build_lcurve_corner_cached_fun()
@@ -487,10 +487,10 @@ function lcurve_corner_tests()
             push!(f.state_stack, (length(f.state_stack), s))
             s = DECAES.move(f, s, DECAES.contract_left(s))
         end
-        widths = [v.x⃗[4] - v.x⃗[1] for (_, v) in f.state_stack]
+        widths = [v.t⃗[4] - v.t⃗[1] for (_, v) in f.state_stack]
         @test issorted(widths; rev = true)
         _, widest = popfirst!(f.state_stack)
-        @test widest.x⃗[4] - widest.x⃗[1] == maximum(widths)
+        @test widest.t⃗[4] - widest.t⃗[1] == maximum(widths)
         @test length(f.state_stack) == 7
     end
 
@@ -503,10 +503,10 @@ function lcurve_corner_tests()
             s = s₀
             for _ in 1:20
                 s = move(f, s)
-                w = s.x⃗[4] - s.x⃗[1]
-                @test issorted(s.x⃗)
-                @test (s.x⃗[2] - s.x⃗[1]) / w ≈ 1 / φ^2 atol = 1.0f-2
-                @test (s.x⃗[3] - s.x⃗[1]) / w ≈ 1 / φ atol = 1.0f-2
+                w = s.t⃗[4] - s.t⃗[1]
+                @test issorted(s.t⃗)
+                @test (s.t⃗[2] - s.t⃗[1]) / w ≈ 1 / φ^2 atol = 1.0f-2
+                @test (s.t⃗[3] - s.t⃗[1]) / w ≈ 1 / φ atol = 1.0f-2
             end
         end
     end
@@ -1185,6 +1185,137 @@ end
     end
 end
 
+function lsqnonneg_chi2_lasso_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.lsqnonneg_chi2_lasso_work(A, b)
+    res²_max = sum(abs2, b) # lim_{μ -> ∞} ‖A*x(μ) - b‖² = ‖b‖², since lim_{μ -> ∞} x(μ) = 0
+    chi2_target = 1.01 + 0.99 * rand()
+
+    (; x, mu, chi2) = DECAES.lsqnonneg_chi2_lasso!(work, chi2_target)
+    res²_min = DECAES.resnorm_sq(work.nnls_prob) # the unregularized residual the search normalized against
+    @test all(>=(0), x)
+    @test mu >= 0
+    lasso_certify(A, b, x, mu)
+
+    if res²_min <= 1e-12 * res²_max
+        # Minimum is approx zero in floating point, chi2 will be ~noise
+        @test isfinite(mu)
+    elseif chi2_target * res²_min >= res²_max
+        # The requested residual is not reached before the solution vanishes, so the zero solution and the χ² it does reach are reported.
+        # A warm-started active set can carry the threshold column at a roundoff-scale coefficient rather than dropping it, so `x` is negligible rather than the exact zero a cold solve there returns.
+        @test maximum(x) <= 1e-12 * maximum(DECAES.solution(work.nnls_prob))
+        @test mu ≈ lasso_regparam_max(A, b)
+        @test chi2 ≈ res²_max / res²_min
+    else
+        @test mu > 0
+        @test chi2 ≈ sum(abs2, A * x - b) / res²_min
+        @test chi2 ≈ chi2_target rtol = 1e-8
+    end
+
+    @inferred DECAES.lsqnonneg_chi2_lasso!(work, chi2_target)
+end
+
+@testset "lsqnonneg_chi2_lasso" begin
+    for (m, n) in NNLS_SIZES
+        lsqnonneg_chi2_lasso_tests(m, n)
+    end
+end
+
+function lsqnonneg_mdp_lasso_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.lsqnonneg_mdp_lasso_work(A, b)
+    res²_max = sum(abs2, b)
+
+    (; x, mu, chi2) = DECAES.lsqnonneg_mdp_lasso!(work, √(res²_max / 10))
+    res²_min = sum(abs2, A * DECAES.lsqnonneg(A, b) - b)
+    res² = sum(abs2, A * x - b)
+    @test all(>=(0), x)
+    @test mu >= 0
+    lasso_certify(A, b, x, mu)
+
+    if mu == 0
+        @test res² ≈ res²_min atol = 1e-12
+        @test chi2 == 1
+    else
+        # The root ‖Ax_μ - b‖² = δ² is returned based on the segment model, not to a search tolerance
+        @test res² ≈ res²_max / 10 rtol = 1e-8 atol = 1e-12
+
+        # `chi2` divides by the residual of the ℓ¹ solve at μ = 0, which is roundoff-level where the fit is exact, so the ratio is checked only above that floor
+        res²_min > eps() * res²_max && @test chi2 ≈ res² / res²_min rtol = 1e-8 atol = 1e-12
+    end
+
+    @inferred DECAES.lsqnonneg_mdp_lasso!(work, √(res²_max / 10))
+end
+
+@testset "lsqnonneg_mdp_lasso" begin
+    for (m, n) in NNLS_SIZES
+        lsqnonneg_mdp_lasso_tests(m, n)
+    end
+end
+
+# A value of δ just above the unregularized residual must be resolved as tightly as one far above it:
+# a relative tolerance alone accepts μ = 0 as soon as δ² − ‖Ax₀ − b‖² falls under the threshold, silently returning the unregularized fit for a discrepancy that genuinely requires regularization.
+@testset "lsqnonneg_mdp_lasso resolves a target just above the unregularized residual" begin
+    for (m, n) in ((16, 12), (32, 20))
+        A, b = rand_NNLS_data(m, n)
+        R₀ = sum(abs2, A * DECAES.lsqnonneg(A, b) - b)
+        b² = sum(abs2, b)
+        for f in (1.0005, 1.005, 1.05)
+            f * R₀ >= b² && continue
+            (; x, mu) = DECAES.lsqnonneg_mdp_lasso(A, b, √(f * R₀))
+            @test mu > 0
+            @test sum(abs2, A * x - b) ≈ f * R₀ rtol = 1e-8
+        end
+    end
+end
+
+# The two MDP endpoints: δ at or below the unregularized residual returns the unregularized solution, and δ at or above ‖b‖ is reported at μmax rather than at the Tikhonov μ = ∞.
+@testset "lsqnonneg_mdp_lasso endpoints" begin
+    A, b = rand(16, 12), rand(16)
+    x₀ = DECAES.lsqnonneg_lasso(A, b, 0) # the left endpoint returns the ℓ¹ path at μ = 0, which is what the reported χ² is measured against
+    res_min = norm(A * x₀ - b)
+
+    # `res_min` is recomputed here and sits an ulp off the solver's own baseline, and a δ an ulp above it has a genuine root rather than the endpoint, so the endpoint is approached from strictly below
+    (; x, mu, chi2) = DECAES.lsqnonneg_mdp_lasso(A, b, res_min * (1 - 1e-12))
+    @test mu == 0 && chi2 == 1
+    @test x ≈ x₀
+
+    (; x, mu, chi2) = DECAES.lsqnonneg_mdp_lasso(A, b, 2 * norm(b))
+    @test mu ≈ lasso_regparam_max(A, b)
+    @test maximum(x) <= 1e-12 * maximum(x₀) # a warm-started active set can carry the threshold column at a roundoff-scale coefficient; see `lsqnonneg_chi2_lasso_tests`
+    @test chi2 ≈ sum(abs2, b) / res_min^2
+
+    @test_throws AssertionError DECAES.lsqnonneg_mdp_lasso(A, b, 0.0)
+end
+
+# Orthogonal columns separate the ℓ¹ problem into xⱼ = max(0, (cⱼ - μ/2)/nⱼ) with cⱼ = Aⱼᵀb and nⱼ = ‖Aⱼ‖².
+# On the support segment containing μ = 0 the residual is then exactly ‖Ax₀ - b‖² + qμ²/4 with q = Σⱼ1/nⱼ, whose residual-target root is the explicit μ★ = 2√((res²_target - ‖Ax₀ - b‖²)/q).
+# A target inside that segment is reached by the first step; one beyond the first knot is reached by the step taken on the support the smallest cⱼ has left. Both are exact, the segment model being certified before it is used.
+@testset "lasso residual-target closed form" begin
+    n⃗, c⃗, R₀ = [1.2, 1.0, 0.8], [1.5, 1.0, 2.0], 4.0
+    A = [diagm(.√n⃗); zeros(1, 3)]
+    b = [c⃗ ./ .√n⃗; √R₀]
+    q = sum(inv, n⃗)
+    μ₁ = 2 * minimum(c⃗) # the first knot
+
+    μ★ = 0.8 * μ₁
+    res²_target = R₀ + q * μ★^2 / 4
+    for (; x, mu, chi2) in (DECAES.lsqnonneg_chi2_lasso(A, b, res²_target / R₀), DECAES.lsqnonneg_mdp_lasso(A, b, √res²_target))
+        @test mu ≈ μ★ rtol = 1e-12
+        @test x ≈ (c⃗ .- mu / 2) ./ n⃗ rtol = 1e-12
+        @test chi2 ≈ res²_target / R₀ rtol = 1e-12
+    end
+
+    q₂ = q - inv(n⃗[2])
+    μ★₂ = 1.25 * μ₁ # below the second knot 2c⃗[1] = 3
+    res²_target₂ = R₀ + q * μ₁^2 / 4 + q₂ * (μ★₂^2 - μ₁^2) / 4
+    for (; x, mu, chi2) in (DECAES.lsqnonneg_chi2_lasso(A, b, res²_target₂ / R₀), DECAES.lsqnonneg_mdp_lasso(A, b, √res²_target₂))
+        @test mu ≈ μ★₂ rtol = 1e-12
+        @test findall(>(0), x) == [1, 3]
+        @test sum(abs2, A * x - b) ≈ res²_target₂ rtol = 1e-12
+    end
+end
+
 # Exactly dependent columns are the case pure ℓ¹ regularization cannot factor away, having no diagonal shift with which to make the Hessian definite.
 # The dependence coefficients decide the outcome: a column reproduced by others as A_k = A_{P\k} c is worth entering exactly when 𝟙ᵀc > 1, since it then carries the same fitted vector at strictly smaller 𝟙ᵀx.
 @testset "lsqnonneg_lasso exact column dependence" begin
@@ -1274,6 +1405,12 @@ end
             lasso_certify(A, b, x, μrel * μmax; rtol = 1e-9)
         end
 
+        # A selection method reporting μ = 0 hands back the unregularized solve, which is not the ℓ¹ solver under test here
+        for (; x, mu) in (DECAES.lsqnonneg_chi2_lasso(A, b, 1.02), DECAES.lsqnonneg_reginska_lasso(A, b), DECAES.lsqnonneg_mdp_lasso(A, b, 0.5 * norm(b) + eps()))
+            @test all(isfinite, x)
+            @test isfinite(mu) && mu >= 0
+            mu > 0 && lasso_certify(A, b, x, mu; rtol = 1e-9)
+        end
     end
 end
 
@@ -1293,6 +1430,153 @@ end
             @test A * x_warm ≈ A * x_cold rtol = 1e-12 atol = 1e-12 * norm(b)
             @test sum(x_warm) ≈ sum(x_cold) rtol = 1e-12 atol = 1e-12
         end
+    end
+end
+
+# Regińska's criterion for the ℓ¹ penalty balances the two terms of the objective, ‖Ax_μ - b‖² = μ‖x_μ‖₁, this being stationarity of Ψ(μ) = ‖Ax_μ - b‖²‖x_μ‖₁.
+function lsqnonneg_reginska_lasso_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    (; x, mu, chi2) = DECAES.lsqnonneg_reginska_lasso(A, b)
+    res²_min = sum(abs2, A * DECAES.lsqnonneg(A, b) - b)
+    @test all(>=(0), x)
+    @test mu >= 0
+    lasso_certify(A, b, x, mu)
+
+    if mu > 0
+        res² = sum(abs2, A * x - b)
+        @test res² ≈ mu * sum(x) rtol = 1e-8
+        @test chi2 ≈ res² / res²_min rtol = 1e-8
+        @test chi2 >= 1
+
+        # The selected μ is a local minimizer of Ψ, not the trivial one at the far endpoint, so it is a downward crossing of res² - μ‖x‖₁
+        Ψ(ν) = (y = DECAES.lsqnonneg_lasso(A, b, ν); sum(abs2, A * y - b) * sum(y))
+        @test Ψ(mu) <= min(Ψ(mu * exp(-0.1)), Ψ(mu * exp(0.1))) * (1 + 1e-9)
+    end
+
+    @inferred DECAES.lsqnonneg_reginska_lasso(A, b)
+end
+
+@testset "lsqnonneg_reginska_lasso" begin
+    for (m, n) in NNLS_SIZES
+        lsqnonneg_reginska_lasso_tests(m, n)
+    end
+end
+
+function reginska_lasso_log_abs_slope(A, b, logμ)
+    x = DECAES.lsqnonneg_lasso(A, b, exp(logμ))
+    res², seminorm = sum(abs2, A * x - b), sum(x)
+    return seminorm == 0 ? Inf : log(res²) - log(seminorm) - logμ
+end
+
+# A dense grid finds the leftmost crossing independently of the search, and where the search reports none, confirms that none exists.
+# The balance point sits a distance ≈ q·res²(0)/‖x_0‖₁² above the starting point, so the noise level is what decides whether more than the first interval is visited at all.
+@testset "lsqnonneg_reginska_lasso leftmost crossing" begin
+    for noise in (1e-3, 1e-2, 5e-2), (m, n) in ((32, 40), (48, 40), (32, 60), (48, 32), (24, 48))
+        A, b = reginska_expdecay_data(m, n, noise)
+        (; mu) = DECAES.lsqnonneg_reginska_lasso(A, b)
+        lc = reginska_leftmost_downcrossing(reginska_lasso_log_abs_slope, A, b, -20.0:0.01:6.0)
+        if mu > 0
+            @test !isnan(lc)
+            @test abs(log(mu) - lc) < 1e-5 # the reference bisects to 1e-6 in logμ
+        else
+            @test isnan(lc)
+        end
+    end
+end
+
+# Repeating every column makes the path degenerate: an inactive duplicate carries its twin's dual, which stationarity holds at zero, so the intervals of μ over which the active set is optimal collapse to nothing.
+# The criterion is untouched by this and every mechanism the search advances by is, so the same dense grid pins the answer.
+@testset "lsqnonneg_reginska_lasso degenerate path" begin
+    for (m, n) in ((16, 8), (16, 16), (32, 24), (48, 40)), _ in 1:4
+        A = rand(m, cld(n, 2))[:, mod1.(1:n, cld(n, 2))]
+        b = A * abs.(randn(n)) .+ 1e-3 .* randn(m)
+        (; mu) = DECAES.lsqnonneg_reginska_lasso(A, b)
+        logμmax = log(lasso_regparam_max(A, b))
+        lc = reginska_leftmost_downcrossing(reginska_lasso_log_abs_slope, A, b, logμmax .+ (-30.0:0.01:0.0))
+        if mu > 0
+            @test !isnan(lc)
+            @test abs(log(mu) - lc) < 1e-5
+        else
+            @test isnan(lc)
+        end
+    end
+end
+
+# The balance polynomial of a support segment, (3q/4)μ² - ‖x₀‖₁μ + res²(0), has two roots whose separation is unbounded below, the first a local minimum of Ψ and the second a local maximum.
+# No scan of fixed resolution can be certified against a close enough pair, since it can sample only outside the interval between them and see no sign change at all.
+# One column with q = 1, ‖x₀‖₁ = 1 and res²(0) = c makes the pair explicit: it exists for c < 1/3 and closes as c approaches it, and the solution is x = 1 - μ/2 throughout.
+@testset "lsqnonneg_reginska_lasso narrow crossing pair" begin
+    for c in (0.1, 0.3, 0.3325, 1 / 3 - 1e-6)
+        A, b = reshape([1.0, 0.0], 2, 1), [1.0, √c]
+        μ★ = 2 * c / (1 + √(1 - 3 * c)) # the smaller root, in the form free of cancellation as the discriminant vanishes
+        (; x, mu, chi2) = DECAES.lsqnonneg_reginska_lasso(A, b)
+        @test mu ≈ μ★ rtol = 1e-12
+        @test x ≈ [1 - μ★ / 2] rtol = 1e-12
+        @test chi2 ≈ (c + μ★^2 / 4) / c rtol = 1e-12
+    end
+end
+
+# `regparam_segment!` certifies the quadratic model only on the interval it returns, and the search brackets an interval endpoint by a relative nudge of √eps rather than solving at it.
+# Two support events inside one such window leave a third segment between the endpoint and the solved point, across which that quadratic is extrapolated, and the balance point comes back wrong by orders of magnitude more than roundoff unless refined.
+# Orthogonal columns make the path explicit: with nⱼ = ‖Aⱼ‖² and cⱼ = Aⱼᵀb the problem separates into xⱼ = max(0, (cⱼ - μ/2)/nⱼ) with knots at μ = 2cⱼ, and on an active set S
+#   res² - μ‖x‖₁ = (3q/4)μ² - Kμ + (‖b‖² - M) with q = Σ 1/nⱼ, K = Σ cⱼ/nⱼ and M = Σ cⱼ²/nⱼ,
+# from which c₁ follows backwards from a chosen balance point. Placing that point midway between the two closest knots leaves the first two segments free of a crossing, so it is also the leftmost one.
+@testset "lsqnonneg_reginska_lasso events within one nudge" begin
+    n₁, R₀ = 1.2, 9.0
+    for δ in (1e-6, √eps() / 2, √eps() / 8)
+        c₂, c₃, μ★ = 1 + δ, 1.0, 2 + δ # the knots 2c₃ < μ★ < 2c₂ straddle the balance point, within a nudge of one another once δ ≲ √eps
+        c₁ = n₁ * ((3 * (1 / n₁ + 1) * μ★^2 / 4 + R₀ + c₃^2) / μ★ - c₂)
+        A = [√n₁ 0.0 0.0; 0.0 1.0 0.0; 0.0 0.0 1.0; 0.0 0.0 0.0]
+        b = [c₁ / √n₁, c₂, c₃, √R₀]
+
+        (; x, mu, chi2) = DECAES.lsqnonneg_reginska_lasso(A, b)
+        @test mu ≈ μ★ rtol = 1e-12
+        @test findall(>(0), x) == [1, 2] # the middle segment, the one neither of the two solves bracketing the knots lands on
+        @test sum(abs2, A * x - b) ≈ mu * sum(x) rtol = 1e-12
+        @test chi2 ≈ sum(abs2, A * x - b) / R₀ rtol = 1e-12
+        lasso_certify(A, b, x, mu)
+    end
+end
+
+# Regularization parameter selection should return the unregularized solution at μ = 0 by convention on an exact fit or a vanishing unregularized solution.
+# MDP is exempt for exact fits; its degenerate case is covered in `lsqnonneg_mdp_lasso endpoints`.
+@testset "lsqnonneg_lasso selectors degenerate (μ = 0)" begin
+    A = rand(8, 6)
+    for (; x, mu, chi2) in (
+        DECAES.lsqnonneg_chi2_lasso(A, zeros(8), 1.02), # b = 0: res²_min = 0 and x_unreg = 0
+        DECAES.lsqnonneg_reginska_lasso(A, zeros(8)),
+        DECAES.lsqnonneg_chi2_lasso(A, -A * rand(6), 1.02), # b ∈ -cone(A): x_unreg = 0, which is already the μ -> ∞ limit
+        DECAES.lsqnonneg_reginska_lasso(A, -A * rand(6)),
+        DECAES.lsqnonneg_mdp_lasso(A, -A * rand(6), 1e-3), # δ below the unregularized residual ‖b‖ of the zero solution
+        DECAES.lsqnonneg_chi2_lasso(A, A * rand(6), 1.02), # b ∈ cone(A): an exact unregularized fit, whose χ² target is a percentage of roundoff
+        DECAES.lsqnonneg_reginska_lasso(A, A * rand(6)),
+    )
+        @test mu == 0 && chi2 == 1 && all(>=(0), x)
+    end
+end
+
+# On a fixed support the ℓ¹ path is exactly affine, x_P(μ) = x_P(0) - (μ/2)G_PP⁻¹𝟙, so with q = 𝟙ᵀG_PP⁻¹𝟙 the residual and seminorm read
+#   res²(μ) = res²(0) + qμ²/4,    ‖x_μ‖₁ = ‖x_0‖₁ - qμ/2,
+# and the balance point is the smaller root of (3q/4)μ² - ‖x_0‖₁μ + res²(0) = 0.
+# The selected μ lies on the segment containing μ = 0 whenever it leaves the unregularized support intact.
+@testset "lsqnonneg_reginska_lasso segment oracle" begin
+    m, n = 48, 40
+    t = range(0, 2; length = m)
+    τ = exp10.(range(-1.5, 0.5; length = n))
+    A = [exp(-tᵢ / τⱼ) for tᵢ in t, τⱼ in τ]
+    x = zeros(n)
+    x[[4, 17, 31]] .= (0.2, 0.5, 0.3)
+
+    for noise in (1e-4, 1e-3, 1e-2)
+        b = A * x .+ noise .* sin.(1:m)
+        x_unreg = DECAES.lsqnonneg(A, b)
+        S = findall(>(0), x_unreg)
+        res²₀, seminorm₀ = sum(abs2, A * x_unreg - b), sum(x_unreg)
+        q = sum((A[:, S]' * A[:, S]) \ ones(length(S)))
+
+        res = DECAES.lsqnonneg_reginska_lasso(A, b)
+        @test findall(>(0), res.x) == S
+        @test res.mu ≈ 2 * res²₀ / (seminorm₀ + √(seminorm₀^2 - 3 * q * res²₀)) rtol = 1e-12
     end
 end
 
@@ -1460,18 +1744,22 @@ end
     b = A * x .+ 1e-3 .* sin.(1:m)
     δ = 1e-2 * norm(b) # scaled alongside A and b, since the discrepancy level is a residual norm
 
-    for (name, rtol, f) in [
-        ("unreg", 1e-12, (A, b, s) -> (; mu = 0.0, x = DECAES.lsqnonneg(A, b), chi2 = 1.0)),
-        ("chi2", 1e-3, (A, b, s) -> DECAES.lsqnonneg_chi2(A, b, 1.02)),
-        ("mdp", 1e-3, (A, b, s) -> DECAES.lsqnonneg_mdp(A, b, s * δ)),
-        ("reginska", 1e-9, (A, b, s) -> DECAES.lsqnonneg_reginska(A, b)),
-        ("lcurve", 1e-9, (A, b, s) -> DECAES.lsqnonneg_lcurve(A, b)),
-        ("gcv", 1e-3, (A, b, s) -> DECAES.lsqnonneg_gcv(A, b)),
+    # `p` is the power of the scale the regularization parameter carries: the Tikhonov μ multiplies a seminorm of degree two in x and the ℓ¹ μ one of degree one, so the latter picks up an extra factor
+    for (name, rtol, p, f) in [
+        ("unreg", 1e-12, 1, (A, b, s) -> (; mu = 0.0, x = DECAES.lsqnonneg(A, b), chi2 = 1.0)),
+        ("chi2", 1e-3, 1, (A, b, s) -> DECAES.lsqnonneg_chi2(A, b, 1.02)),
+        ("chi2-l1", 1e-9, 2, (A, b, s) -> DECAES.lsqnonneg_chi2_lasso(A, b, 1.02)),
+        ("mdp", 1e-3, 1, (A, b, s) -> DECAES.lsqnonneg_mdp(A, b, s * δ)),
+        ("mdp-l1", 1e-9, 2, (A, b, s) -> DECAES.lsqnonneg_mdp_lasso(A, b, s * δ)),
+        ("reginska", 1e-9, 1, (A, b, s) -> DECAES.lsqnonneg_reginska(A, b)),
+        ("reginska-l1", 1e-9, 2, (A, b, s) -> DECAES.lsqnonneg_reginska_lasso(A, b)),
+        ("lcurve", 1e-9, 1, (A, b, s) -> DECAES.lsqnonneg_lcurve(A, b)),
+        ("gcv", 1e-3, 1, (A, b, s) -> DECAES.lsqnonneg_gcv(A, b)),
     ]
         r = f(A, b, 1.0)
         for scale in (1e-9, 1e9)
             rs = f(scale .* A, scale .* b, scale)
-            @test rs.mu / scale ≈ r.mu rtol = rtol atol = 1e-12
+            @test rs.mu / scale^p ≈ r.mu rtol = rtol atol = 1e-12
             @test rs.x ≈ r.x rtol = rtol atol = 1e-12
             @test rs.chi2 ≈ r.chi2 rtol = rtol
         end

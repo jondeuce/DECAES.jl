@@ -310,12 +310,12 @@ struct PaddedVector{T, Tb <: AbstractVector{T}} <: AbstractVector{T}
     b::Tb # decay curve data
     pad::Int
 end
-Base.size(x::PaddedVector) = (length(x.b) + x.pad,)
-Base.parent(x::PaddedVector) = x.b
+Base.size(v::PaddedVector) = (length(v.b) + v.pad,)
+Base.parent(v::PaddedVector) = v.b
 
-function Base.copyto!(y::AbstractVector{T}, x::PaddedVector{T}) where {T}
-    @assert size(x) == size(y)
-    (; b, pad) = x
+function Base.copyto!(y::AbstractVector{T}, v::PaddedVector{T}) where {T}
+    @assert size(v) == size(y)
+    (; b, pad) = v
     m = length(b)
     @inbounds @simd for i in 1:m
         y[i] = b[i]
@@ -1085,13 +1085,13 @@ struct LCurveCornerPoint{T}
     sig::UInt128 # digest of the active set; see `NNLS.active_signature`
 end
 
-# A golden state is four abscissas x₁ < x₂ < x₃ < x₄ with x₂ = x₁ + Δ/φ², x₃ = x₁ + Δ/φ and Δ = x₄ - x₁.
+# A golden state is four abscissas t₁ < t₂ < t₃ < t₄ with t₂ = t₁ + Δ/φ², t₃ = t₁ + Δ/φ and Δ = t₄ - t₁.
 # `C` and `κ⃗ₒ` are stored rather than looked up so that every decision is a function of the branch state alone.
 struct LCurveCornerState{T}
-    x⃗::SVector{4, T} # grid of regularization parameters
-    p⃗::SVector{4, LCurveCornerPoint{T}} # L-curve points evaluated at x⃗
+    t⃗::SVector{4, T} # grid of log-regularization parameters
+    p⃗::SVector{4, LCurveCornerPoint{T}} # L-curve points evaluated at t⃗
     C::SVector{2, T} # Menger curvatures of the triples (p₁, p₂, p₃) and (p₂, p₃, p₄)
-    κ⃗ₒ::SVector{2, T} # curvature at the nearest point this branch evaluated outside [x₁, x₄] on each side, +Inf where it has evaluated none
+    κ⃗ₒ::SVector{2, T} # curvature at the nearest point this branch evaluated outside [t₁, t₄] on each side, +Inf where it has evaluated none
 end
 
 struct LCurveCornerCachedFunction{T, F <: CachedFunction{T, LCurveCornerPoint{T}}, C <: GrowableCache{Int, LCurveCornerState{T}}}
@@ -1099,7 +1099,7 @@ struct LCurveCornerCachedFunction{T, F <: CachedFunction{T, LCurveCornerPoint{T}
     state_stack::C # states whose discarded sibling branch is unexplored, innermost last
 end
 Base.empty!(f::LCurveCornerCachedFunction) = (empty!(f.f); empty!(f.state_stack); f)
-(f::LCurveCornerCachedFunction{T})(x::T) where {T} = f.f(x)
+(f::LCurveCornerCachedFunction{T})(t::T) where {T} = f.f(t)
 
 @doc raw"""
     lcurve_corner(f, t₀, P₀, sig₀; kwargs...)
@@ -1127,14 +1127,14 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, t₀::T, P₀::SVector{
 
     # The search domain is where ρ = μ² is finite and normal, intersected with the caller's admissible interval.
     # The state slides to fit the domain rather than shrinking around the seed, so the first corner is still sought at the scale `init_width`.
-    # Δ ≤ U - L together with 1/φ + 1/φ² = 1 gives x₁ ≥ L and x₄ ≤ U. The clamp is inert for 1 < τ < 6 + 2√17, where the caller has already excluded a seed outside [t₋, t₊].
+    # Δ ≤ U - L together with 1/φ + 1/φ² = 1 gives t₁ ≥ L and t₄ ≤ U. The clamp is inert for 1 < τ < 6 + 2√17, where the caller has already excluded a seed outside [t₋, t₊].
     φ = T(Base.MathConstants.φ)
     L, U = max(log(floatmin(T)) / 2, T(bounds[1])), min(log(floatmax(T)) / 2, T(bounds[2]))
     L < U || return T(NaN)
     Δ = min(T(init_width), prevfloat(U - L))
     tₛ = clamp(t₀, L + Δ / φ^2, U - Δ / φ)
-    x⃗ = SA[tₛ-Δ/φ^2, tₛ, tₛ+Δ/φ^3, tₛ+Δ/φ]
-    init = golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], SA[T(Inf), T(Inf)])
+    t⃗ = SA[tₛ-Δ/φ^2, tₛ, tₛ+Δ/φ^3, tₛ+Δ/φ]
+    init = golden_state(t⃗, SA[f(t⃗[1]), f(t⃗[2]), f(t⃗[3]), f(t⃗[4])], SA[T(Inf), T(Inf)])
 
     # A reversal brackets a curvature basin at the Menger scale, but only proposes it: the analytic κ may have no maximum inside it and genuine maxima outside.
     # Contraction and backtracking both stay within the candidate, so a failed certification resumes expanding outward; otherwise the search could never leave a basin it had entered.
@@ -1146,14 +1146,14 @@ function lcurve_corner(f::LCurveCornerCachedFunction{T}, t₀::T, P₀::SVector{
             budget -= spent
             rank(chainbest) > rank(best) && (best = chainbest)
             !found && break
-            x = lcurve_certify!(f, candidate; xtol, Ptol, max_log_slope, max_backtrack)
-            !isnan(x) && return x
+            t = lcurve_certify!(f, candidate; xtol, Ptol, max_log_slope, max_backtrack)
+            !isnan(t) && return t
         end
     end
 
     # Both directions are exhausted; the best-turning state visited is the last candidate.
-    x = lcurve_certify!(f, best; xtol, Ptol, max_log_slope, max_backtrack)
-    !isnan(x) && return x
+    t = lcurve_certify!(f, best; xtol, Ptol, max_log_slope, max_backtrack)
+    !isnan(t) && return t
 
     # Nothing the branch search reached certifies, so fall back to a brute force sweep. NaN from the sweep leaves `lsqnonneg_lcurve!` returning the unregularized solution.
     return lcurve_sweep!(f, L, U, max_log_slope; nsweep, max_candidates, xtol, Ptol, max_backtrack)
@@ -1197,8 +1197,8 @@ function lcurve_sweep!(f::LCurveCornerCachedFunction{T}, L::T, U::T, max_log_slo
         end
         best[2] == 0 && break
         prev = best
-        xⱼ = L + (-best[2] - 1) * δ
-        y = certify_span!(f, xⱼ - δ, xⱼ + δ, δ, L, U; xtol, Ptol, max_log_slope, max_backtrack)
+        tⱼ = L + (-best[2] - 1) * δ
+        y = certify_span!(f, tⱼ - δ, tⱼ + δ, δ, L, U; xtol, Ptol, max_log_slope, max_backtrack)
         !isnan(y) && return y
     end
 
@@ -1214,9 +1214,9 @@ tangent_angle(p::LCurveCornerPoint{T}, t::T) where {T} = -atan(exp(p.P[1] - p.P[
 function certify_span!(f::LCurveCornerCachedFunction{T}, a::T, c::T, δ::T, L::T, U::T; xtol::T, Ptol::T, max_log_slope::T, max_backtrack::Int) where {T}
     c - a > 0 || return T(NaN)
     φ = T(Base.MathConstants.φ)
-    x⃗ = SA[a, a+(c-a)/φ^2, a+(c-a)/φ, c]
+    t⃗ = SA[a, a+(c-a)/φ^2, a+(c-a)/φ, c]
     κ⃗ₒ = SA[a - δ >= L ? f(a - δ).κ : T(Inf), c + δ <= U ? f(c + δ).κ : T(Inf)]
-    return lcurve_certify!(f, golden_state(x⃗, SA[f(x⃗[1]), f(x⃗[2]), f(x⃗[3]), f(x⃗[4])], κ⃗ₒ); xtol, Ptol, max_log_slope, max_backtrack)
+    return lcurve_certify!(f, golden_state(t⃗, SA[f(t⃗[1]), f(t⃗[2]), f(t⃗[3]), f(t⃗[4])], κ⃗ₒ); xtol, Ptol, max_log_slope, max_backtrack)
 end
 
 # Search `state` for a corner, and if none is found retry in a part the search skipped, up to `max_backtrack` times.
@@ -1225,8 +1225,8 @@ end
 function lcurve_certify!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}; xtol::T, Ptol::T, max_log_slope::T, max_backtrack::Int) where {T}
     empty!(f.state_stack)
     for _ in 0:max_backtrack
-        x = lcurve_localize!(f, state; xtol, Ptol, max_log_slope)
-        !isnan(x) && return x
+        t = lcurve_localize!(f, state; xtol, Ptol, max_log_slope)
+        !isnan(t) && return t
         isempty(f.state_stack) && break
         _, parent = popfirst!(f.state_stack)
         state = move(f, parent, !contract_left(parent))
@@ -1241,9 +1241,9 @@ function expand_to_reversal(f::LCurveCornerCachedFunction{T}, state::LCurveCorne
     best = state
     prev = contract_left(state)
     for k in 1:budget
-        (; x⃗) = state
-        x = left ? x⃗[1] - (x⃗[4] - x⃗[1]) / T(Base.MathConstants.φ) : x⃗[4] + (x⃗[4] - x⃗[1]) / T(Base.MathConstants.φ)
-        L < x < U || return (false, state, state, best, k - 1)
+        (; t⃗) = state
+        t = left ? t⃗[1] - (t⃗[4] - t⃗[1]) / T(Base.MathConstants.φ) : t⃗[4] + (t⃗[4] - t⃗[1]) / T(Base.MathConstants.φ)
+        L < t < U || return (false, state, state, best, k - 1)
         expanded = expand(f, state, left)
 
         # Saturation is tested before the reversal: a saturated endpoint makes its Menger triples degenerate, so the expanded state's direction carries no information.
@@ -1252,7 +1252,7 @@ function expand_to_reversal(f::LCurveCornerCachedFunction{T}, state::LCurveCorne
         if contract_left(expanded) != prev
             # The expansion that reversed also evaluated a point just outside `state`. Record it: a corner on that edge of `state` is confirmed only against a point beyond the edge.
             κₒ = left ? SA[expanded.p⃗[1].κ, state.κ⃗ₒ[2]] : SA[state.κ⃗ₒ[1], expanded.p⃗[4].κ]
-            return (true, LCurveCornerState(state.x⃗, state.p⃗, state.C, κₒ), expanded, best, k)
+            return (true, LCurveCornerState(state.t⃗, state.p⃗, state.C, κₒ), expanded, best, k)
         end
 
         rank(expanded) > rank(best) && (best = expanded)
@@ -1266,12 +1266,12 @@ end
 # Contract the bracket until a point certifies as a local maximum of the analytic curvature, returning NaN if none does.
 function lcurve_localize!(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}; xtol::T, Ptol::T, max_log_slope::T) where {T}
     while true
-        (; x⃗, p⃗) = state
+        (; t⃗, p⃗) = state
         κᵢ = max(p⃗[2].κ, p⃗[3].κ)
         if is_equal_signature(state) && κᵢ > max(p⃗[1].κ, p⃗[4].κ)
             # `brent_minimize` bounds its returned bracket by 4·xatol and no better, so it is asked for a quarter of the target. An exhausted budget leaves the bracket wide and certifies nothing.
-            x, _, (lo, hi) = brent_minimize(t -> -f(t).κ, x⃗[1], x⃗[4]; xatol = xtol / 4, xrtol = zero(T), maxiters = 40)
-            hi - lo <= xtol && lo < x < hi && f(x).κ > max(f(lo).κ, f(hi).κ) && f(x).κ >= κᵢ && is_admissible(f(x), x, max_log_slope) && return x
+            t, _, (lo, hi) = brent_minimize(s -> -f(s).κ, t⃗[1], t⃗[4]; xatol = xtol / 4, xrtol = zero(T), maxiters = 40)
+            hi - lo <= xtol && lo < t < hi && f(t).κ > max(f(lo).κ, f(hi).κ) && f(t).κ >= κᵢ && is_admissible(f(t), t, max_log_slope) && return t
         end
         is_converged(state; xtol, Ptol) && return best_corner(state, max_log_slope)
         push!(f.state_stack, (length(f.state_stack), state)) # the discarded sibling is `move(f, state, !contract_left(state))`, instantiated only if this branch certifies nothing
@@ -1283,18 +1283,18 @@ end
 # An interior point's neighbours are the adjacent state points; an endpoint's are its one adjacent state point and the matching entry of `κ⃗ₒ`, which is +Inf where nothing past the endpoint has been evaluated.
 # A corner is therefore never declared at the edge of the region searched so far.
 function best_corner(state::LCurveCornerState{T}, max_log_slope::T) where {T}
-    (; x⃗, p⃗, κ⃗ₒ) = state
+    (; t⃗, p⃗, κ⃗ₒ) = state
     κ⃗ = SA[κ⃗ₒ[1], p⃗[1].κ, p⃗[2].κ, p⃗[3].κ, p⃗[4].κ, κ⃗ₒ[2]]
-    x, κ = T(NaN), T(-Inf)
+    t, κ = T(NaN), T(-Inf)
     for i in 1:4
-        κ⃗[i+1] > κ && κ⃗[i+1] > κ⃗[i] && κ⃗[i+1] > κ⃗[i+2] && is_admissible(p⃗[i], x⃗[i], max_log_slope) && ((x, κ) = (x⃗[i], κ⃗[i+1]))
+        κ⃗[i+1] > κ && κ⃗[i+1] > κ⃗[i] && κ⃗[i+1] > κ⃗[i+2] && is_admissible(p⃗[i], t⃗[i], max_log_slope) && ((t, κ) = (t⃗[i], κ⃗[i+1]))
     end
-    return x
+    return t
 end
 
 # A corner must curve the right way and must lie clear of the near-vertical μ → 0 tail.
 # Both halves are needed: κ tends to a positive plateau η⁴/(2qξ²) in that tail and can rise out of it into a genuine maximum, so positive curvature alone does not exclude it. See `LCURVE_SLOPE_MAX_DEFAULT`.
-is_admissible(p::LCurveCornerPoint{T}, x::T, max_log_slope::T) where {T} = p.κ > 0 && p.P[1] - p.P[2] - 2 * x <= max_log_slope
+is_admissible(p::LCurveCornerPoint{T}, t::T, max_log_slope::T) where {T} = p.κ > 0 && p.P[1] - p.P[2] - 2t <= max_log_slope
 
 # Contract toward the higher state-local curvature. A negative right-hand curvature places the corner to the left regardless, which is the positive-curvature safeguard of Cultrera-Callegaro; exact equality resolves right.
 contract_left(state::LCurveCornerState) = state.C[2] < 0 || state.C[1] > state.C[2]
@@ -1306,19 +1306,19 @@ is_equal_signature(state::LCurveCornerState) = state.p⃗[1].sig == state.p⃗[2
 # Monotonicity of the Tikhonov path gives ‖x₁ - x₂‖² ≤ tanh(t₂ - t₁)·(η²₁ - η²₂), across active-set changes and not merely within one branch, and so
 #       ‖Δx‖/‖x‖ ≤ √(tanh(Δt)·(1 - e^{-Δlog η²})) ≤ √Ptol.
 # That bounds the spread of solutions within one state, not the distance to the corner an `xtol`-resolved search would return: stopping on `Ptol` leaves the state wide in t, so `best_corner` compares distant neighbours and accepts a coarser feature of κ.
-is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.x⃗[4] - state.x⃗[1]) < xtol || norm(state.p⃗[1].P - state.p⃗[4].P) < Ptol
+is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.t⃗[4] - state.t⃗[1]) < xtol || norm(state.p⃗[1].P - state.p⃗[4].P) < Ptol
 
 # Whether the path has run out at this endpoint, so that expanding past it would add nothing: to the left x has reached the unregularized solution, to the right it has collapsed to x = 0 and log‖x‖² is -∞.
 # The left test needs both parts. P alone moves arbitrarily little between two distinct solutions on a flat stretch, and the digest alone repeats whenever an unrelated μ happens to share the active set.
 is_saturated(p::LCurveCornerPoint{T}, P₀::SVector{2, T}, sig₀::UInt128) where {T} = !isfinite(p.P[2]) || (p.sig == sig₀ && maximum(abs, p.P - P₀) <= √eps(T))
 
-isfinite_else(x::T, y::T) where {T} = isfinite(x) ? x : y
+isfinite_else(a::T, b::T) where {T} = isfinite(a) ? a : b
 
 # Ranking of the states visited during expansion, consulted only when both directions reach an endpoint without ever reversing.
 # ω leads rather than κ: the two share a sign, but ω weights curvature by the speed |dP/dt|, and vanishing speed is what marks the μ → 0 tail. Ties fall to the higher state-local curvature, then to the tighter state.
-rank(state::LCurveCornerState{T}) where {T} = (max(zero(T), isfinite_else(state.p⃗[2].ω, zero(T)), isfinite_else(state.p⃗[3].ω, zero(T))), max(isfinite_else(state.C[1], typemin(T)), isfinite_else(state.C[2], typemin(T))), state.x⃗[1] - state.x⃗[4])
+rank(state::LCurveCornerState{T}) where {T} = (max(zero(T), isfinite_else(state.p⃗[2].ω, zero(T)), isfinite_else(state.p⃗[3].ω, zero(T))), max(isfinite_else(state.C[1], typemin(T)), isfinite_else(state.C[2], typemin(T))), state.t⃗[1] - state.t⃗[4])
 
-golden_state(x⃗::SVector{4, T}, p⃗::SVector{4, LCurveCornerPoint{T}}, κ⃗ₒ::SVector{2, T}) where {T} = LCurveCornerState(x⃗, p⃗, SA[state_curvature(p⃗[1], p⃗[2], p⃗[3]), state_curvature(p⃗[2], p⃗[3], p⃗[4])], κ⃗ₒ)
+golden_state(t⃗::SVector{4, T}, p⃗::SVector{4, LCurveCornerPoint{T}}, κ⃗ₒ::SVector{2, T}) where {T} = LCurveCornerState(t⃗, p⃗, SA[state_curvature(p⃗[1], p⃗[2], p⃗[3]), state_curvature(p⃗[2], p⃗[3], p⃗[4])], κ⃗ₒ)
 
 # Menger curvature of one state triple, rejected as unresolved when the circumcircle is indeterminate.
 function state_curvature(pⱼ::LCurveCornerPoint{T}, pₖ::LCurveCornerPoint{T}, pₗ::LCurveCornerPoint{T}) where {T}
@@ -1340,32 +1340,32 @@ expand(f::LCurveCornerCachedFunction, state::LCurveCornerState, left::Bool) = le
 
 # Golden contraction: one new point, width divided by φ, golden proportions preserved.
 function move_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
-    (; x⃗, p⃗, κ⃗ₒ) = state
+    (; t⃗, p⃗, κ⃗ₒ) = state
     φ = T(Base.MathConstants.φ)
-    x = (φ * x⃗[1] + x⃗[3]) / (φ + 1) # x₁ + Δ/φ³
-    return golden_state(SA[x⃗[1], x, x⃗[2], x⃗[3]], SA[p⃗[1], f(x), p⃗[2], p⃗[3]], SA[κ⃗ₒ[1], p⃗[4].κ])
+    t = (φ * t⃗[1] + t⃗[3]) / (φ + 1) # t₁ + Δ/φ³
+    return golden_state(SA[t⃗[1], t, t⃗[2], t⃗[3]], SA[p⃗[1], f(t), p⃗[2], p⃗[3]], SA[κ⃗ₒ[1], p⃗[4].κ])
 end
 
 function move_right(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
-    (; x⃗, p⃗, κ⃗ₒ) = state
+    (; t⃗, p⃗, κ⃗ₒ) = state
     φ = T(Base.MathConstants.φ)
-    x = (φ * x⃗[4] + x⃗[2]) / (φ + 1) # x₄ - Δ/φ³
-    return golden_state(SA[x⃗[2], x⃗[3], x, x⃗[4]], SA[p⃗[2], p⃗[3], f(x), p⃗[4]], SA[p⃗[1].κ, κ⃗ₒ[2]])
+    t = (φ * t⃗[4] + t⃗[2]) / (φ + 1) # t₄ - Δ/φ³
+    return golden_state(SA[t⃗[2], t⃗[3], t, t⃗[4]], SA[p⃗[2], p⃗[3], f(t), p⃗[4]], SA[p⃗[1].κ, κ⃗ₒ[2]])
 end
 
 # Inverse golden expansion: one new point, width multiplied by φ. Exactly inverse to a contraction, so `move_right(expand_left(state)) == state` and `move_left(expand_right(state)) == state`.
 function expand_left(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
-    (; x⃗, p⃗, κ⃗ₒ) = state
+    (; t⃗, p⃗, κ⃗ₒ) = state
     φ = T(Base.MathConstants.φ)
-    x = x⃗[1] - (x⃗[4] - x⃗[1]) / φ
-    return golden_state(SA[x, x⃗[1], x⃗[2], x⃗[4]], SA[f(x), p⃗[1], p⃗[2], p⃗[4]], SA[T(Inf), κ⃗ₒ[2]])
+    t = t⃗[1] - (t⃗[4] - t⃗[1]) / φ
+    return golden_state(SA[t, t⃗[1], t⃗[2], t⃗[4]], SA[f(t), p⃗[1], p⃗[2], p⃗[4]], SA[T(Inf), κ⃗ₒ[2]])
 end
 
 function expand_right(f::LCurveCornerCachedFunction{T}, state::LCurveCornerState{T}) where {T}
-    (; x⃗, p⃗, κ⃗ₒ) = state
+    (; t⃗, p⃗, κ⃗ₒ) = state
     φ = T(Base.MathConstants.φ)
-    x = x⃗[4] + (x⃗[4] - x⃗[1]) / φ
-    return golden_state(SA[x⃗[1], x⃗[3], x⃗[4], x], SA[p⃗[1], p⃗[3], p⃗[4], f(x)], SA[κ⃗ₒ[1], T(Inf)])
+    t = t⃗[4] + (t⃗[4] - t⃗[1]) / φ
+    return golden_state(SA[t⃗[1], t⃗[3], t⃗[4], t], SA[p⃗[1], p⃗[3], p⃗[4], f(t)], SA[κ⃗ₒ[1], T(Inf)])
 end
 
 function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}
@@ -1376,34 +1376,34 @@ function menger(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}}
 end
 
 function menger(f; h = 1e-3)
-    function menger_curvature_inner(x)
-        fⱼ, fₖ, fₗ = f(x - h), f(x), f(x + h)
-        Pⱼ, Pₖ, Pₗ = SA[x-h, fⱼ], SA[x, fₖ], SA[x+h, fₗ]
+    function menger_curvature_inner(t)
+        fⱼ, fₖ, fₗ = f(t - h), f(t), f(t + h)
+        Pⱼ, Pₖ, Pₗ = SA[t-h, fⱼ], SA[t, fₖ], SA[t+h, fₗ]
         return menger(Pⱼ, Pₖ, Pₗ)
     end
 end
 
-function menger(x, y; h = 1e-3)
+function menger(ξ, η; h = 1e-3)
     function menger_curvature_inner(t)
-        x₋, x₀, x₊ = x(t - h), x(t), x(t + h)
-        y₋, y₀, y₊ = y(t - h), y(t), y(t + h)
-        x′, x′′ = (x₊ - x₋) / 2h, (x₊ - 2x₀ + x₋) / h^2
-        y′, y′′ = (y₊ - y₋) / 2h, (y₊ - 2y₀ + y₋) / h^2
-        return (x′ * y′′ - y′ * x′′) / √((x′^2 + y′^2)^3)
+        ξ₋, ξ₀, ξ₊ = ξ(t - h), ξ(t), ξ(t + h)
+        η₋, η₀, η₊ = η(t - h), η(t), η(t + h)
+        ξ′, ξ′′ = (ξ₊ - ξ₋) / 2h, (ξ₊ - 2ξ₀ + ξ₋) / h^2
+        η′, η′′ = (η₊ - η₋) / 2h, (η₊ - 2η₀ + η₋) / h^2
+        return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
     end
 end
 
 #=
-lin_interp(x, x₁, x₂, y₁, y₂) = y₁ + (y₂ - y₁) * (x - x₁) / (x₂ - x₁)
-exp_interp(x, x₁, x₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (x - x₁) / (x₂ - x₁))
+lin_interp(t, t₁, t₂, y₁, y₂) = y₁ + (y₂ - y₁) * (t - t₁) / (t₂ - t₁)
+exp_interp(t, t₁, t₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (t - t₁) / (t₂ - t₁))
 
-function menger(x::Dierckx.Spline1D, y::Dierckx.Spline1D)
+function menger(ξ::Dierckx.Spline1D, η::Dierckx.Spline1D)
     function menger_curvature_inner(t)
-        x′  = Dierckx.derivative(x, t; nu = 1)
-        x′′ = Dierckx.derivative(x, t; nu = 2)
-        y′  = Dierckx.derivative(y, t; nu = 1)
-        y′′ = Dierckx.derivative(y, t; nu = 2)
-        return (x′ * y′′ - y′ * x′′) / √((x′^2 + y′^2)^3)
+        ξ′  = Dierckx.derivative(ξ, t; nu = 1)
+        ξ′′ = Dierckx.derivative(ξ, t; nu = 2)
+        η′  = Dierckx.derivative(η, t; nu = 1)
+        η′′ = Dierckx.derivative(η, t; nu = 2)
+        return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
     end
 end
 
@@ -1415,19 +1415,19 @@ function menger(y::Dierckx.Spline1D)
     end
 end
 
-function menger(xⱼ::T, xₖ::T, xₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2, T}}
+function menger(tⱼ::T, tₖ::T, tₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2, T}}
     if interp_uniform
         φ = T(Base.MathConstants.φ)
-        h = min(abs(xₖ - xⱼ), abs(xₗ - xₖ)) / φ
+        h = min(abs(tₖ - tⱼ), abs(tₗ - tₖ)) / φ
         h₋ = h₊ = h
-        x₋, x₀, x₊ = xₖ - h, xₖ, xₖ + h
+        t₋, t₀, t₊ = tₖ - h, tₖ, tₖ + h
         P₀ = Pₖ
-        P₋ = exp_interp.(x₋, xⱼ, xₖ, Pⱼ, Pₖ)
-        P₊ = exp_interp.(x₊, xₖ, xₗ, Pₖ, Pₗ)
+        P₋ = exp_interp.(t₋, tⱼ, tₖ, Pⱼ, Pₖ)
+        P₊ = exp_interp.(t₊, tₖ, tₗ, Pₖ, Pₗ)
     else
         P₋, P₀, P₊ = Pⱼ, Pₖ, Pₗ
-        x₋, x₀, x₊ = xⱼ, xₖ, xₗ
-        h₋, h₊ = x₀ - x₋, x₊ - x₀
+        t₋, t₀, t₊ = tⱼ, tₖ, tₗ
+        h₋, h₊ = t₀ - t₋, t₊ - t₀
     end
     ξ₋, ξ₀, ξ₊ = P₋[1], P₀[1], P₊[1]
     η₋, η₀, η₊ = P₋[2], P₀[2], P₊[2]
@@ -1542,9 +1542,7 @@ function lsqnonneg_reginska!(
     x_unreg = solution(work.nnls_prob)
     res²_min = resnorm_sq(work.nnls_prob)
 
-    # An exact unregularized fit makes the minimum-product criterion zero at μ = 0. The test must be relative rather than res²_min == 0, since a computed exact fit leaves a roundoff-level residual and Φ(0) would be a ratio of noise.
-    # A consistent system solved in floating point leaves ‖r‖ ≲ ε·κ₂(A)·‖b‖, so res² ≤ eps(T)·‖b‖² admits relative residual norms up to √ε, which is that bound at κ₂(A) ≃ ε^(-1/2).
-    # The threshold is a conditioning assumption rather than a free tolerance: a basis conditioned worse than ε^(-1/2) needs it loosened.
+    # An exact unregularized fit makes the minimum-product criterion zero at μ = 0.
     b² = sum(abs2, work.b)
     if res²_min <= eps(T) * b² || ncomponents(work.nnls_prob) == 0
         return (; x = x_unreg, mu = zero(T), chi2 = one(T))
@@ -1934,3 +1932,357 @@ Nonnegativity makes ``||x||_1 = \mathbf{1}^T x`` linear, so this is a smooth bou
 lsqnonneg_lasso(A::AbstractMatrix, b::AbstractVector, μ::Real; kwargs...) = lsqnonneg_lasso!(lsqnonneg_lasso_work(A, b), μ; kwargs...)
 lsqnonneg_lasso_work(A::AbstractMatrix, b::AbstractVector) = NNLS.NNLSLassoWorkspace(A, b)
 lsqnonneg_lasso!(work::NNLS.NNLSLassoWorkspace, μ::Real; kwargs...) = NNLS.solve!(NNLS.reset!(work), μ; kwargs...)
+
+# Compute the μ = 0 endpoint of the ℓ¹ L-curve, which every selector measures its criterion against.
+# Returns μmax, the μ = 0 residual R₀ and seminorm N₀, and ‖b‖², with the workspace in a solved state.
+function lasso_baseline!(work)
+    (; nnls_prob, lasso_work) = work
+    solve_unreg!(nnls_prob, work.nnls_prob_seed)
+    NNLS.reset!(lasso_work, solution(nnls_prob))
+    μmax = NNLS.regparam_max(lasso_work)
+    NNLS.solve!(lasso_work, zero(eltype(work.b)))
+    return (; μmax, R₀ = resnorm_sq(lasso_work), N₀ = seminorm(lasso_work), b² = sum(abs2, work.b))
+end
+
+####
+#### Chi2 method for choosing the ℓ¹ regularization parameter
+####
+
+struct NNLSChi2LassoRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    lasso_work::W2 # ℓ¹-regularized solver workspace, warm-started across the μ-search
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
+end
+function NNLSChi2LassoRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
+    m, n = size(A)
+    return NNLSChi2LassoRegProblem(A, b, m, n, NNLSProblem(A, b), NNLS.NNLSLassoWorkspace(A, b), nnls_prob_seed)
+end
+
+@inline solution(work::NNLSChi2LassoRegProblem) = solution(work.lasso_work)
+@inline ncomponents(work::NNLSChi2LassoRegProblem) = ncomponents(work.lasso_work)
+
+@doc raw"""
+    lsqnonneg_chi2_lasso(A::AbstractMatrix, b::AbstractVector, chi2_target::Real)
+
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+
+```math
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
+```
+
+where ``\mu`` is determined by solving:
+
+```math
+\chi^2(\mu) = \frac{||AX_{\mu} - b||_2^2}{||AX_{0} - b||_2^2} = \chi^2_{\mathrm{target}}.
+```
+
+This is the ``\ell^1`` counterpart of [`lsqnonneg_chi2`](@ref).
+
+# Arguments
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
+  - `chi2_target::Real`: Target ``\chi^2(\mu)``; typically a small value, e.g. 1.02 representing a 2% increase
+
+# Outputs
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting ``\chi^2(\mu)``, which should be approximately equal to `chi2_target`
+"""
+function lsqnonneg_chi2_lasso(A::AbstractMatrix, b::AbstractVector, chi2_target::Real)
+    work = lsqnonneg_chi2_lasso_work(A, b)
+    return lsqnonneg_chi2_lasso!(work, chi2_target)
+end
+lsqnonneg_chi2_lasso_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSChi2LassoRegProblem(A, b, nnls_prob_seed)
+
+function lsqnonneg_chi2_lasso!(work::NNLSChi2LassoRegProblem{T}, chi2_target::Real) where {T}
+    (; lasso_work) = work
+    @assert chi2_target >= 1 "chi2_target must be at least 1, but chi2_target = $chi2_target."
+    χ²_target = T(chi2_target)
+
+    (; μmax, R₀, b²) = lasso_baseline!(work)
+    res²_min = R₀
+
+    if res²_min <= eps(T) * b² || ncomponents(lasso_work) == 0
+        # An exact fit has target residual zero, whose only root is μ = 0, and a zero unregularized solution remains zero for every μ.
+        return (; x = solution(lasso_work), mu = zero(T), chi2 = one(T))
+    end
+
+    res²_target = χ²_target * res²_min
+    if res²_target >= b²
+        # The requested residual is not reached before the solution vanishes; report the zero solution and the χ² it does reach
+        x_final = NNLS.solve!(lasso_work, μmax)
+        return (; x = x_final, mu = μmax, chi2 = resnorm_sq(lasso_work) / res²_min)
+    end
+
+    mu_final = lasso_target_regparam!(lasso_work, res²_target; atol = eps(T) * b²)
+    return (; x = solution(lasso_work), mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+end
+
+# Root of the monotone residual ‖Ax_μ - b‖² = res²_target on [0, μmax], given ‖Ax₀ - b‖² < res²_target < ‖b‖².
+# On one support the residual is affine in μ², ‖Ax_ν - b‖² = ‖Ax_μ - b‖² + q(ν² - μ²)/4, so the model root
+#
+#   ν = √(μ² + 4(res²_target - ‖Ax_μ - b‖²)/q)
+#
+# is the root itself whenever `regparam_segment!` places it at or before the next support change, and is returned there without reference to a tolerance.
+# Past that endpoint ν is only a Newton step in μ², bracketed by the monotonicity of the residual: each solve replaces the end of the bracket it falls on, and a step leaving the bracket is replaced by a geometric bisection.
+# The bracket closes onto a representable interior point every iteration, and the loop ends when there is none left; the root then lies between two adjacent parameters and the lower is returned.
+function lasso_target_regparam!(lasso_work::NNLS.NNLSLassoWorkspace{T}, res²_target::T; ftol::T = √eps(T), atol::T = zero(T)) where {T}
+    lo, hi, μ = zero(T), NNLS.regparam_max(lasso_work), zero(T)
+
+    while true
+        NNLS.solve!(lasso_work, μ)
+        res² = resnorm_sq(lasso_work)
+
+        ν = T(NaN)
+        if res² < res²_target
+            lo = μ
+            q, μ_end = NNLS.regparam_segment!(lasso_work, μ)
+            q <= 0 && return error("The ℓ¹ path direction vanished on a nonempty support, where q = ‖R⁻ᵀ𝟙‖² is positive.")
+            ν = √(μ^2 + 4 * (res²_target - res²) / q)
+            ν <= μ_end && return (NNLS.solve!(lasso_work, ν); ν) # the segment model holds to μ_end, so ν is the root and not an iterate
+        else
+            hi = μ
+        end
+
+        abs(res² - res²_target) <= ftol * res²_target + atol && return μ
+        ν = lo < ν < hi ? ν : lo > 0 ? √(lo * hi) : hi / 2
+        lo < ν < hi || return (NNLS.solve!(lasso_work, lo); lo)
+        μ = ν
+    end
+end
+
+####
+#### Morozov discrepancy principle (MDP) method for choosing the ℓ¹ regularization parameter
+####
+
+struct NNLSMDPLassoRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    lasso_work::W2 # ℓ¹-regularized solver workspace, warm-started across the μ-search
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
+end
+function NNLSMDPLassoRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
+    m, n = size(A)
+    return NNLSMDPLassoRegProblem(A, b, m, n, NNLSProblem(A, b), NNLS.NNLSLassoWorkspace(A, b), nnls_prob_seed)
+end
+
+@inline solution(work::NNLSMDPLassoRegProblem) = solution(work.lasso_work)
+@inline ncomponents(work::NNLSMDPLassoRegProblem) = ncomponents(work.lasso_work)
+
+@doc raw"""
+    lsqnonneg_mdp_lasso(A::AbstractMatrix, b::AbstractVector, δ::Real)
+
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+
+```math
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
+```
+
+where ``\mu`` is chosen using Morozov's Discrepancy Principle (MDP)[1,2]:
+
+```math
+\mu = \operatorname{sup}\; \left\{ \nu \ge 0 : ||AX_{\nu} - b|| \le \delta \right\}.
+```
+
+This is the ``\ell^1`` counterpart of [`lsqnonneg_mdp`](@ref).
+
+# Arguments
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
+  - `δ::Real`: Upper bound on regularized residual norm
+
+# Outputs
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting ratio ``||AX_{\mu} - b||_2^2 / ||AX_0 - b||_2^2`` of squared residual norms
+
+# References
+
+  1. Morozov VA. Methods for Solving Incorrectly Posed Problems. Springer Science & Business Media, 2012.
+  2. Clason C, Kaltenbacher B, Resmerita E. Regularization of Ill-Posed Problems with Non-negative Solutions. In: Bauschke HH, Burachik RS, Luke DR (eds) Splitting Algorithms, Modern Operator Theory, and Applications. Cham: Springer International Publishing, pp. 113–135.
+"""
+function lsqnonneg_mdp_lasso(A::AbstractMatrix, b::AbstractVector, δ::Real)
+    work = lsqnonneg_mdp_lasso_work(A, b)
+    return lsqnonneg_mdp_lasso!(work, δ)
+end
+lsqnonneg_mdp_lasso_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSMDPLassoRegProblem(A, b, nnls_prob_seed)
+
+function lsqnonneg_mdp_lasso!(work::NNLSMDPLassoRegProblem{T}, δ::Real) where {T}
+    (; lasso_work) = work
+    @assert δ > 0 "Residual norm δ must be a positive value, but got δ = $δ"
+    δ² = T(δ)^2
+
+    (; μmax, R₀, b²) = lasso_baseline!(work)
+    res²_min = R₀
+
+    if b² == 0
+        # No data to fit: x = 0 is the unique minimizer for every μ > 0 and an optimal one at μ = 0, and its residual is already zero
+        return (; x = solution(lasso_work), mu = zero(T), chi2 = one(T))
+    end
+
+    if δ² <= res²_min
+        # No μ ≥ 0 attains a residual this small, ‖Ax_μ - b‖² being nondecreasing
+        return (; x = solution(lasso_work), mu = zero(T), chi2 = one(T))
+    end
+
+    if δ² >= b²
+        # Every μ ≥ μmax satisfies the discrepancy with x = 0 and residual ‖b‖², so the admissible set is the ray [μmax, ∞) and its supremum is infinite; report μmax, since in general we search only over [0, μmax].
+        x_final = NNLS.solve!(lasso_work, μmax)
+        return (; x = x_final, mu = μmax, chi2 = resnorm_sq(lasso_work) / res²_min)
+    end
+
+    mu_final = lasso_target_regparam!(lasso_work, δ²; atol = eps(T) * b²)
+    return (; x = solution(lasso_work), mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+end
+
+####
+#### Reginska (minimum-product) method for choosing the ℓ¹ regularization parameter
+####
+
+struct NNLSReginskaLassoRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    lasso_work::W2 # ℓ¹-regularized solver workspace, warm-started across the μ-search
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
+end
+function NNLSReginskaLassoRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
+    m, n = size(A)
+    return NNLSReginskaLassoRegProblem(A, b, m, n, NNLSProblem(A, b), NNLS.NNLSLassoWorkspace(A, b), nnls_prob_seed)
+end
+
+@inline solution(work::NNLSReginskaLassoRegProblem) = solution(work.lasso_work)
+@inline ncomponents(work::NNLSReginskaLassoRegProblem) = ncomponents(work.lasso_work)
+
+@doc raw"""
+    lsqnonneg_reginska_lasso(A::AbstractMatrix, b::AbstractVector)
+
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+
+```math
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
+```
+
+where ``\mu`` is the smallest positive local minimizer of an ``\ell^1`` analogue of Regińska's minimum-product criterion[1]:
+
+```math
+\Psi(\nu) = ||AX_{\nu} - b||_2^2 \, ||X_{\nu}||_1.
+```
+
+This is the ``\ell^1`` counterpart of [`lsqnonneg_reginska`](@ref).
+Stationarity of ``\Psi`` is equivalent to a log-log tangent slope of ``-1`` for the pair ``(||AX_{\nu} - b||_2^2, ||X_{\nu}||_1)``, so the selected ``\mu`` is the balance point ``||AX_{\mu} - b||_2^2 = \mu ||X_{\mu}||_1`` at which the two terms of the objective contribute equally.
+
+# Arguments
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
+
+# Outputs
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting ratio ``||AX_{\mu} - b||_2^2 / ||AX_0 - b||_2^2`` of squared residual norms
+
+# References
+
+  1. T. Regińska, "A Regularization Parameter in Discrete Ill-Posed Problems". SIAM Journal on Scientific Computing, 17(3), 740-749, 1996, https://doi.org/10.1137/S1064827593252672.
+"""
+function lsqnonneg_reginska_lasso(A::AbstractMatrix, b::AbstractVector; kwargs...)
+    work = lsqnonneg_reginska_lasso_work(A, b)
+    return lsqnonneg_reginska_lasso!(work; kwargs...)
+end
+lsqnonneg_reginska_lasso_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSReginskaLassoRegProblem(A, b, nnls_prob_seed)
+
+function lsqnonneg_reginska_lasso!(work::NNLSReginskaLassoRegProblem{T}; maxiters::Int = 8 * work.n + 16) where {T}
+    (; lasso_work) = work
+
+    (; μmax, R₀, N₀, b²) = lasso_baseline!(work) # ‖x_μ‖₁ = 0 from μmax onwards, where Ψ collapses to zero
+    res²_min, seminrm_min = R₀, N₀
+
+    # An exact unregularized fit makes the minimum-product criterion zero at μ = 0
+    if res²_min <= eps(T) * b² || ncomponents(lasso_work) == 0
+        return (; x = solution(lasso_work), mu = zero(T), chi2 = one(T))
+    end
+
+    # Ψ = res²·‖x‖₁ has dΨ/dμ = (d‖x‖₁/dμ)·φ(μ) with φ(μ) = res² - μ‖x‖₁ and d‖x‖₁/dμ ≤ 0, so the smallest local minimizer of Ψ is the leftmost downward crossing of φ, the balance point res² = μ‖x‖₁.
+    # res² is nondecreasing and ‖x‖₁ nonincreasing, so φ(ν) ≥ res²(μ) - ν‖x_μ‖₁ for ν > μ, and one solve certifies φ > 0 up to Φ(μ) = res²/‖x‖₁.
+    # The same monotonicities make Φ nondecreasing with the balance points as its fixed points, so every balance point satisfies μ ≥ Φ(0) and the search starts there.
+    # Complementarity gives bᵀr = res² + μ‖x‖₁/2, which at a balance point is 3·res²/2, so Cauchy-Schwarz bounds res² ≤ 4‖b‖²/9 there and the first iterate above that bound proves none remains.
+    μ = res²_min / seminrm_min
+    res²_max = 4 * b² / 9
+    μ >= μmax && return (; x = solution(lasso_work), mu = zero(T), chi2 = one(T)) # no balance point exists
+
+    # Iterating Φ alone never brackets: φ > 0 means Φ(μ) > μ, and applying the nondecreasing Φ leaves φ ≥ 0 at every iterate.
+    # What resolves this is that φ is piecewise quadratic with positive leading coefficient, where `NNLS.regparam_segment!` supplies both the quadratic and the interval of μ on which it holds.
+    # The balance point is then a closed-form root as soon as an iterate lands in its interval, and no crossing pair inside one interval can be stepped over.
+    mu_final, nudge = zero(T), √eps(T)
+    μ_floor = μ * (1 - nudge)
+    for _ in 1:maxiters
+        NNLS.solve!(lasso_work, μ)
+        res², seminrm = resnorm_sq(lasso_work), seminorm(lasso_work)
+        q, μ_end = NNLS.regparam_segment!(lasso_work, μ)
+
+        s = reginska_lasso_balance_root(res², seminrm, μ, q)
+        if μ_floor - μ <= s <= μ_end - μ
+            mu_final = μ + s
+            break
+        end
+
+        μ_next = min(max(μ_end, res² / seminrm), μmax)
+        (res² > res²_max || μ_next >= μmax) && return (; x = NNLS.solve!(lasso_work, zero(T)), mu = zero(T), chi2 = one(T)) # no balance point exists
+
+        if μ_next > μ
+            nudge = √eps(T)
+            μ_floor, μ = μ_next * (1 - nudge), μ_next * (1 + nudge)
+        else
+            nudge = 2 * nudge
+            μ = μ * (1 + nudge)
+        end
+    end
+    mu_final == 0 && return error("Reginska's criterion was not resolved within $maxiters Lasso solves.")
+
+    # The last solve need not be the one at the selected μ, so the selected solution is recomputed.
+    # Two support events inside one nudge window leave a third segment between the endpoint and the solved point, across which the accepted quadratic was extrapolated.
+    # The balance is re-tested on the support present at the selected μ and corrected by the quadratic there, and the correction is re-solved and re-tested in turn.
+    x_final = NNLS.solve!(lasso_work, mu_final)
+    balanced = false
+    for _ in 1:4
+        res², seminrm = resnorm_sq(lasso_work), seminorm(lasso_work)
+        balanced = abs(res² - mu_final * seminrm) <= eps(T)^(3//4) * max(res², mu_final * seminrm)
+        balanced && break
+        q, _ = NNLS.regparam_segment!(lasso_work, mu_final)
+        s = reginska_lasso_balance_root(res², seminrm, mu_final, q)
+        isnan(s) && break
+        mu_final += s
+        x_final = NNLS.solve!(lasso_work, mu_final)
+    end
+
+    # The balance is what the criterion asserts, so the returned point is held to it rather than to the iteration having run
+    if !(balanced || abs(resnorm_sq(lasso_work) - mu_final * seminorm(lasso_work)) <= eps(T)^(3//4) * max(resnorm_sq(lasso_work), mu_final * seminorm(lasso_work)))
+        error("Reginska's balance ‖Ax-b‖² = μ‖x‖₁ was not attained at the selected μ = $mu_final.")
+    end
+
+    return (; x = x_final, mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+end
+
+# Smallest root in s of the balance polynomial φ(μ + s) = (3q/4)s² + (qμ - ‖x‖₁)s + (res² - μ‖x‖₁), or `NaN` when it has none.
+# Each branch is the form of the quadratic formula free of cancellation for the sign of the linear coefficient.
+function reginska_lasso_balance_root(res²::T, seminrm::T, μ::T, q::T) where {T}
+    α, β, γ = 3 * q / 4, q * μ - seminrm, res² - μ * seminrm
+    disc = β^2 - 4 * α * γ
+    disc < 0 && return T(NaN)
+    return β < 0 ? 2 * γ / (√disc - β) : -(β + √disc) / (2 * α)
+end

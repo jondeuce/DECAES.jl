@@ -52,7 +52,7 @@ include("main.jl")
 export MAT, NIfTI, ParXRec, load_image
 export T2mapOptions, T2mapSEcorr, T2partOptions, T2partSEcorr
 export EPGdecaycurve, EPGdecaycurve!, EPGdecaycurve_work
-export lcurve_corner, lsqnonneg, lsqnonneg_tikh, lsqnonneg_lasso, lsqnonneg_gcv, lsqnonneg_lcurve, lsqnonneg_reginska, lsqnonneg_chi2, lsqnonneg_mdp
+export lcurve_corner, lsqnonneg, lsqnonneg_tikh, lsqnonneg_lasso, lsqnonneg_gcv, lsqnonneg_lcurve, lsqnonneg_reginska, lsqnonneg_reginska_lasso, lsqnonneg_chi2, lsqnonneg_chi2_lasso, lsqnonneg_mdp, lsqnonneg_mdp_lasso
 export main
 
 # Precompile

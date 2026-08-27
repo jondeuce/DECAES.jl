@@ -18,22 +18,26 @@ T2partOptions
 T2partSEcorr
 ```
 
-## [Main entrypoint function](@id main)
+## [Main entrypoint function](@id main-entrypoint)
 
 ```@docs
 main
 ```
 
-## [NNLS analysis](@id nnls)
+## [NNLS analysis](@id nnls-analysis)
 
 ```@docs
 lsqnonneg
 lsqnonneg_tikh
+lsqnonneg_lasso
 lsqnonneg_gcv
 lsqnonneg_lcurve
 lsqnonneg_reginska
+lsqnonneg_reginska_lasso
 lsqnonneg_chi2
+lsqnonneg_chi2_lasso
 lsqnonneg_mdp
+lsqnonneg_mdp_lasso
 lcurve_corner
 ```
 
