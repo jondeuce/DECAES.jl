@@ -273,6 +273,58 @@ end
     end
 end
 
+# Permitted (Reg, RegNorm) pairs
+const REG_NORM_PAIRS = [("none", "l2"), ("chi2", "l2"), ("chi2", "l1"), ("mdp", "l2"), ("mdp", "l1"), ("reginska", "l2"), ("reginska", "l1"), ("lcurve", "l2"), ("lcurve", "l1"), ("gcv", "l2")]
+
+# The regularizer acts on the final T2 fit after the flip angle has been chosen from unregularized fits, so changing the penalty norm must not change the flip-angle map.
+@testset "$Reg l1 regularization" for (Reg, RegParams) in (("chi2", (; Chi2Factor = 1.02)), ("reginska", (;)), ("mdp", (; NoiseLevel = 2e-3)), ("lcurve", (;)))
+    opts(RegNorm) = DECAES.mock_t2map_opts(Float64; MatrixSize = (3, 3, 1), nTE = 32, nT2 = 20, Reg, RegNorm, SaveRegParam = true, SaveResidualNorm = true, Threaded = false, Silent = true, RegParams...)
+    o₂, o₁ = opts("l2"), opts("l1")
+    image = DECAES.mock_image(o₂)
+    maps₂, dist₂ = T2mapSEcorr(copy(image), o₂)
+    maps₁, dist₁ = T2mapSEcorr(copy(image), o₁)
+
+    @test maps₁["alpha"] == maps₂["alpha"]
+    @test all(>=(0), dist₁)
+    @test all(k -> all(isfinite, maps₁[k]), keys(maps₁))
+    @test all(>(0), maps₁["mu"])
+    @test count(>(0), dist₁) < count(>(0), dist₂)
+end
+
+# Supplying the fitted flip angle back as an input B1 map should reproduce the same fit.
+@testset "flip angle round trip ($Reg-$RegNorm)" for (Reg, RegNorm) in REG_NORM_PAIRS
+    RegParams = Reg == "chi2" ? (; Chi2Factor = 1.02) : Reg == "mdp" ? (; NoiseLevel = 2e-3) : (;)
+    o = DECAES.mock_t2map_opts(Float64; MatrixSize = (4, 4, 1), nTE = 48, nT2 = 40, Reg, RegNorm, SaveRegParam = true, SaveResidualNorm = true, SaveDecayCurve = true, Threaded = false, Silent = true, RegParams...)
+
+    image = DECAES.mock_image(o)
+    maps₁, dist₁ = T2mapSEcorr(copy(image), o)
+
+    maps₂ = DECAES.T2Maps(o)
+    DECAES.load_B1map!(maps₂, maps₁["alpha"])
+    maps₂, dist₂ = DECAES.T2mapSEcorr!(maps₂, DECAES.T2Distributions(o), copy(image), o)
+
+    @test maps₁["alpha"] == maps₂["alpha"]
+    @test isapprox(dist₁, dist₂; rtol = 1e-6, atol = 1e-14)
+    for k in keys(maps₁)
+        @test isapprox(maps₁[k], maps₂[k]; rtol = 1e-6, atol = 1e-14)
+    end
+end
+
+# Test scale invariance/equivariance of outputs. Scale factor is a power of two such that scaling properties are satisfied bitwise.
+@testset "regularization parameter scaling" begin
+    opts(Reg, RegNorm, s) = DECAES.mock_t2map_opts(Float64; MatrixSize = (2, 2, 1), nTE = 32, nT2 = 20, Reg, RegNorm, Chi2Factor = 1.02, NoiseLevel = s * 1e-3, SaveRegParam = true, Threaded = false, Silent = true)
+    image = DECAES.mock_image(opts("chi2", "l2", 1.0))
+    scale = 128.0
+
+    for (Reg, RegNorm) in (("chi2", "l2"), ("chi2", "l1"), ("reginska", "l2"), ("reginska", "l1"), ("mdp", "l2"), ("mdp", "l1"), ("lcurve", "l2"), ("lcurve", "l1"))
+        maps, dist = T2mapSEcorr(copy(image), opts(Reg, RegNorm, 1.0))
+        maps_scaled, dist_scaled = T2mapSEcorr(scale .* image, opts(Reg, RegNorm, scale)) # NoiseLevel is a physical residual scale, so it rides along with the image
+        @test maps_scaled["mu"] == scale^(RegNorm == "l2" ? 0 : 1) .* maps["mu"]
+        @test maps_scaled["chi2factor"] == maps["chi2factor"]
+        @test dist_scaled == scale .* dist
+    end
+end
+
 # Determinism across blocks: `reset_voxel_chains!` exists so that the deterministic block partition, not the worker count, fixes every warm-start chain.
 # The voxel count must exceed `default_blocksize()`, since a single block cannot exercise a chain that spans one.
 @testset "pipeline determinism (multi-block, thread count)" begin

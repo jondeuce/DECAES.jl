@@ -137,11 +137,16 @@ See also:
   - [`T2partSEcorr`](@ref)
   - [`lsqnonneg`](@ref)
   - [`lsqnonneg_tikh`](@ref)
+  - [`lsqnonneg_lasso`](@ref)
   - [`lsqnonneg_gcv`](@ref)
   - [`lsqnonneg_lcurve`](@ref)
+  - [`lsqnonneg_lcurve_lasso`](@ref)
   - [`lsqnonneg_reginska`](@ref)
+  - [`lsqnonneg_reginska_lasso`](@ref)
   - [`lsqnonneg_chi2`](@ref)
+  - [`lsqnonneg_chi2_lasso`](@ref)
   - [`lsqnonneg_mdp`](@ref)
+  - [`lsqnonneg_mdp_lasso`](@ref)
   - [`EPGdecaycurve`](@ref)
 """
 T2mapSEcorr(image::Array{T, 4}; kwargs...) where {T} = T2mapSEcorr(image, T2mapOptions(image; kwargs...))
@@ -582,34 +587,47 @@ end
 abstract type RegularizationMethod end
 struct NoRegularization <: RegularizationMethod end
 struct LCurve <: RegularizationMethod end
+struct LCurveLasso <: RegularizationMethod end
 struct GCV <: RegularizationMethod end
 struct Reginska <: RegularizationMethod end
+struct ReginskaLasso <: RegularizationMethod end
 struct ChiSquared{T} <: RegularizationMethod
     Chi2Factor::T
     legacy::Bool
 end
+struct ChiSquaredLasso{T} <: RegularizationMethod
+    Chi2Factor::T
+end
 struct MDP{T} <: RegularizationMethod
+    NoiseLevel::T
+end
+struct MDPLasso{T} <: RegularizationMethod
     NoiseLevel::T
 end
 
 function regularization_method(o::T2mapOptions)
+    l1 = o.RegNorm == "l1" # T2mapOptions rejects "gcv" with "l1", the one method with no ℓ¹ counterpart
     reg =
         o.Reg == "none"     ? NoRegularization() : # Fit T2 distribution using unregularized NNLS
-        o.Reg == "lcurve"   ? LCurve() : # Fit T2 distribution using L-curve-based regularized NNLS
+        o.Reg == "lcurve"   ? (l1 ? LCurveLasso() : LCurve()) : # Fit T2 distribution using L-curve-based regularized NNLS
         o.Reg == "gcv"      ? GCV() : # Fit T2 distribution using GCV-based regularized NNLS
-        o.Reg == "reginska" ? Reginska() : # Fit T2 distribution using Reginska's minimum-product criterion
-        o.Reg == "chi2"     ? ChiSquared(o.Chi2Factor, o.legacy) : # Fit T2 distribution using chi2-based regularized NNLS
-        o.Reg == "mdp"      ? MDP(o.NoiseLevel) : # Fit T2 distribution using Morizov discrepancy principle-based regularized NNLS
+        o.Reg == "reginska" ? (l1 ? ReginskaLasso() : Reginska()) : # Fit T2 distribution using Reginska's minimum-product criterion
+        o.Reg == "chi2"     ? (l1 ? ChiSquaredLasso(o.Chi2Factor) : ChiSquared(o.Chi2Factor, o.legacy)) : # Fit T2 distribution using chi2-based regularized NNLS
+        o.Reg == "mdp"      ? (l1 ? MDPLasso(o.NoiseLevel) : MDP(o.NoiseLevel)) : # Fit T2 distribution using Morozov discrepancy principle-based regularized NNLS
         error("Unrecognized regularization method: $(o.Reg)")
     return reg
 end
 
 nnls_workspace(::NoRegularization, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = NNLSUnregProblem(decay_basis, decay_data, nnls_prob_seed)
 nnls_workspace(::LCurve, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_lcurve_work(decay_basis, decay_data, nnls_prob_seed)
+nnls_workspace(::LCurveLasso, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_lcurve_lasso_work(decay_basis, decay_data, nnls_prob_seed)
 nnls_workspace(::GCV, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, dof_interpolator) where {T} = lsqnonneg_gcv_work(decay_basis, decay_data, nnls_prob_seed, dof_interpolator)
 nnls_workspace(::Reginska, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_reginska_work(decay_basis, decay_data, nnls_prob_seed)
+nnls_workspace(::ReginskaLasso, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_reginska_lasso_work(decay_basis, decay_data, nnls_prob_seed)
 nnls_workspace(::ChiSquared, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_chi2_work(decay_basis, decay_data, nnls_prob_seed)
+nnls_workspace(::ChiSquaredLasso, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_chi2_lasso_work(decay_basis, decay_data, nnls_prob_seed)
 nnls_workspace(::MDP, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_mdp_work(decay_basis, decay_data, nnls_prob_seed)
+nnls_workspace(::MDPLasso, decay_basis::AbstractMatrix{T}, decay_data::AbstractVector{T}, nnls_prob_seed, args...) where {T} = lsqnonneg_mdp_lasso_work(decay_basis, decay_data, nnls_prob_seed)
 
 struct T2DistWorkspace{Reg, T, W}
     reg::Reg
@@ -642,6 +660,13 @@ function T2_distribution!(t2work::T2DistWorkspace{LCurve, T}) where {T}
     return x
 end
 
+function T2_distribution!(t2work::T2DistWorkspace{LCurveLasso, T}) where {T}
+    (; nnls_work, decay_scale, μ, χ²fact) = t2work
+    x, μ_norm, χ²fact[] = lsqnonneg_lcurve_lasso!(nnls_work)
+    μ[] = μ_norm * decay_scale[] # see `T2_distribution!(::T2DistWorkspace{ReginskaLasso})`
+    return x
+end
+
 function T2_distribution!(t2work::T2DistWorkspace{GCV, T}) where {T}
     (; nnls_work, μ, χ²fact) = t2work
     x, μ[], χ²fact[] = lsqnonneg_gcv!(nnls_work)
@@ -654,17 +679,40 @@ function T2_distribution!(t2work::T2DistWorkspace{Reginska, T}) where {T}
     return x
 end
 
+function T2_distribution!(t2work::T2DistWorkspace{ReginskaLasso, T}) where {T}
+    (; nnls_work, decay_scale, μ, χ²fact) = t2work
+    x, μ_norm, χ²fact[] = lsqnonneg_reginska_lasso!(nnls_work)
+    μ[] = μ_norm * decay_scale[] # ℓ¹ reg parameter carries the signal scale, unlike ℓ²
+    return x
+end
+
 function T2_distribution!(t2work::T2DistWorkspace{ChiSquared{T}, T}) where {T}
     (; reg, nnls_work, μ, χ²fact) = t2work
     x, μ[], χ²fact[] = lsqnonneg_chi2!(nnls_work, reg.Chi2Factor, reg.legacy)
     return x
 end
 
+function T2_distribution!(t2work::T2DistWorkspace{ChiSquaredLasso{T}, T}) where {T}
+    (; reg, nnls_work, decay_scale, μ, χ²fact) = t2work
+    x, μ_norm, χ²fact[] = lsqnonneg_chi2_lasso!(nnls_work, reg.Chi2Factor)
+    μ[] = μ_norm * decay_scale[] # see `T2_distribution!(::T2DistWorkspace{ReginskaLasso})`
+    return x
+end
+
 function T2_distribution!(t2work::T2DistWorkspace{MDP{T}, T}) where {T}
     (; reg, nnls_work, decay_basis, decay_data, decay_scale, μ, χ²fact) = t2work
     σ = reg.NoiseLevel / decay_scale[] # homoscedastic standard deviation: σ² = 𝔼[||ηᵢ||²] = 𝔼[(bᵢ - b̂ᵢ)²]
-    δ = √(T(length(decay_data))) * σ # noise vector norm estimate: δ² = 𝔼[||η||²] = n * σ²
+    δ = √(T(length(decay_data))) * σ # δ² = 𝔼[||η||²] = n·σ², so δ is the RMS scale of the noise vector rather than a high-probability bound on its norm
     x, μ[], χ²fact[] = lsqnonneg_mdp!(nnls_work, δ)
+    return x
+end
+
+function T2_distribution!(t2work::T2DistWorkspace{MDPLasso{T}, T}) where {T}
+    (; reg, nnls_work, decay_data, decay_scale, μ, χ²fact) = t2work
+    σ = reg.NoiseLevel / decay_scale[] # see `T2_distribution!(::T2DistWorkspace{MDP})`
+    δ = √(T(length(decay_data))) * σ
+    x, μ_norm, χ²fact[] = lsqnonneg_mdp_lasso!(nnls_work, δ)
+    μ[] = μ_norm * decay_scale[] # see `T2_distribution!(::T2DistWorkspace{ReginskaLasso})`
     return x
 end
 
@@ -710,7 +758,7 @@ function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T},
         gva[I] = expm1(log1p_gva) # general variance
         fnr[I] = Σ_dist / √(Σ_res² / (o.nTE - 1)) # fit to noise ratio
         snr[I] = max_signal / σ_res # signal to noise ratio
-        alpha[I] = rad2deg(flip_angle_work.α[]) # optimized refocusing pulse flip angle, in degrees
+        is_B1map_provided(maps) || (alpha[I] = rad2deg(flip_angle_work.α[])) # optimized refocusing pulse flip angle, in degrees; a provided B1 map is returned as given
     end
 
     # Save distribution

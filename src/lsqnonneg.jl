@@ -448,7 +448,7 @@ curvature(::typeof(log), work::NNLSTikhonovRegProblem, ∇ = gradient_temps(work
 # Curvature κ and turning rate ω = θ̇ of the log-log L-curve P(t) = (log ξ², log η²) at t = log μ, from ξ² = ‖Ax-b‖², η² = ‖x‖², q = xᵀB⁻¹x.
 # At fixed active set Ṗ = (4ρ²q/ξ², -4ρq/η²) with ρ = μ², so the log-log slope is -ξ²/(ρη²).
 # Writing H = hypot(ξ², ρη²), c = ξ²/H, d = ρη²/H, z = 2ρq/η², whence c² + d² = 1,
-#       κ = cd·u/z,   ω = 2d·u,   u = c - z(c + d).
+#   κ = cd·u/z,    ω = 2d·u,    u = c - z(c + d).
 # Every factor is O(1) but the intrinsic 1/z, and u alone cancels at zero curvature. B ⪰ ρI gives q ≤ η²/ρ, hence 0 < z ≤ 2.
 # κ selects the corner; ω tells it apart from the μ → 0 tail, where κ tends to a plateau η⁴/(2qξ²) but the arc speed vanishes.
 function lcurve_geometry(ξ²::T, η²::T, q::T, μ::T) where {T}
@@ -1304,7 +1304,7 @@ is_equal_signature(state::LCurveCornerState) = state.p⃗[1].sig == state.p⃗[2
 
 # Contraction stops when the abscissas span less than `xtol` or the endpoints span less than `Ptol` of L-curve arc. The two are not comparable: `xtol` resolves the abscissa, `Ptol` the solution.
 # Monotonicity of the Tikhonov path gives ‖x₁ - x₂‖² ≤ tanh(t₂ - t₁)·(η²₁ - η²₂), across active-set changes and not merely within one branch, and so
-#       ‖Δx‖/‖x‖ ≤ √(tanh(Δt)·(1 - e^{-Δlog η²})) ≤ √Ptol.
+#   ‖Δx‖/‖x‖ ≤ √(tanh(Δt)·(1 - e^{-Δlog η²})) ≤ √Ptol.
 # That bounds the spread of solutions within one state, not the distance to the corner an `xtol`-resolved search would return: stopping on `Ptol` leaves the state wide in t, so `best_corner` compares distant neighbours and accepts a coarser feature of κ.
 is_converged(state::LCurveCornerState; xtol, Ptol) = abs(state.t⃗[4] - state.t⃗[1]) < xtol || norm(state.p⃗[1].P - state.p⃗[4].P) < Ptol
 
@@ -1596,13 +1596,13 @@ end
 #### GCV method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W0, W1, W2, W3, V, S}
+struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, WS, W1, W2, W3, V, S}
     A::TA # decay basis matrix
     b::Tb # decay curve data
     m::Int # number of rows of A
     n::Int # number of columns of A
     γ²::Vector{T} # squared singular values of A, i.e. nonzero eigenvalues of A'A
-    spectrum_work::W0 # workspace for computing the singular values of A
+    spectrum_work::WS # workspace for computing the singular values of A
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
@@ -2144,6 +2144,171 @@ function lsqnonneg_mdp_lasso!(work::NNLSMDPLassoRegProblem{T}, δ::Real) where {
 
     mu_final = lasso_target_regparam!(lasso_work, δ²; atol = eps(T) * b²)
     return (; x = solution(lasso_work), mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+end
+
+####
+#### L-curve method for choosing the ℓ¹ regularization parameter
+####
+
+struct NNLSLCurveLassoRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, W1, W2, S}
+    A::TA # decay basis matrix
+    b::Tb # decay curve data
+    m::Int # number of rows of A
+    n::Int # number of columns of A
+    nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
+    lasso_work::W2 # ℓ¹-regularized solver workspace, warm-started across the μ-search
+    nnls_prob_seed::S # source for the unregularized solve; see `NNLSUnregSource`
+end
+function NNLSLCurveLassoRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob_seed::NNLSUnregSource{T} = nothing) where {T}
+    m, n = size(A)
+    return NNLSLCurveLassoRegProblem(A, b, m, n, NNLSProblem(A, b), NNLS.NNLSLassoWorkspace(A, b), nnls_prob_seed)
+end
+
+@inline solution(work::NNLSLCurveLassoRegProblem) = solution(work.lasso_work)
+@inline ncomponents(work::NNLSLCurveLassoRegProblem) = ncomponents(work.lasso_work)
+
+@doc raw"""
+    lsqnonneg_lcurve_lasso(A::AbstractMatrix, b::AbstractVector; max_slope = $(LCURVE_SLOPE_MAX_DEFAULT))
+
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+
+```math
+X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
+```
+
+where ``\mu`` is chosen at a corner of the ``\ell^1`` "L-curve"[1] ``\mu \mapsto (\log||Ax_\mu - b||_2^2, 2\log||x_\mu||_1)``, the first positive local maximum of its turning rate ``\omega = d\theta/d\log\mu`` that `max_slope` admits.
+
+As for [`lsqnonneg_lcurve`](@ref), `max_slope` excludes corners in the near-vertical ``\mu \to 0`` tail. If no corner is found, ``\mu = 0`` and the unregularized solution is returned.
+
+# Arguments
+
+  - `A::AbstractMatrix`: Decay basis matrix
+  - `b::AbstractVector`: Decay curve data
+  - `max_slope::Real = $(LCURVE_SLOPE_MAX_DEFAULT)`: reject corners at which ``2 ||Ax_\mu - b||_2^2 / (\mu ||x_\mu||_1)`` exceeds `max_slope`. Pass `Inf` to accept any corner.
+
+# Outputs
+
+  - `X::AbstractVector`: Regularized NNLS solution
+  - `mu::Real`: Resulting regularization parameter ``\mu``
+  - `chi2::Real`: Resulting ratio ``||AX_{\mu} - b||_2^2 / ||AX_0 - b||_2^2`` of squared residual norms
+
+# References
+
+  1. J. Nasehi Tehrani, A. McEwan, C. Jin and A. van Schaik, "L1 regularization method in electrical impedance tomography by using the L1-curve (Pareto frontier curve)". Applied Mathematical Modelling, 36(3), 1095-1105, 2012, https://doi.org/10.1016/j.apm.2011.07.055.
+"""
+function lsqnonneg_lcurve_lasso(A::AbstractMatrix, b::AbstractVector; kwargs...)
+    work = lsqnonneg_lcurve_lasso_work(A, b)
+    return lsqnonneg_lcurve_lasso!(work; kwargs...)
+end
+lsqnonneg_lcurve_lasso_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSLCurveLassoRegProblem(A, b, nnls_prob_seed)
+
+function lsqnonneg_lcurve_lasso!(work::NNLSLCurveLassoRegProblem{T}; max_slope = LCURVE_SLOPE_MAX_DEFAULT, maxiters::Int = 64 * work.n + 64) where {T}
+    (; lasso_work) = work
+    @assert max_slope > 0 "max_slope must be positive; got $max_slope"
+
+    (; μmax, R₀, N₀, b²) = lasso_baseline!(work)
+    res²_min = R₀
+
+    # A zero solution leaves no finite logarithmic curve
+    (R₀ <= eps(T) * b² || N₀ <= 0) && return (; x = solution(lasso_work), mu = zero(T), chi2 = one(T))
+
+    mu_final = lcurve_lasso_march!(lasso_work, μmax, T(max_slope), maxiters)
+
+    # No admissible corner below μmax; return the unregularized solution
+    mu_final == 0 && return (; x = NNLS.solve!(lasso_work, zero(T)), mu = zero(T), chi2 = one(T))
+
+    x_final = NNLS.solve!(lasso_work, mu_final)
+    return (; x = x_final, mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+end
+
+# Corner of the ℓ¹ L-curve, found by walking the support segments upward from μ = 0, where `lasso_baseline!` has left the workspace solved.
+# One solve per segment fixes ‖Ax-b‖², ‖x‖₁ and q there, making the geometry of `lcurve_geometry_lasso` closed-form across it.
+# A stationary point of ω interior to the segment is a turning maximum of the path; one past the far knot leaves ω still rising, which `rising` carries into the next segment.
+# One short of the near knot leaves ω falling across the whole segment, so that knot is a turning maximum only if ω rose into it and the curvature there is still positive.
+# The maxima are located before the slope guard is applied, so `max_slope` rejects a corner near the vertical tail rather than moving it, as in `lcurve_corner`.
+# Returns the selected μ, or zero when no segment below μmax carries an admissible maximum.
+function lcurve_lasso_march!(lasso_work::NNLS.NNLSLassoWorkspace{T}, μmax::T, τ::T, maxiters::Int) where {T}
+    μ, rising, nudge = zero(T), false, eps(T)^(3//4)
+
+    for _ in 1:maxiters
+        R, N₁ = resnorm_sq(lasso_work), seminorm(lasso_work)
+        N₁ <= 0 && return zero(T)
+
+        q, μ_end = NNLS.regparam_segment!(lasso_work, μ)
+        q <= 0 && return error("The ℓ¹ path direction vanished on a nonempty support, where q = ‖R⁻ᵀ𝟙‖² is positive.")
+
+        ν★ = lcurve_lasso_segment_turn(q, μ, R, N₁)
+        if ν★ >= μ_end
+            rising = true # ω is still rising where the segment ends
+        else
+            ν = ν★ > μ ? ν★ : μ
+            turns = ν★ > μ || (rising && lcurve_geometry_lasso(R, N₁, q, μ)[1] > 0)
+            turns && lcurve_lasso_segment_slope(q, μ, R, N₁, ν) <= τ && return ν
+            rising = false
+        end
+
+        μ = max(μ_end * (1 + nudge), μ + nudge * μmax)
+        μ >= μmax && return zero(T)
+        NNLS.solve!(lasso_work, μ)
+    end
+
+    return error("The ℓ¹ L-curve was not walked to the end of the path within $maxiters support segments.")
+end
+
+# Stationary point of the turning rate on the segment containing the solution at μ.
+# Writing R = ρ + qν²/4 and L = ℓ - qν/2 on the segment, the turning rate of `lcurve_geometry_lasso` is
+#
+#   ω(ν) = ν(2ρℓ - 2ρqν - qℓν²/2) / (q²ν⁴/2 - qℓν³ + (ℓ² + 2ρq)ν² + 4ρ²).
+#
+# ω(ν) is positive between its zeros at ν = 0 and at the positive root νᵤ of the quadratic factor in the numerator.
+# The numerator N'D - ND' of ω'(ν) is therefore 8ρ³ℓ > 0 at ν = 0 and -(2ρqνᵤ + qℓνᵤ²)·D(νᵤ) < 0 at ν = νᵤ, bracketing its root.
+# This root can be shown to be the unique maximum: in the variables z = qν/2ℓ and h = qρ/ℓ² the numerator is
+#
+#   P = 2z⁶ + 8hz⁵ - (12h+1)z⁴ + 4hz³ - (5h²+h)z² - 4h³z + h³.
+#
+# Its z-derivative -4h³ - 10zh² + 2zh(20z³-24z²+6z-1) + 4z³(3z²-1) is negative on 0 < z ≤ 1/4, where P runs from h³ > 0 to -(640h² + 80h + 7)/2048 < 0.
+# On 1/4 ≤ z < 1/2, substituting h = (u+z²)/(1-2z) with u = h(1-2z) - z² > 0,
+#
+#   (1-2z)³P = (1-4z)u³ - 2z²(z+1)u² + z²(z-1)(32z⁴-48z³+32z²-7z+1)u + 2z⁴(z-1)³(8z²-4z+1)
+#
+# is a sum of nonpositive terms with the last strictly negative, and z ≥ 1/2 lies outside the positive-curvature branch entirely.
+# Returns zero when ρ ≤ 0, where the positive-turning branch is empty.
+function lcurve_lasso_segment_turn(q::T, μ::T, R::T, N₁::T) where {T}
+    ρ, ℓ = R - q * μ^2 / 4, N₁ + q * μ / 2
+    ρ <= 0 && return zero(T)
+
+    # Derivative numerator N'D - ND', equal to (8ℓ⁷/q³)·P and thus has the same sign as P
+    ρ², ℓ², ρq, ρℓ, qℓ = ρ^2, ℓ^2, ρ * q, ρ * ℓ, q * ℓ
+    c₀, c₁, c₂, c₃ = 8 * ρ² * ρℓ, -16 * ρ² * ρq, -2 * ρℓ * (ℓ² + 5 * ρq), 4 * ρq * ℓ²
+    c₄, c₅, c₆ = -(qℓ / 2) * (12 * ρq + ℓ²), 2 * ρ * q^3, q^3 * ℓ / 4
+    dturn(ν) = (ν² = ν^2; muladd(ν²^2, muladd(c₆, ν², muladd(c₅, ν, c₄)), muladd(ν², muladd(c₃, ν, c₂), muladd(c₁, ν, c₀))))
+
+    lo, hi = zero(T), 2 * ρℓ / (ρq + √(ρq * (ρq + ℓ²)))
+    while lo < (mid = (lo + hi) / 2) < hi
+        dturn(mid) > 0 ? (lo = mid) : (hi = mid)
+    end
+
+    return (lo + hi) / 2
+end
+
+# Tangent slope magnitude 2‖Ax_ν - b‖²/(ν‖x_ν‖₁) at ν on the segment solved at μ
+@inline function lcurve_lasso_segment_slope(q::T, μ::T, R::T, N₁::T, ν::T) where {T}
+    Rν, Nν = R + q * (ν^2 - μ^2) / 4, N₁ - q * (ν - μ) / 2
+    return Nν <= 0 ? T(Inf) : 2 * Rν / (ν * Nν)
+end
+
+# Curvature κ and turning rate ω of the ℓ¹ log-log L-curve P(t) = (log R, 2log N₁) at t = logμ, from R = ‖Ax-b‖², N₁ = ‖x‖₁, q = 𝟙ᵀG_PP⁻¹𝟙.
+# The curve is piecewise C²: R, N₁ and μ are continuous across a support change but q is not, so Ṗ = q(μ²/2R, -μ/N₁) jumps by in magnitude by a factor q₊/q₋ but its direction is unchanged.
+# The curve is therefore tangent-continuous across a knot, while κ and ω are two-valued, and both strictly decreasing in q.
+# On a fixed support, dR/dμ = μq/2 and dN₁/dμ = -q/2, so with a = Ṗ₁ = μ²q/(2R) and c = Ṗ₂ = -μq/N₁,
+#   P̈₁ = 2a - a²,    P̈₂ = c - c²/2,    ω = (Ṗ₁P̈₂ - Ṗ₂P̈₁)/(a² + c²) = ac(a - c/2 - 1)/(a² + c²),    κ = ω/√(a² + c²).
+# As μ → 0, κ tends to the positive plateau N₁²/(2qR) while ω vanishes, as for the Tikhonov curve; see `lcurve_geometry`.
+# On a segment, R = ρ + qν²/4 and N₁ = ℓ - qν/2 with ρ ≥ 0 and ℓ > 0, so in the variables z = qν/2ℓ ∈ (0,1) and h = qρ/ℓ², positive curvature <=> h(1-2z) > z².
+function lcurve_geometry_lasso(R::T, N₁::T, q::T, μ::T) where {T}
+    a, c = μ^2 * q / (2 * R), -μ * q / N₁
+    n² = a^2 + c^2
+    ω = a * c * (a - c / 2 - 1) / n²
+    return (ω / √n², ω)
 end
 
 ####

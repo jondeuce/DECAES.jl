@@ -68,13 +68,18 @@ See also:
     nRefAnglesMin::Int = !legacy ? min(9, nRefAngles) : nRefAngles
     @assert 2 <= nRefAnglesMin <= nRefAngles "Minimum number of angles to check during flip angle optimization must be in the range [2, nRefAngles], but nRefAngles = $nRefAngles and nRefAnglesMin = $nRefAnglesMin."
 
-    "Regularization routine to use. One of \"gcv\", \"lcurve\", \"reginska\", \"chi2\", \"mdp\", or \"none\", representing the Generalized Cross-Validation method, the L-Curve method, Regińska's minimum-product criterion, `Chi2Factor`-based Tikhonov regularization, the Morozov discrepancy principle, or no regularization, respectively."
+    "Regularization routine to use. One of \"gcv\", \"lcurve\", \"reginska\", \"chi2\", \"mdp\", or \"none\", representing the Generalized Cross-Validation method, the L-Curve method, Regińska's minimum-product criterion, `Chi2Factor`-based regularization, the Morozov discrepancy principle, or no regularization, respectively."
     Reg::String
     @assert Reg ∈ ("gcv", "lcurve", "reginska", "chi2", "mdp", "none")
 
+    "Regularization penalty norm. One of \"l2\" or \"l1\", penalizing ``\\mu^2 ||x||_2^2`` or ``\\mu ||x||_1``, respectively. Ignored when `Reg == \"none\"`."
+    RegNorm::String = "l2"
+    @assert RegNorm ∈ ("l2", "l1")
+    @assert !(Reg == "gcv" && RegNorm == "l1") "GCV is not implemented for the l1 penalty norm."
+
     "Constraint on ``\\chi^2`` used for regularization when `Reg == \"chi2\"`."
     Chi2Factor::Union{T, Nothing} = nothing
-    @assert Reg != "chi2" || (Reg == "chi2" && Chi2Factor !== nothing && Chi2Factor > 1.0) "Chi2Factor must be greater than 1.0, but Chi2Factor = $Chi2Factor."
+    @assert Reg != "chi2" || (Chi2Factor !== nothing && Chi2Factor > 1.0) "Chi2Factor must be greater than 1.0, but Chi2Factor = $Chi2Factor."
 
     "Estimate of the homoscedastic noise level ``|b_i - \\hat{b}_i|``, where ``b`` is the unknown true signal and ``\\hat{b}`` is the measured corrupted signal. For Gaussian noise, this is the standard deviation."
     NoiseLevel::Union{T, Nothing} = nothing

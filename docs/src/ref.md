@@ -32,6 +32,7 @@ lsqnonneg_tikh
 lsqnonneg_lasso
 lsqnonneg_gcv
 lsqnonneg_lcurve
+lsqnonneg_lcurve_lasso
 lsqnonneg_reginska
 lsqnonneg_reginska_lasso
 lsqnonneg_chi2

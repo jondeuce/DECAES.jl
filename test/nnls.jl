@@ -622,7 +622,7 @@ end
         (; x, mu) = DECAES.lsqnonneg_lcurve(A, b)
 
         # The production invariant, which any accepted corner must satisfy however the search changes
-        @test mu == 0 || sum(abs2, A * x - b) / (mu^2 * sum(abs2, x)) <= 1.001 * DECAES.LCURVE_SLOPE_MAX_DEFAULT
+        @test mu == 0 || sum(abs2, A * x - b) / (mu^2 * sum(abs2, x)) <= (1 + 1e-8) * DECAES.LCURVE_SLOPE_MAX_DEFAULT
         @test mu == 0 || abs(log(mu) - t_tail) > 1 # never this tail maximum
     end
 end
@@ -702,7 +702,7 @@ end
         b = P * x₀ .+ δ .* r
         (; x, mu) = DECAES.lsqnonneg_lcurve(A, b)
         @test mu > 0 # a genuine admissible elbow, unlike the toy basis above
-        @test sum(abs2, A * x - b) / (mu^2 * sum(abs2, x)) <= 1.001 * DECAES.LCURVE_SLOPE_MAX_DEFAULT
+        @test sum(abs2, A * x - b) / (mu^2 * sum(abs2, x)) <= (1 + 1e-8) * DECAES.LCURVE_SLOPE_MAX_DEFAULT
     end
 end
 
@@ -922,7 +922,7 @@ function lsqnonneg_lcurve_tests(m, n)
         DECAES.solve!(w, mu)
         @test DECAES.curvature(log, w) > 0
         η² = sum(abs2, x)
-        @test η² == 0 || sum(abs2, A * x - b) / (η² * mu^2) < 1.001 * DECAES.LCURVE_SLOPE_MAX_DEFAULT
+        @test η² == 0 || sum(abs2, A * x - b) / (η² * mu^2) < (1 + 1e-8) * DECAES.LCURVE_SLOPE_MAX_DEFAULT
     else
         @test chi2 == 1
     end
@@ -962,7 +962,7 @@ end
 
 # Reginska selects the *leftmost* balance point |S| = 1, the smallest local minimizer of Ψ = res²·‖x‖², certified by the leap scan.
 # Verified against a brute-force reference: the returned μ must equal the leftmost downward crossing of g(logμ) = log res² − log‖x‖² − 2logμ.
-function reginska_expdecay_data(m, n, noise = 1e-3)
+function expdecay_data(m, n, noise = 1e-3)
     t = range(0, 2; length = m)
     τ = exp10.(range(-1.5, 0.5; length = n))
     A = [exp(-tᵢ / τⱼ) for tᵢ in t, τⱼ in τ]
@@ -1002,7 +1002,7 @@ end
 
 @testset "lsqnonneg_reginska leftmost crossing" begin
     for (m, n) in ((32, 40), (48, 40), (32, 60), (48, 32), (24, 48)), _ in 1:3
-        A, b = reginska_expdecay_data(m, n)
+        A, b = expdecay_data(m, n)
         (; mu) = DECAES.lsqnonneg_reginska!(DECAES.lsqnonneg_reginska_work(A, b))
         mu > 0 || continue
         lc = reginska_leftmost_downcrossing(reginska_log_abs_slope, A, b)
@@ -1316,24 +1316,223 @@ end
     end
 end
 
-# Exactly dependent columns are the case pure ℓ¹ regularization cannot factor away, having no diagonal shift with which to make the Hessian definite.
-# The dependence coefficients decide the outcome: a column reproduced by others as A_k = A_{P\k} c is worth entering exactly when 𝟙ᵀc > 1, since it then carries the same fitted vector at strictly smaller 𝟙ᵀx.
+# The same separable path gives the ℓ¹ L-curve P(t) = (log R, 2log‖x‖₁) in closed form on the first segment, against which κ and ω are checked by central differences in t = logμ.
+@testset "lcurve_geometry_lasso" begin
+    n⃗, c⃗, R₀ = [1.2, 1.0, 0.8], [1.5, 1.0, 2.0], 4.0
+    q = sum(inv, n⃗)
+    R(μ) = R₀ + q * μ^2 / 4
+    N₁(μ) = sum((c⃗ .- μ / 2) ./ n⃗)
+    P(t) = SA[log(R(exp(t))), 2*log(N₁(exp(t)))]
+    for μ in (0.1, 0.5, 1.0, 1.8) # inside the first segment, μ < 2min(c⃗) = 2
+        t, h = log(μ), 1e-4
+        Ṗ = (P(t + h) - P(t - h)) / 2h
+        P̈ = (P(t + h) - 2 * P(t) + P(t - h)) / h^2
+        ω_fd = (Ṗ[1] * P̈[2] - Ṗ[2] * P̈[1]) / (Ṗ[1]^2 + Ṗ[2]^2)
+        κ, ω = DECAES.lcurve_geometry_lasso(R(μ), N₁(μ), q, μ)
+        @test ω ≈ ω_fd rtol = 1e-4 # turning rate
+        @test κ ≈ ω_fd / √(Ṗ[1]^2 + Ṗ[2]^2) rtol = 1e-4 # curvature
+        @test abs(Ṗ[2] / Ṗ[1]) ≈ 2 * R(μ) / (μ * N₁(μ)) rtol = 1e-6 # tangent slope
+    end
+
+    # Segment geometry follows from one solve per segment
+    work = DECAES.lsqnonneg_lcurve_lasso_work([diagm(.√n⃗); zeros(1, 3)], [c⃗ ./ .√n⃗; √R₀])
+    DECAES.NNLS.reset!(work.lasso_work)
+    DECAES.NNLS.solve!(work.lasso_work, 0.0)
+    q₀, μ_end = DECAES.NNLS.regparam_segment!(work.lasso_work, 0.0)
+    @test q₀ ≈ q rtol = 1e-12
+    @test μ_end ≈ 2 * minimum(c⃗) rtol = 1e-12 # the first knot, where the smallest cⱼ leaves
+    for ν in (0.1, 0.5, 1.0, 1.8)
+        @test DECAES.lcurve_lasso_segment_slope(q₀, 0.0, R₀, sum(c⃗ ./ n⃗), ν) ≈ 2 * R(ν) / (ν * N₁(ν)) rtol = 1e-12
+    end
+end
+
+function lsqnonneg_lcurve_lasso_tests(m, n)
+    A, b = rand_NNLS_data(m, n)
+    work = DECAES.lsqnonneg_lcurve_lasso_work(A, b)
+    (; x, mu, chi2) = @inferred DECAES.lsqnonneg_lcurve_lasso!(work)
+    res²_min = DECAES.resnorm_sq(work.nnls_prob)
+    @test all(>=(0), x)
+    @test isfinite(mu) && mu >= 0
+    lasso_certify(A, b, x, mu)
+
+    if mu > 0
+        res² = sum(abs2, A * x - b)
+        @test chi2 ≈ res² / res²_min rtol = 1e-8
+        @test 2 * res² / (mu * sum(x)) <= (1 + 1e-8) * DECAES.LCURVE_SLOPE_MAX_DEFAULT # any accepted corner satisfies the slope guard
+        @test mu <= lasso_regparam_max(A, b) * (1 + 1e-12) # the search domain ends at μmax, where the finite logarithmic path terminates and the solution becomes identically zero
+
+        # A corner must be a point of positive curvature
+        DECAES.NNLS.reset!(work.lasso_work)
+        DECAES.NNLS.solve!(work.lasso_work, mu)
+        q = DECAES.NNLS.regparam_direction!(work.lasso_work)
+        @test DECAES.lcurve_geometry_lasso(res², sum(x), q, mu)[1] > 0
+    else
+        @test chi2 == 1
+    end
+end
+
+@testset "lsqnonneg_lcurve_lasso" begin
+    for (m, n) in NNLS_SIZES
+        lsqnonneg_lcurve_lasso_tests(m, n)
+    end
+end
+
+@testset "lsqnonneg_lcurve_lasso argument validation" begin
+    A, b = rand_NNLS_data(12, 8)
+
+    for τ in (0.5, 0.9, 1.0)
+        (; mu) = DECAES.lsqnonneg_lcurve_lasso(A, b; max_slope = τ)
+        @test isfinite(mu) && mu >= 0
+        mu > 0 && @test 2 * sum(abs2, A * DECAES.lsqnonneg_lasso(A, b, mu) - b) / (mu * sum(DECAES.lsqnonneg_lasso(A, b, mu))) <= (1 + 1e-8) * τ
+    end
+
+    mus = [DECAES.lsqnonneg_lcurve_lasso(A, b; max_slope = τ).mu for τ in (Inf, 10.0, 2.0, 1.0)]
+    @test issorted(replace(mus, 0.0 => Inf)) # μ = 0 indicates no admissible corner found
+    @test mus[1] > 0 # an unbounded guard accepts the first corner the walk finds
+end
+
+# Closely spaced knots may be crossed in one step.
+@testset "lsqnonneg_lcurve_lasso clustered knots" begin
+    τ = DECAES.LCURVE_SLOPE_MAX_DEFAULT
+    A₀, b = expdecay_data(24, 6, 1e-2)
+    for δ in (1e-6, 1e-9, 1e-12)
+        A = hcat((A₀[:, j] .* (1 .+ δ .* (0:(size(A₀, 1)-1))) for j in 1:size(A₀, 2) for _ in 1:3)...) # each column tripled and split by δ
+        (; mu) = DECAES.lsqnonneg_lcurve_lasso(A, b)
+        @test isfinite(mu) && mu >= 0
+        mu == 0 && continue
+        lasso_certify(A, b, DECAES.lsqnonneg_lasso(A, b, mu), mu)
+
+        work = DECAES.NNLS.NNLSLassoWorkspace(A, b)
+        DECAES.NNLS.reset!(work)
+        DECAES.NNLS.solve!(work, 0.0)
+        μ₀ = 2 * sum(abs2, DECAES.NNLS.residual(work)) / sum(DECAES.NNLS.solution(work))
+        @test mu >= μ₀ / τ
+    end
+end
+
+function dense_lcurve_lasso_corner(A, b, ts, τ)
+    work = DECAES.NNLS.NNLSLassoWorkspace(A, b)
+    DECAES.NNLS.reset!(work)
+    ω, slope = zeros(length(ts)), zeros(length(ts))
+    supports = Vector{Vector{Int}}(undef, length(ts))
+    for (i, t) in enumerate(ts)
+        μ = exp(t)
+        DECAES.NNLS.solve!(work, μ)
+        x = DECAES.NNLS.solution(work)
+        R, N₁ = sum(abs2, DECAES.NNLS.residual(work)), sum(x)
+        q = DECAES.NNLS.regparam_direction!(work)
+        ω[i] = N₁ <= 0 ? -Inf : DECAES.lcurve_geometry_lasso(R, N₁, q, μ)[2]
+        slope[i] = N₁ <= 0 ? Inf : 2R / (μ * N₁)
+        supports[i] = findall(>(0), x)
+    end
+
+    lo, rising = firstindex(ts), false
+    while lo <= lastindex(ts)
+        hi = lo
+        while hi < lastindex(ts) && supports[hi+1] == supports[lo]
+            hi += 1
+        end
+        k = argmax(i -> ω[i], lo:hi)
+        if k == hi
+            rising = true
+        elseif (k > lo || (rising && ω[lo] > 0)) && slope[k] <= τ
+            return ts[k]
+        else
+            rising = false
+        end
+        lo = hi + 1
+    end
+    return eltype(ts)(NaN)
+end
+
+# Compare the support-segment walk with a dense grid oracle.
+@testset "lsqnonneg_lcurve_lasso against a dense scan" begin
+    τ = DECAES.LCURVE_SLOPE_MAX_DEFAULT
+    for noise in (1e-3, 1e-2), (m, n) in ((48, 40), (32, 40))
+        A, b = expdecay_data(m, n, noise)
+        (; mu) = DECAES.lsqnonneg_lcurve_lasso(A, b)
+        @test mu > 0
+
+        ts = range(log(mu) - 10, log(mu) + 2; length = 8000)
+        t_ref = dense_lcurve_lasso_corner(A, b, ts, τ)
+        @test isfinite(t_ref)
+        @test abs(log(mu) - t_ref) <= 2 * step(ts)
+    end
+end
+
+# Positive curvature occupies an initial segment on which κ decreases. The turning rate ω has one interior maximum there.
+@testset "ℓ¹ L-curve segment curvature is monotone where positive" begin
+    for _ in 1:50
+        q, ρ, ℓ = exp(4 * randn()), exp(4 * randn()) * rand(Bool), exp(4 * randn())
+        R(ν) = ρ + q * ν^2 / 4
+        N₁(ν) = ℓ - q * ν / 2
+        κ(ν) = DECAES.lcurve_geometry_lasso(R(ν), N₁(ν), q, ν)[1]
+        ω(ν) = DECAES.lcurve_geometry_lasso(R(ν), N₁(ν), q, ν)[2]
+        slope(ν) = 2 * R(ν) / (ν * N₁(ν))
+        νs = (2 * ℓ / q) .* range(0.01, 0.99; length = 199)
+        pos = findall(ν -> κ(ν) > 0, νs)
+        @test isempty(pos) || pos == 1:length(pos)
+        @test all(i -> κ(νs[i] * (1 + 1e-6)) < κ(νs[i]), pos)
+        @test all(i -> slope(νs[i] * (1 + 1e-6)) < slope(νs[i]), pos)
+        @test all(i -> sign(ω(νs[i])) == sign(κ(νs[i])), pos)
+        @test ρ > 0 || DECAES.lcurve_lasso_segment_turn(q, 0.0, ρ, ℓ) == 0
+
+        # Use a logarithmic grid to resolve the maximizer as h → 0.
+        isempty(pos) && continue
+        ν_u = 2ρ * ℓ / (ρ * q + √(ρ * q * (ρ * q + ℓ^2)))
+        @test ω(DECAES.lcurve_lasso_segment_turn(q, 0.0, ρ, ℓ)) >= maximum(ω, ν_u .* exp.(range(-16.0, -1e-9; length = 4001)))
+    end
+end
+
+# On this knot-free path κ decreases from its positive tail limit, while ω has the interior maximum selected by the method.
+@testset "ℓ¹ L-curve on a path with no knot" begin
+    A = [1.0; 0.0;;]
+    for δ in (1e-1, 1e-2, 1e-4)
+        b = [1.0, δ]
+        μ₀, τ = 2 * δ^2, DECAES.LCURVE_SLOPE_MAX_DEFAULT
+        geom(t) = DECAES.lcurve_geometry_lasso(δ^2 + exp(2t) / 4, 1 - exp(t) / 2, 1.0, exp(t))
+        κ(t) = geom(t)[1]
+        ω(t) = geom(t)[2]
+        @test κ(log(μ₀ / 10)) > κ(log(μ₀)) > κ(log(10 * μ₀))
+
+        (; mu) = DECAES.lsqnonneg_lcurve_lasso(A, b)
+        @test mu > 0
+
+        ts = range(log(μ₀) - 6, log(2 - eps()); length = 20001)
+        @test abs(log(mu) - argmax(ω, ts)) <= 2 * step(ts)
+        @test 2 * (δ^2 + mu^2 / 4) / (mu * (1 - mu / 2)) <= (1 + 1e-8) * τ
+        @test mu ≈ μ₀ rtol = 0.2
+    end
+end
+
+# A corner rejected by the slope guard must not reappear at the next segment boundary.
+@testset "ℓ¹ L-curve rejects rather than slides a guarded corner" begin
+    A, b = [1.0 0 0; 0 1 0; 0 0 1; 0 0 0], [0.15, 0.25, 0.30, √0.30]
+    work = DECAES.NNLS.NNLSLassoWorkspace(A, b)
+    DECAES.NNLS.reset!(work)
+    DECAES.NNLS.solve!(work, 0.3)
+    @test DECAES.lcurve_geometry_lasso(sum(abs2, DECAES.NNLS.residual(work)), sum(DECAES.NNLS.solution(work)), DECAES.NNLS.regparam_direction!(work), 0.3)[1] < 0
+    @test DECAES.lsqnonneg_lcurve_lasso(A, b).mu == 0
+    @test DECAES.lsqnonneg_lcurve_lasso(A, b; max_slope = 12.0).mu ≈ 0.100815 rtol = 1e-4
+end
+
+# Dependence coefficients determine whether an equivalent column lowers 𝟙ᵀx.
 @testset "lsqnonneg_lasso exact column dependence" begin
     a₁, a₂ = [1.0, 0.0, 0.5], [0.0, 1.0, 0.5]
     b = 2 * a₁ + 3 * a₂
 
-    # A duplicate has 𝟙ᵀc = 1 and buys nothing, leaving the split of its coefficient with the solver, so only the invariants of the minimizer are pinned
+    # A duplicate leaves the minimizer nonunique.
     A = [a₁ a₂ a₁]
     x = DECAES.lsqnonneg_lasso(A, b, 1e-6)
     @test A * x ≈ b rtol = 1e-5
     @test sum(x) ≈ 5 rtol = 1e-5
 
-    # A scaled copy has 𝟙ᵀc = 2, so the fit moves onto it entirely and halves that part of 𝟙ᵀx
+    # A scaled copy lowers 𝟙ᵀx.
     A = [a₁ a₂ 2 * a₁]
     x = DECAES.lsqnonneg_lasso(A, b, 1e-6)
     @test x ≈ [0.0, 3.0, 1.0] rtol = 1e-5 atol = 1e-6
 
-    # A sum of two columns likewise has 𝟙ᵀc = 2, and the fit moves onto it as far as nonnegativity of the columns it replaces allows
+    # A column sum also lowers 𝟙ᵀx.
     A = [a₁ a₂ a₁+a₂]
     x = DECAES.lsqnonneg_lasso(A, b, 1e-6)
     @test x ≈ [0.0, 1.0, 2.0] rtol = 1e-5 atol = 1e-6
@@ -1406,7 +1605,7 @@ end
         end
 
         # A selection method reporting μ = 0 hands back the unregularized solve, which is not the ℓ¹ solver under test here
-        for (; x, mu) in (DECAES.lsqnonneg_chi2_lasso(A, b, 1.02), DECAES.lsqnonneg_reginska_lasso(A, b), DECAES.lsqnonneg_mdp_lasso(A, b, 0.5 * norm(b) + eps()))
+        for (; x, mu) in (DECAES.lsqnonneg_chi2_lasso(A, b, 1.02), DECAES.lsqnonneg_reginska_lasso(A, b), DECAES.lsqnonneg_mdp_lasso(A, b, 0.5 * norm(b) + eps()), DECAES.lsqnonneg_lcurve_lasso(A, b))
             @test all(isfinite, x)
             @test isfinite(mu) && mu >= 0
             mu > 0 && lasso_certify(A, b, x, mu; rtol = 1e-9)
@@ -1472,7 +1671,7 @@ end
 # The balance point sits a distance ≈ q·res²(0)/‖x_0‖₁² above the starting point, so the noise level is what decides whether more than the first interval is visited at all.
 @testset "lsqnonneg_reginska_lasso leftmost crossing" begin
     for noise in (1e-3, 1e-2, 5e-2), (m, n) in ((32, 40), (48, 40), (32, 60), (48, 32), (24, 48))
-        A, b = reginska_expdecay_data(m, n, noise)
+        A, b = expdecay_data(m, n, noise)
         (; mu) = DECAES.lsqnonneg_reginska_lasso(A, b)
         lc = reginska_leftmost_downcrossing(reginska_lasso_log_abs_slope, A, b, -20.0:0.01:6.0)
         if mu > 0
@@ -1545,11 +1744,14 @@ end
     for (; x, mu, chi2) in (
         DECAES.lsqnonneg_chi2_lasso(A, zeros(8), 1.02), # b = 0: res²_min = 0 and x_unreg = 0
         DECAES.lsqnonneg_reginska_lasso(A, zeros(8)),
+        DECAES.lsqnonneg_lcurve_lasso(A, zeros(8)),
         DECAES.lsqnonneg_chi2_lasso(A, -A * rand(6), 1.02), # b ∈ -cone(A): x_unreg = 0, which is already the μ -> ∞ limit
         DECAES.lsqnonneg_reginska_lasso(A, -A * rand(6)),
+        DECAES.lsqnonneg_lcurve_lasso(A, -A * rand(6)),
         DECAES.lsqnonneg_mdp_lasso(A, -A * rand(6), 1e-3), # δ below the unregularized residual ‖b‖ of the zero solution
         DECAES.lsqnonneg_chi2_lasso(A, A * rand(6), 1.02), # b ∈ cone(A): an exact unregularized fit, whose χ² target is a percentage of roundoff
         DECAES.lsqnonneg_reginska_lasso(A, A * rand(6)),
+        DECAES.lsqnonneg_lcurve_lasso(A, A * rand(6)),
     )
         @test mu == 0 && chi2 == 1 && all(>=(0), x)
     end
@@ -1754,6 +1956,7 @@ end
         ("reginska", 1e-9, 1, (A, b, s) -> DECAES.lsqnonneg_reginska(A, b)),
         ("reginska-l1", 1e-9, 2, (A, b, s) -> DECAES.lsqnonneg_reginska_lasso(A, b)),
         ("lcurve", 1e-9, 1, (A, b, s) -> DECAES.lsqnonneg_lcurve(A, b)),
+        ("lcurve-l1", 1e-9, 2, (A, b, s) -> DECAES.lsqnonneg_lcurve_lasso(A, b)),
         ("gcv", 1e-3, 1, (A, b, s) -> DECAES.lsqnonneg_gcv(A, b)),
     ]
         r = f(A, b, 1.0)

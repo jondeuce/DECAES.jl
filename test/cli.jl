@@ -232,8 +232,8 @@ function test_field!(allpassed, x, y, prefix = "failed:"; atol = 0.0, rtol = ato
 end
 field_error_string(x, y) = size(x) != size(y) ? "size(x) = $(size(x)), size(y) = $(size(y))" : "size = $(size(y)), max val = $(maximum(abs, y)), max diff = $(maximum(abs, x.-y)), rel diff = $(maximum(abs, (x.-y)./y))"
 
-# Compare t2map results for approximately equality. Fields named in `skip` are not compared; see the L-curve nonuniqueness note in `run_cli_tests`.
-function test_compare_t2map(maps1, dist1, maps2, dist2; skip = (), kwargs...)
+# Compare t2map results for approximately equality. Fields named in `skip` are not compared.
+function test_compare_t2map(maps1, dist1, maps2, dist2; skip = [], kwargs...)
     allpassed = Ref(true)
     for s in keys(maps1)
         haskey(maps2, s) && s ∉ skip && test_field!(allpassed, maps1[s], maps2[s], "maps failed: $s"; kwargs...)
@@ -262,6 +262,11 @@ function run_cli_tests()
         (
             :Reg       .=> ["none", "gcv", "lcurve", "reginska", "chi2", "mdp"],
             :RegParams .=> [nothing, nothing, nothing, nothing, 1.025, 3e-4],
+        ),
+        (
+            :Reg       .=> ["lcurve", "reginska", "chi2", "mdp"],
+            :RegNorm   .=> ["l1", "l1", "l1", "l1"],
+            :RegParams .=> [nothing, nothing, 1.025, 3e-4],
         ),
         (:SPWin .=> [(13e-3, 37e-3)],),
         (:SaveResidualNorm .=> [true],),
@@ -321,30 +326,31 @@ function run_cli_tests()
             settings_kwargs_cli[:inputfilename] = joinpath(path, "input" * file_suffix)
             cli_t2map_args = construct_args(paramdict; settings_kwargs_cli...)
 
+            # The CLI is compared against a Julia API run given the same inputs, so that what is tested here is the CLI.
+            # Passing a B1 map changes the input, so the reference run is repeated with the same map and both runs then see the same basis.
+            # That a rerun given the fitted α reproduces the fit is a separate claim, asserted by `flip angle round trip` in `t2map.jl`.
             B1_passed = B1map && !("--SetFlipAngle" ∈ cli_t2map_args)
+            t2map_ref, t2dist_ref, t2part_ref = t2map, t2dist, t2part
             if B1_passed
-                # Write reference B1map computed above to file and pass filename to DECAES CLI
                 B1mapfilename = joinpath(path, "B1" * file_suffix)
                 write_image(B1mapfilename, t2map["alpha"])
                 append!(cli_t2map_args, ["--B1map", B1mapfilename])
+
+                opts_B1 = DECAES.T2mapOptions(image; jl_t2map_kwargs...)
+                maps_B1 = DECAES.T2Maps(opts_B1)
+                DECAES.load_B1map!(maps_B1, DECAES.load_image(B1mapfilename, Val(3)))
+                t2map_ref, t2dist_ref = DECAES.redirect_to_devnull() do
+                    return DECAES.T2mapSEcorr!(maps_B1, DECAES.T2Distributions(opts_B1), image, opts_B1)
+                end
+                t2part_ref = DECAES.redirect_to_devnull() do
+                    return T2partSEcorr(t2dist_ref; jl_t2part_kwargs...)
+                end
             end
 
             t2maps_cli, t2dist_cli, t2parts_cli = run_main(image, cli_t2map_args; make_settings_file)
 
-            # A B1 map run skips the flip-angle search, so its T2-stage unregularized solve is unseeded and follows a different arithmetic path. The α used to construct the bases has also been converted to degrees and back, perturbing it by up to one ulp.
-            # Methods that select μ by root-finding a residual level are robust to such perturbations. `gcv` instead selects an extremum, which may be unstable when the residual has no noise floor:
-            # at nTE < nT2 the basis may interpolate the data, so R(μ) → 0 as μ → 0 and 𝒢 = R/dof² approaches a finite limit rather than diverging, pinning μ no better than the width of the flat regions.
-            # `lcurve` reports no corner on such a basis, since the curvature attains its maximum on the μ → 0 tail, which `lcurve_corner` rejects, so the unregularized solution is returned.
-            # That solution is not unique when the basis interpolates: permuting the columns of A changes it while leaving the residual fixed.
-            # `dist`, the moments computed from it, and `fnr` inherit that nonuniqueness, so their comparison is skipped. `fnr` divides `gdn` = Σⱼxⱼ by the residual.
-            # `snr` is unique, the fitted vector Ax being the projection of b onto the convex cone AR₊ⁿ, but it divides by a residual an interpolating basis pins at the roundoff floor, leaving a ratio of order 1/eps, so its comparison is skipped too.
-            # The flip angle, the bases, the times and the residual norm are unique and well scaled, and are compared.
-            # Both exemptions are keyed to a basis that actually interpolates, witnessed by `snr` = max(signal)/std(residual) reaching the roundoff floor's order 1/eps, rather than to nTE < nT2, which permits interpolation without implying it.
-            interpolating = any(>(inv(√eps(Float64))), t2map["snr"])
-            nonunique = B1_passed && paramdict[:Reg] == "lcurve" && interpolating
-            cli_rtol = !B1_passed ? 1e-14 : paramdict[:Reg] == "gcv" && interpolating ? 1e-3 : 1e-8
-            t2map_passed = test_compare_t2map(t2map, t2dist, t2maps_cli, t2dist_cli; rtol = cli_rtol, skip = nonunique ? ("dist", "gdn", "ggm", "gva", "fnr", "snr") : ())
-            t2part_passed = nonunique || test_compare_t2part(t2part, t2parts_cli; rtol = cli_rtol)
+            t2map_passed = test_compare_t2map(t2map_ref, t2dist_ref, t2maps_cli, t2dist_cli; rtol = 1e-14)
+            t2part_passed = test_compare_t2part(t2part_ref, t2parts_cli; rtol = 1e-14)
             if !(t2map_passed && t2part_passed)
                 println("\n ------------------------------- \n")
                 @error "CLI with --T2map and --T2part failed"
