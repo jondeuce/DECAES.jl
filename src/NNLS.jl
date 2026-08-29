@@ -1701,12 +1701,13 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
             xp[i] = s * dinv[i]
         end
 
+        # Column-oriented back substitution for contiguous access to L
         for i in p:-1:1
-            s = xp[i]
-            @simd for k in i+1:p
-                s = s - L[i, k] * xp[k]
+            xi = xp[i] * dinv[i]
+            xp[i] = xi
+            @simd for k in 1:i-1
+                xp[k] = xp[k] - L[k, i] * xi
             end
-            xp[i] = s * dinv[i]
         end
 
         # Feasibility: drop the most negative coefficient, if any
@@ -1751,12 +1752,8 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
             res² = muladd(r[i], r[i], res²)
         end
 
-        # KKT dual w = A'r, computed only for the inactive columns, which are the only ones the scan below can select.
-        # The active set is typically most of the basis, so this is far less work than a full A'r.
-        @simd for jj in 1:n
-            w[jj] = zero(T)
-        end
-
+        # Compute inactive duals and track the worst KKT violation.
+        wmax, jmax = wtol, 0
         for jj in 1:n
             inP[jj] && continue
             s = zero(T)
@@ -1764,15 +1761,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
                 s = muladd(A[i, jj], r[i], s)
             end
             w[jj] = s
-        end
-
-        # w_Z must be non-positive (within tolerance)
-        wmax, jmax = wtol, 0
-        for j in 1:n
-            wj = w[j]
-            if wj > wmax && !inP[j]
-                wmax, jmax = wj, j
-            end
+            s > wmax && ((wmax, jmax) = (s, jj))
         end
 
         if jmax > 0
@@ -2026,12 +2015,13 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
             xp[i] = s * dinv[i]
         end
 
+        # Column-oriented back substitution for contiguous access to L
         for i in p:-1:1
-            s = xp[i]
-            @simd for k in i+1:p
-                s = s - L[i, k] * xp[k]
+            xi = xp[i] * dinv[i]
+            xp[i] = xi
+            @simd for k in 1:i-1
+                xp[k] = xp[k] - L[k, i] * xi
             end
-            xp[i] = s * dinv[i]
         end
 
         # Feasibility
@@ -2259,10 +2249,11 @@ function residual!(work::NNLSLassoWorkspace{T}) where {T}
     return r
 end
 
-# w = Aᵀr - λ𝟙, the negative gradient of ½‖Ax - b‖² + λ𝟙ᵀx
+# Inactive duals w = Aᵀr - λ𝟙. All consumers skip active entries.
 function dual!(work::NNLSLassoWorkspace{T}, λ::T) where {T}
-    (; A, m, n, r, w) = work
+    (; A, m, n, r, w, inP) = work
     @inbounds for j in 1:n
+        inP[j] && continue
         wⱼ = zero(T)
         @simd for i in 1:m
             wⱼ += A[i, j] * r[i]
@@ -2314,7 +2305,25 @@ function passive_solve!(work::NNLSLassoWorkspace{T}, λ::T) where {T}
         Rdiag[k] = α
         QR[k, k] -= α
         β = -α * QR[k, k] # ‖v‖²/2, positive by the sign choice above
-        for t in k+1:p
+        t = k + 1
+        while t + 1 <= p # apply the reflector to two columns per pass
+            y₁, y₂ = zero(T), zero(T)
+            @simd for i in k:m
+                v = QR[i, k]
+                y₁ = muladd(v, QR[i, t], y₁)
+                y₂ = muladd(v, QR[i, t+1], y₂)
+            end
+
+            γ₁, γ₂ = y₁ / β, y₂ / β
+            @simd for i in k:m
+                v = QR[i, k]
+                QR[i, t] -= γ₁ * v
+                QR[i, t+1] -= γ₂ * v
+            end
+            t += 2
+        end
+
+        if t <= p
             vᵀy = zero(T)
             @simd for i in k:m
                 vᵀy += QR[i, k] * QR[i, t]

@@ -809,7 +809,7 @@ function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = global_buffer_m
     flip_angle_work = FlipAngleOptimizationWorkspace(o, decay_basis, decay_data, global_buffer)
     search_prob = flip_angle_work.nnls_search_prob
     nnls_prob_seed = search_prob === nothing ? nothing : unreg_source(flip_angle_work)
-    dof_interpolator = search_prob === nothing || !(regularization_method(o) isa GCV) ? nothing : (GriddedSpectrumInterpolator(search_prob.As, search_prob.∇As, flip_angles(o)), flip_angle_work.α)
+    dof_interpolator = global_buffer.spectrum_interp === nothing ? nothing : (global_buffer.spectrum_interp, flip_angle_work.α)
     return (;
         T2_times         = logrange(o.T2Range..., o.nT2),
         logT2_times      = log.(logrange(o.T2Range..., o.nT2)),
@@ -825,14 +825,13 @@ function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = global_buffer_m
     )
 end
 
-# Everything the workers share read-only: the cosine coefficient tensor, and the decay bases, α-derivatives, and Gram matrices over the flip-angle grid.
-# All are voxel- and thread-independent, so one instance is built per run and every worker reads it.
-# `decay_basis_work` is `nothing` when the cosine representation does not apply, namely in legacy mode, for a fixed flip angle, or for a non-constant flip angle; `grid_model` is `nothing` when there is no flip-angle grid to search.
+# Read-only data shared by all workers: `grid_model` requires a flip-angle grid; `spectrum_interp` additionally requires GCV.
 function global_buffer_maker(o::T2mapOptions{T}) where {T}
     θ = default_epg_parameters(o)
     decay_basis_work = !o.legacy && o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ? EPGCosineSeriesBasis(θ, T2_component_times(o)) : nothing
     grid_model = o.SetFlipAngle === nothing ? epg_grid_model(o, θ) : nothing
-    return (; decay_basis_work, grid_model)
+    spectrum_interp = grid_model === nothing || !(regularization_method(o) isa GCV) ? nothing : GriddedSpectrumInterpolator(grid_model.As, grid_model.∇As, flip_angles(o))
+    return (; decay_basis_work, grid_model, spectrum_interp)
 end
 
 function default_epg_parameters(o::T2mapOptions{T}) where {T}

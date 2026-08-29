@@ -8,7 +8,6 @@ using LinearAlgebra: LinearAlgebra, BLAS, LAPACK, cholesky!, dot, eigvals, eigva
 using LinearAlgebra.BLAS: @blasfunc, BlasInt, libblastrampoline
 using LinearAlgebra.LAPACK: chklapackerror
 using Logging: Logging, ConsoleLogger, with_logger
-using Pkg: Pkg
 using Random: Random
 using Statistics: Statistics, mean, std
 
@@ -61,6 +60,7 @@ export main
         main(["--help"])
         main(["--version"])
         mock_load_image()
+        mock_cli_pipeline()
         for (Reg, RegNorm) in [("gcv", "l2"), ("lcurve", "l2"), ("lcurve", "l1"), ("reginska", "l2"), ("reginska", "l1"), ("chi2", "l2"), ("chi2", "l1"), ("mdp", "l2"), ("mdp", "l1"), ("none", "l2")]
             NumVoxels = max(4, Threads.nthreads()) * default_blocksize()
             mock_T2_pipeline(; MatrixSize = (NumVoxels, 1, 1), Reg, RegNorm)

@@ -1596,13 +1596,14 @@ end
 #### GCV method for choosing the Tikhonov regularization parameter
 ####
 
-struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, WS, W1, W2, W3, V, S}
+struct NNLSGCVRegProblem{T, TA <: AbstractMatrix{T}, Tb <: AbstractVector{T}, WS, WD, W1, W2, W3, V, S}
     A::TA # decay basis matrix
     b::Tb # decay curve data
     m::Int # number of rows of A
     n::Int # number of columns of A
     γ²::Vector{T} # squared singular values of A, i.e. nonzero eigenvalues of A'A
     spectrum_work::WS # workspace for computing the singular values of A
+    deflation_work::WD # workspace for `deflated_eigvals!`, or nothing without an α-grid
     nnls_prob::W1 # unregularized NNLS problem, i.e. μ = 0
     nnls_prob_smooth_cache::W2 # cache of recent Tikhonov solves, warm-started from the nearest cached μ
     nnls_gram::W3 # Gram fast path for the μ-search evaluations; see `NNLSGram`
@@ -1616,15 +1617,22 @@ function NNLSGCVRegProblem(A::AbstractMatrix{T}, b::AbstractVector{T}, nnls_prob
     nnls_prob_smooth_cache = NNLSTikhonovRegProblemCache(A, b)
     nnls_gram = NNLS.NNLSGram(A, b)
     γ² = similar(spectrum_work.S)
-    return NNLSGCVRegProblem(A, b, m, n, γ², spectrum_work, nnls_prob, nnls_prob_smooth_cache, nnls_gram, dof_interpolator, nnls_prob_seed)
+    deflation_work = dof_interpolator === nothing ? nothing : SVDValsWorkspace(similar(A, T, (max(m, n), min(m, n))))
+    return NNLSGCVRegProblem(A, b, m, n, γ², spectrum_work, deflation_work, nnls_prob, nnls_prob_smooth_cache, nnls_gram, dof_interpolator, nnls_prob_seed)
 end
 
 @inline solution(work::NNLSGCVRegProblem) = solution(work.nnls_prob_smooth_cache[])
 @inline ncomponents(work::NNLSGCVRegProblem) = ncomponents(work.nnls_prob_smooth_cache[])
+
+# Runtime toggle for deflating numerically null spectral modes.
+const GCV_DEFLATE_SPECTRUM = Ref(true)
+
+# Compute the spectrum read by `gcv_dof`.
 @inline function LinearAlgebra.eigvals!(work::NNLSGCVRegProblem, A = work.A)
-    γ = svdvals!(work.spectrum_work, A)
-    work.γ² .= abs2.(γ)
-    return work.γ²
+    (; γ², spectrum_work, deflation_work, dof_interpolator) = work
+    (dof_interpolator === nothing || !GCV_DEFLATE_SPECTRUM[]) && return eigvals_full!(γ², spectrum_work, A)
+    interp, α = dof_interpolator
+    return deflated_eigvals!(γ², spectrum_work, deflation_work, A, (@views interp.Q[:, :, findnearestindex(interp.αs, α[])]))
 end
 
 @doc raw"""
@@ -1878,10 +1886,8 @@ end
 # The dof is interpolated directly: sorted singular value curves σᵢ(α) kink (C⁰) where branches cross, so interpolating γ caps the accuracy at the kink scale.
 # The dof itself, dof(μ, α) = max(m − n, 0) + μ²·tr((A(α)ᵀA(α) + μ²I)⁻¹), is a symmetric function of the spectrum and hence analytic in α, so cubic Hermite with the analytic ∂dof/∂α from `dgcv_dof_dα` is kink-free and O(h⁴) accurate.
 function gcv_dof_interp(interp::GriddedSpectrumInterpolator{T}, α::T, m::Int, n::Int, μ::T) where {T}
-    (; αs, γ², dγ², ready) = interp
+    (; αs, γ², dγ²) = interp
     i = clamp(searchsortedlast(αs, α), 1, length(αs) - 1)
-    ready[i] || gridded_spectrum_slice!(interp, i)
-    ready[i+1] || gridded_spectrum_slice!(interp, i + 1)
     γl, γr = view(γ², :, i), view(γ², :, i + 1)
     dl, dr = view(dγ², :, i), view(dγ², :, i + 1)
     spl = CubicHermiteInterpolator(αs[i], αs[i+1], gcv_dof(m, n, γl, μ), gcv_dof(m, n, γr, μ), dgcv_dof_dα(m, n, γl, dl, μ), dgcv_dof_dα(m, n, γr, dr, μ))

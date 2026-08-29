@@ -110,37 +110,59 @@ end
         @test @allocations(svdvals!(work)) == 0
         @test @allocations(svdvals!(work, A)) == 0
     end
-end
 
-@testset "GramEigvalsWorkspace" begin
-    for T in (Float32, Float64), (m, n) in Iterators.product(2:6, 2:6)
-        A = randn(T, m, n)
-        work = DECAES.GramEigvalsWorkspace(A)
-
-        γ² = @inferred LinearAlgebra.eigvals!(work, A)
-        @test length(γ²) == min(m, n)
-        @test issorted(γ²) # `syevr` returns ascending eigenvalues
-        @test γ² ≈ sort(svdvals(A) .^ 2) rtol = √eps(T) atol = 10 * eps(T) * max(1, sum(abs2, A))
-
-        γ²′ = @inferred LinearAlgebra.eigvals!(work, A)
-        @test γ²′ === γ² # returns the same internal buffer
-        @test @allocations(LinearAlgebra.eigvals!(work, A)) == 0 # LAPACK workspace is preallocated and reused
+    # Factorize leading column blocks.
+    for (m, n) in ((8, 6), (6, 8), (7, 7))
+        A = randn(m, n)
+        work = DECAES.SVDValsWorkspace(A)
+        copyto!(work.A, A)
+        for p in 1:n
+            γ = svdvals!(work, p)
+            @test @views γ[1:min(m, p)] == svdvals(A[:, 1:p])
+            copyto!(work.A, A)
+        end
+        @test svdvals!(work, A) == svdvals(A)
     end
 
-    # The accuracy is absolute, not relative: forming the Gram matrix squares the condition number, so only |γᵢ² − σᵢ²| = O(eps·‖A‖²_F) holds, and the small γᵢ² can come out negative.
-    for A in (
-        (B = randn(6, 4); B[:, 4] = B[:, 3] .+ 1e-8 .* randn(6); B),           # nearly duplicated columns
-        (B = randn(6, 4); B[:, 4] = B[:, 3]; B[:, 1] .*= 1e8; B),              # duplicated columns, badly scaled
-        Matrix(Diagonal([1.0, 1e-4, 1e-8, 1e-12])),                            # graded spectrum
-    )
-        γ² = LinearAlgebra.eigvals!(DECAES.GramEigvalsWorkspace(A), A)
-        @test issorted(γ²)
-        @test maximum(abs, γ² .- sort(svdvals(A) .^ 2)) <= 8 * eps() * sum(abs2, A)
+    bounds_work = DECAES.SVDValsWorkspace(zeros(2, 2))
+    @test_throws AssertionError svdvals!(bounds_work, 0)
+    @test_throws AssertionError svdvals!(bounds_work, 3)
+end
+
+# Allow roundoff from forming A*Q and factorizing the retained columns in addition to the truncation error bounded by the discarded Frobenius norm.
+@testset "deflated_eigvals!" begin
+    dof(γ², μ, m, n) = max(m - n, 0) + sum(g -> μ^2 / (g + μ^2), γ²)
+    orth(k) = Matrix(qr(randn(k, k)).Q)
+    for (m, n) in ((12, 8), (8, 12), (8, 8))
+        k, ℓ = min(m, n), max(m, n)
+        for (name, A) in (
+            "full rank" => randn(m, n),
+            "exact rank 5" => randn(m, 5) * randn(5, n),
+            "graded to 1e-20" => Matrix(qr(randn(ℓ, k)).Q)[m >= n ? (1:m) : (1:n), 1:k] |> X -> (m >= n ? X * Diagonal(exp10.(range(0, -20; length = k))) * orth(k) : (X * Diagonal(exp10.(range(0, -20; length = k))) * orth(k))'),
+            "clustered" => (X = Matrix(qr(randn(ℓ, k)).Q) * Diagonal([fill(1.0, k ÷ 2); fill(1e-18, k - k ÷ 2)]) * orth(k); m >= n ? X : X'),
+            "zero" => zeros(m, n),
+        )
+            F = svd(A)
+            Q = m >= n ? Matrix(F.V) : Matrix(F.U)
+            γ²ref = svdvals(A) .^ 2
+            γ² = zeros(k)
+            spectrum_work = DECAES.SVDValsWorkspace(A)
+            deflation_work = DECAES.SVDValsWorkspace(zeros(ℓ, k))
+            DECAES.deflated_eigvals!(γ², spectrum_work, deflation_work, A, Q)
+            τ = √DECAES.deflation_tolerance²(k, sum(abs2, A))
+
+            @test issorted(γ²; rev = true)
+            @test maximum(abs, .√γ² .- .√γ²ref) <= 5 * (τ + eps() * √maximum(γ²ref; init = 0.0))
+            for μ in exp10.(range(-6, 3; length = 12)) .* max(norm(A), eps())
+                @test dof(γ², μ, m, n) ≈ dof(γ²ref, μ, m, n) rtol = 1e-12
+            end
+            name == "full rank" && @test γ² == γ²ref
+        end
     end
 end
 
 @testset "GriddedSpectrumInterpolator" begin
-    # Smooth matrix family A(α) = A0 + α·A1 + α²·A2 with exact ∂A/∂α = A1 + 2α·A2, over a grid in α; covers both m ≥ n and m < n
+    # Smooth matrix family with an exact derivative.
     for (m, n) in ((6, 4), (4, 6), (5, 5))
         A0, A1, A2 = randn(m, n), randn(m, n), randn(m, n)
         Aα(α) = A0 .+ α .* A1 .+ α^2 .* A2
@@ -151,12 +173,10 @@ end
         interp = DECAES.GriddedSpectrumInterpolator(As, ∇As, αs)
 
         for μ in (1e-2, 1e-1, 1.0)
-            # Exact at grid nodes: Hermite passes through the endpoint values
             for (i, α) in enumerate(αs)
                 @test DECAES.gcv_dof_interp(interp, α, m, n, μ) ≈ DECAES.gcv_dof(Aα(α), μ) rtol = 1e-12
             end
 
-            # Between nodes: cubic Hermite is a loose-bounded approximation and beats linear interp of dof on the same grid
             herr, lerr = 0.0, 0.0
             for α in range(αs[1], αs[end]; length = 40)
                 d_exact = DECAES.gcv_dof(Aα(α), μ)
@@ -168,18 +188,22 @@ end
                 lerr = max(lerr, abs(d_lin - d_exact))
             end
 
-            # Cubic Hermite is meaningfully more accurate than linear interp of dof
             @test herr < lerr
         end
 
-        # Spectral derivative dγ²/dα = 2σ·uᵀ(∂A/∂α)v matches finite differences of γ² at an interior node
+        # Compare spectral derivatives with finite differences.
         i = 5
         h = 1e-6
         γ₊, γ₋ = svdvals(Aα(αs[i] + h)), svdvals(Aα(αs[i] - h))
         dγ²_fd = @. (γ₊ - γ₋) * (γ₊ + γ₋) / 2h
-        DECAES.gridded_spectrum_slice!(interp, i)
-        dγ²_int = interp.dγ²[:, i]
-        @test dγ²_int ≈ dγ²_fd rtol = 1e-6 atol = 1e-6
+        @test interp.dγ²[:, i] ≈ dγ²_fd rtol = 1e-6 atol = 1e-12
+
+        k = min(m, n)
+        for j in eachindex(αs)
+            Q = interp.Q[:, :, j]
+            @test Q'Q ≈ I(k) rtol = 1e-12
+            @test svdvals(m >= n ? Aα(αs[j]) * Q : Aα(αs[j])' * Q) ≈ .√interp.γ²[:, j] rtol = 1e-12
+        end
     end
 end
 

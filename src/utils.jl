@@ -21,6 +21,13 @@ function meshgrid(::Type{T}, iters...) where {T}
 end
 meshgrid(iters...) = meshgrid(Tuple, iters...)
 
+function findnearestindex(xs::AbstractVector, x)
+    j = searchsortedfirst(xs, x)
+    j <= firstindex(xs) && return firstindex(xs)
+    j > lastindex(xs) && return lastindex(xs)
+    return x - xs[j-1] <= xs[j] - x ? j - 1 : j
+end
+
 @inline function SplitCartesianIndices(sz::NTuple{N, Int}, ::Val{M}) where {N, M}
     @assert 0 <= M <= N
     sz1 = sz[1:M]
@@ -108,9 +115,11 @@ for (gesdd, elty) in ((:dgesdd_, :Float64), (:sgesdd_, :Float32))
     #*     .. Array Arguments ..
     #      INTEGER            IWORK( * )
     #      DOUBLE PRECISION   A( LDA, * ), S( * ), U( LDU, * ), VT( LDVT, * ), WORK( * )
-    @eval function LinearAlgebra.svdvals!(work::SVDValsWorkspace{$elty})
+    # Factorize the leading `ncols` columns using workspace sized for the full matrix.
+    @eval function LinearAlgebra.svdvals!(work::SVDValsWorkspace{$elty}, ncols::Int = work.n)
         (; job, m, n, A, S, U, VT, work, lwork, iwork, info) = work
         Base.require_one_based_indexing(A)
+        @assert 1 <= ncols <= n
         # lwork[] = BlasInt(-1) # uncomment this line to query lwork every call
         for i in 1:2
             i == 1 && lwork[] != BlasInt(-1) && continue # uncomment this line to skip lwork query after first call
@@ -119,7 +128,7 @@ for (gesdd, elty) in ((:dgesdd_, :Float64), (:sgesdd_, :Float32))
                     Ref{BlasInt}, Ptr{$elty}, Ptr{$elty}, Ref{BlasInt},
                     Ptr{$elty}, Ref{BlasInt}, Ptr{$elty}, Ref{BlasInt},
                     Ptr{BlasInt}, Ptr{BlasInt}, Clong),
-                job, m, n, A, max(1, stride(A, 2)), S, U, max(1, stride(U, 2)), VT, max(1, stride(VT, 2)),
+                job, m, i == 1 ? n : ncols, A, max(1, stride(A, 2)), S, U, max(1, stride(U, 2)), VT, max(1, stride(VT, 2)),
                 work, lwork[], iwork, info, 1)
             chklapackerror(info[])
             if i == 1
@@ -196,36 +205,80 @@ for (syevr, elty) in ((:dsyevr_, :Float64), (:ssyevr_, :Float32))
     end
 end
 
-# Cache of the squared singular spectrum of a parameterized matrix family A(α) on a grid of α values, together with its spectral α-derivatives.
-# Consumers interpolate a smooth spectral function between the two bracketing grid slices rather than interpolating the singular values themselves; see `gcv_dof_interp` for the GCV dof(μ, α).
-# Grid slices are computed lazily, once per workspace lifetime, so a family depending only on grid parameters and never on per-solve data - as the flip-angle decay bases do - amortizes the cost to zero across solves.
-struct GriddedSpectrumInterpolator{T, TA <: AbstractArray{T}, TdA <: AbstractArray{T}}
-    As::TA              # M×N×ngrid matrix family
-    ∇As::TdA            # M×N×D×ngrid α-derivative bases; [:, :, 1, i] is ∂A(αᵢ)/∂α (D = 1)
-    αs::Vector{T}       # grid parameter values, sorted ascending
-    γ²::Matrix{T}       # min(M,N)×ngrid squared singular values (lazily filled)
-    dγ²::Matrix{T}      # min(M,N)×ngrid spectral derivatives dγ²/dα (lazily filled)
-    ready::Vector{Bool} # whether slice i of γ² and dγ² has been filled
-end
-function GriddedSpectrumInterpolator(As::AbstractArray{T, 3}, ∇As::AbstractArray{T, 4}, αs::AbstractVector{T}) where {T}
-    M, N, ngrid = size(As)
-    @assert length(αs) == ngrid >= 2 && issorted(αs)
-    @assert size(∇As, 1) == M && size(∇As, 2) == N && size(∇As, 3) >= 1 && size(∇As, 4) == ngrid
-    return GriddedSpectrumInterpolator(As, ∇As, collect(αs), zeros(T, min(M, N), ngrid), zeros(T, min(M, N), ngrid), fill(false, ngrid))
+# Singular spectra, derivatives, and short-side singular vectors of A(α) on a grid.
+struct GriddedSpectrumInterpolator{T}
+    αs::Vector{T}  # grid parameter values, sorted ascending
+    γ²::Matrix{T}  # min(M,N)×ngrid squared singular values
+    dγ²::Matrix{T} # min(M,N)×ngrid spectral derivatives dγ²/dα
+    Q::Array{T, 3} # min(M,N)-square orthogonal factor on the short side of A(αᵢ): the right singular vectors when M ≥ N, the left when M < N
 end
 
-# Fill grid slice `i`: squared singular values γᵢ² and the analytic spectral α-derivative dγᵢ²/dα = 2σᵢ·uᵢᵀ(∂A/∂α)vᵢ.
-# The derivative needs the singular vectors, so this takes a full SVD; it is lazy and cached, at most once per slice per interpolator, so the cost is a one-time warmup amortized over all voxels.
-function gridded_spectrum_slice!(interp::GriddedSpectrumInterpolator, i::Int)
-    F = svd(@views interp.As[:, :, i])
-    ∂A = @views interp.∇As[:, :, 1, i]
-    UᵀdAV = F.U' * ∂A * F.V # k×k; its diagonal is uᵢᵀ(∂A/∂α)vᵢ
-    @inbounds for l in eachindex(F.S)
-        interp.γ²[l, i] = F.S[l] ^ 2
-        interp.dγ²[l, i] = 2 * F.S[l] * UᵀdAV[l, l]
+# Spectra derivatives dγᵢ²/dα = 2σᵢuᵢᵀ(∂A/∂α)vᵢ
+function GriddedSpectrumInterpolator(As::AbstractArray{T, 3}, ∇As::AbstractArray{T, 4}, αs::AbstractVector{T}) where {T}
+    M, N, ngrid = size(As)
+    k = min(M, N)
+    @assert length(αs) == ngrid >= 2 && issorted(αs)
+    @assert size(∇As, 1) == M && size(∇As, 2) == N && size(∇As, 3) >= 1 && size(∇As, 4) == ngrid
+    γ², dγ², Q = zeros(T, k, ngrid), zeros(T, k, ngrid), zeros(T, k, k, ngrid)
+
+    @views for i in 1:ngrid
+        F = svd(As[:, :, i])
+        Uᵀ∇AV = F.U' * ∇As[:, :, 1, i] * F.V # k×k; its diagonal is uᵢᵀ(∂A/∂α)vᵢ
+        for l in 1:k
+            γ²[l, i] = F.S[l]^2
+            dγ²[l, i] = 2 * F.S[l] * Uᵀ∇AV[l, l]
+        end
+        Q[:, :, i] .= M >= N ? F.V : F.U # the thin factor on the short side is the square one
     end
-    interp.ready[i] = true
-    return interp
+
+    return GriddedSpectrumInterpolator(collect(αs), γ², dγ², Q)
+end
+
+# Compute squared singular values after dropping trailing columns of `A*Q` or `A'*Q` whose combined energy is below `deflation_tolerance²`.
+function deflated_eigvals!(γ²::Vector{T}, spectrum_work::SVDValsWorkspace{T}, deflation_work::SVDValsWorkspace{T}, A::AbstractMatrix{T}, Q::AbstractMatrix{T}) where {T}
+    B, k = deflation_work.A, length(γ²)
+    size(A, 1) >= size(A, 2) ? mul!(B, A, Q) : mul!(B, A', Q)
+
+    # Accumulate trailing energy directly to avoid cancellation.
+    @inbounds for j in 1:k
+        c = zero(T)
+        @simd for i in axes(B, 1)
+            c += B[i, j]^2
+        end
+        γ²[j] = c
+    end
+    τ² = deflation_tolerance²(k, sum(γ²))
+
+    p, E = k, zero(T)
+    @inbounds while p > 0 && E + γ²[p] <= τ²
+        E += γ²[p]
+        p -= 1
+    end
+
+    p == 0 && return fill!(γ², zero(T))
+    p == k && return eigvals_full!(γ², spectrum_work, A)
+
+    σ = svdvals!(deflation_work, p)
+    @inbounds for l in 1:p
+        γ²[l] = σ[l]^2
+    end
+    @inbounds for l in p+1:k
+        γ²[l] = zero(T)
+    end
+
+    return γ²
+end
+
+# Squared roundoff scale for a `k`-column matrix with squared Frobenius norm `nrm²`.
+@inline deflation_tolerance²(k::Int, nrm²::T) where {T} = (k * eps(T) / 2)^2 * nrm²
+
+# Compute the squared singular values of `A` and store them in `γ²`
+function eigvals_full!(γ²::Vector{T}, spectrum_work::SVDValsWorkspace{T}, A::AbstractMatrix{T}) where {T}
+    σ = svdvals!(spectrum_work, A)
+    @inbounds for l in eachindex(γ²)
+        γ²[l] = σ[l]^2
+    end
+    return γ²
 end
 
 ####
@@ -423,7 +476,7 @@ end
 
 # Macro for timing arbitrary code snippet and printing time
 macro showtime(msg, ex)
-    quote
+    return quote
         @info $(esc(msg))
         local t = time()
         local val = $(esc(ex))
@@ -571,7 +624,7 @@ struct SubRange
     len::Int64 # avoid overflow on 32-bit machines
     chunks::Int64
 end
-(r::SubRange)(i::Int) = Int(1 + ((i - 1) * r.len) ÷ r.chunks):Int((i * r.len) ÷ r.chunks)
+(r::SubRange)(i::Int) = Int(1+((i-1)*r.len)÷r.chunks):Int((i*r.len)÷r.chunks)
 
 ####
 #### Logging
@@ -808,5 +861,15 @@ function mock_load_image()
 
             #TODO: read/write dummy PAR/REC and/or XML/REC
         end
+    end
+end
+
+# Exercise CLI parsing and output writing during precompilation.
+function mock_cli_pipeline()
+    mktempdir() do dir
+        file = joinpath(dir, "mock.nii")
+        NIfTI.niwrite(file, NIfTI.NIVolume(mock_image(; MatrixSize = (2, 2, 1), nTE = 32)))
+        main([file, "--output", dir, "--T2map", "--T2part", "--quiet", "--TE", "10e-3", "--nT2", "20", "--T2Range", "10e-3", "2.0", "--Reg", "none", "--SPWin", "10e-3", "40e-3", "--MPWin", "40e-3", "2.0"])
+        @assert all(suffix -> isfile(joinpath(dir, "mock" * suffix)), (".t2maps.mat", ".t2dist.mat", ".t2parts.mat"))
     end
 end

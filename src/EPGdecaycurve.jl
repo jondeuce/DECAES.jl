@@ -1712,6 +1712,7 @@ function EPGCosineSeriesBasis(θ::EPGConstantFlipAngleOptions{T}, T2_times::Abst
     N = ETL # cosine series degree; echo i has degree ≤ i ≤ N, so N+1 samples interpolate exactly
     work = EPGWork_ReIm_Batched_Split_Dynamic(T, ETL)
     S = zeros(T, ETL, nT2, N + 1)
+
     for m in 0:N
         θm = restructure(θ, (; α = T(π) * m / N))
         for j0 in 1:W:nT2
@@ -1722,6 +1723,7 @@ function EPGCosineSeriesBasis(θ::EPGConstantFlipAngleOptions{T}, T2_times::Abst
             end
         end
     end
+
     C = T[cospi(T(k * m) / N) for m in 0:N, k in 0:N]
     Â = reshape(permutedims(C \ permutedims(reshape(S, ETL * nT2, N + 1))), ETL, nT2, N + 1)
     nblk = cld(ETL, 4)
@@ -1731,6 +1733,7 @@ function EPGCosineSeriesBasis(θ::EPGConstantFlipAngleOptions{T}, T2_times::Abst
         i = 4 * (b - 1) + r
         coeffs[p+=1] = (i <= ETL && k <= i) ? Â[i, j, k+1] : zero(T)
     end
+
     return EPGCosineSeriesBasis{T}(ETL, nT2, coeffs, zeros(T, N + 1), zeros(T, N + 1), zeros(T, N + 1))
 end
 
@@ -1745,6 +1748,7 @@ function cosine_features!(decay_basis_work::EPGCosineSeriesBasis{T}, α::T) wher
     sinα, cosα = sin(α), cos(α)
     sinkα, coskα = zero(T), one(T)
     c[1], sn[1], cn[1] = coskα, zero(T), zero(T)
+
     @inbounds for k in 1:ETL
         sinkα, coskα = muladd(sinα, coskα, cosα * sinkα), muladd(-sinα, sinkα, cosα * coskα)
         scale = (3 - muladd(sinkα, sinkα, coskα * coskα)) / 2
@@ -1753,6 +1757,7 @@ function cosine_features!(decay_basis_work::EPGCosineSeriesBasis{T}, α::T) wher
         sn[k+1] = k * sinkα
         cn[k+1] = k^2 * coskα
     end
+
     return decay_basis_work
 end
 
@@ -1760,14 +1765,20 @@ function epg_decay_basis!(decay_basis::Matrix{T}, decay_basis_work::EPGCosineSer
     (; coeffs, c) = decay_basis_work
     ETL, nT2 = size(decay_basis)
     cosine_features!(decay_basis_work, α)
+
+    # Evaluate two columns per pass, reusing each cosine feature.
+    colstride = 4 * sum(b -> min(4b, ETL) + 1, 1:cld(ETL, 4))
     s = sin(α / 2)
     p = 0
-    @inbounds for j in 1:nT2
-        o = (j - 1) * ETL
+    @inbounds for j in 1:2:nT2
+        j2 = min(j + 1, nT2)
+        o1, o2, Δ = (j - 1) * ETL, (j2 - 1) * ETL, (j2 - j) * colstride
+
         for b in 1:cld(ETL, 4)
             i0 = 4 * (b - 1)
             L = min(i0 + 4, ETL) + 1
-            a1 = a2 = a3 = a4 = zero(T)
+            a1 = a2 = a3 = a4 = e1 = e2 = e3 = e4 = zero(T)
+
             @simd ivdep for k in 1:L
                 cₖ = c[k]
                 q = p + 4 * (k - 1)
@@ -1775,18 +1786,27 @@ function epg_decay_basis!(decay_basis::Matrix{T}, decay_basis_work::EPGCosineSer
                 a2 = muladd(coeffs[q+2], cₖ, a2)
                 a3 = muladd(coeffs[q+3], cₖ, a3)
                 a4 = muladd(coeffs[q+4], cₖ, a4)
+                e1 = muladd(coeffs[q+Δ+1], cₖ, e1)
+                e2 = muladd(coeffs[q+Δ+2], cₖ, e2)
+                e3 = muladd(coeffs[q+Δ+3], cₖ, e3)
+                e4 = muladd(coeffs[q+Δ+4], cₖ, e4)
             end
+
             p += 4L
             if i0 + 4 <= ETL
-                decay_basis[o+i0+1], decay_basis[o+i0+2], decay_basis[o+i0+3], decay_basis[o+i0+4] = abs(s * a1), abs(s * a2), abs(s * a3), abs(s * a4)
+                decay_basis[o1+i0+1], decay_basis[o1+i0+2], decay_basis[o1+i0+3], decay_basis[o1+i0+4] = abs(s * a1), abs(s * a2), abs(s * a3), abs(s * a4)
+                decay_basis[o2+i0+1], decay_basis[o2+i0+2], decay_basis[o2+i0+3], decay_basis[o2+i0+4] = abs(s * e1), abs(s * e2), abs(s * e3), abs(s * e4)
             else
                 nr = ETL - i0
-                nr >= 1 && (decay_basis[o+i0+1] = abs(s * a1))
-                nr >= 2 && (decay_basis[o+i0+2] = abs(s * a2))
-                nr >= 3 && (decay_basis[o+i0+3] = abs(s * a3))
+                nr >= 1 && (decay_basis[o1+i0+1] = abs(s * a1); decay_basis[o2+i0+1] = abs(s * e1))
+                nr >= 2 && (decay_basis[o1+i0+2] = abs(s * a2); decay_basis[o2+i0+2] = abs(s * e2))
+                nr >= 3 && (decay_basis[o1+i0+3] = abs(s * a3); decay_basis[o2+i0+3] = abs(s * e3))
             end
         end
+
+        p += Δ
     end
+
     return decay_basis
 end
 
@@ -1802,9 +1822,11 @@ function epg_decay_basis_∂α_col!(Acol::AbstractVector{T}, dAcol::AbstractVect
     s, ds = sin(α / 2), cos(α / 2) / 2
     dds = -s / 4
     p = 4 * (j - 1) * sum(b -> min(4b, ETL) + 1, 1:nblk)
+
     @inbounds for b in 1:nblk
         i0 = 4 * (b - 1)
         L = min(i0 + 4, ETL) + 1
+
         a1 = a2 = a3 = a4 = zero(T)
         d1 = d2 = d3 = d4 = zero(T)
         e1 = e2 = e3 = e4 = zero(T)
@@ -1824,6 +1846,7 @@ function epg_decay_basis_∂α_col!(Acol::AbstractVector{T}, dAcol::AbstractVect
             e3 = muladd(coeffs[q+3], nₖ, e3)
             e4 = muladd(coeffs[q+4], nₖ, e4)
         end
+
         p += 4L
         for (r, a, d, e) in ((1, a1, d1, e1), (2, a2, d2, e2), (3, a3, d3, e3), (4, a4, d4, e4))
             i = i0 + r
@@ -1838,5 +1861,6 @@ function epg_decay_basis_∂α_col!(Acol::AbstractVector{T}, dAcol::AbstractVect
             ddAcol[i] = ifelse(neg, -ddv, ddv)
         end
     end
+
     return Acol, dAcol, ddAcol
 end
