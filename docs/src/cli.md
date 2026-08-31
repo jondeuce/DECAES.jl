@@ -52,7 +52,7 @@ All output files are saved as `.mat` files in format `v7.3`.
 
 ## Arguments
 
-Available command line arguments are broken into four categories:
+Available command line arguments are broken into six categories:
 
 1. **Positional arguments:** these are the input files. Input files are typically placed at the beginning of `<COMMAND LINE ARGS>`.
 2. **Optional arguments:** settings governing the analysis pipeline. See below for details.

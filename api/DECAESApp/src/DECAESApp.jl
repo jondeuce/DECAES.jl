@@ -9,7 +9,7 @@ function julia_main()::Cint
     try
         DECAES.main(ARGS)
     catch
-        Base.invokelatest(Base.display_error, Base.catch_stack())
+        Base.invokelatest(Base.display_error, Base.current_exceptions())
         return 1
     end
     return 0

@@ -1,23 +1,27 @@
 #!/bin/bash
+set -euo pipefail
 
-revisions="v0.5.1,master"
+# Compare DECAES revisions using AirspeedVelocity.jl
+revisions="${REVISIONS:-master,nnls}"
 script="bench_cli.jl"
 output_dir="results"
-mkdir -p $output_dir
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+mkdir -p "$output_dir"
 
 benchpkg DECAES \
-    --rev=$revisions \
-    --script=$script \
-    --exeflags="--threads=auto" \
-    --output-dir=$output_dir
+    --rev="$revisions" \
+    --script="$script" \
+    --exeflags="--threads=auto --startup-file=no" \
+    --output-dir="$output_dir"
 
 benchpkgplot DECAES \
-    --rev=$revisions \
+    --rev="$revisions" \
     --format=pdf \
     --npart=1000000 \
-    --output-dir=$output_dir \
-    --input-dir=$output_dir
+    --output-dir="$output_dir" \
+    --input-dir="$output_dir"
 
 benchpkgtable DECAES \
-    --rev=$revisions \
-    --input-dir=$output_dir > $output_dir/table_DECAES.txt
+    --rev="$revisions" \
+    --input-dir="$output_dir" > "$output_dir/table_DECAES.txt"

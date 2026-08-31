@@ -34,8 +34,8 @@ using UnsafeArrays: UnsafeArrays, uview
 include("NNLS.jl")
 using .NNLS: NNLS
 
-include("NormalHermiteSplines.jl")
-using .NormalHermiteSplines: NormalHermiteSplines, RK_H0, RK_H1, RK_H2
+# include("NormalHermiteSplines.jl")
+# using .NormalHermiteSplines: NormalHermiteSplines, RK_H0, RK_H1, RK_H2
 
 include("types.jl")
 include("utils.jl")

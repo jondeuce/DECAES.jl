@@ -5,8 +5,6 @@
 ```@contents
 Pages = [
     "index.md",
-    "t2map.md",
-    "t2part.md",
     "cli.md",
     "ref.md",
     "internals.md",

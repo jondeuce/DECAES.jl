@@ -2,10 +2,10 @@ using Pkg
 using Scratch
 
 DECAES_UUID = Base.UUID("d84fb938-a666-558e-89d9-d531edc6724f")
-DECAES_INFO = Pkg.dependencies()[DECAES_UUID]
 DECAES_SOURCE = normpath(@__DIR__, "..")
+DECAES_COMPILE_APP = get(ENV, "DECAES_COMPILE_APP", nothing) == "true"
 
-if get(ENV, "DECAES_COMPILE_APP", nothing) == "true"
+if DECAES_COMPILE_APP
     DECAES_PROJECT_SOURCE = joinpath(DECAES_SOURCE, "api", "DECAESApp")
     DECAES_PROJECT_SCRATCH = get_scratch!(DECAES_UUID, "App")
 else
@@ -20,15 +20,13 @@ cp(DECAES_PROJECT_SOURCE, DECAES_PROJECT_SCRATCH; force = true)
 @info "DECAES: Instantiating environment: $(DECAES_PROJECT_SCRATCH)"
 cd(DECAES_PROJECT_SCRATCH)
 Pkg.activate(DECAES_PROJECT_SCRATCH)
-if get(ENV, "CI", nothing) == "true" || DECAES_INFO.version.prerelease == ("DEV",)
-    @info "DECAES: Developing local version: $(DECAES_SOURCE)"
-    Pkg.develop(; path = DECAES_SOURCE)
-    Pkg.resolve()
-end
+
+@info "DECAES: Developing from source: $(DECAES_SOURCE)"
+Pkg.develop(; path = DECAES_SOURCE)
 Pkg.instantiate()
 Pkg.status()
 
-if get(ENV, "DECAES_COMPILE_APP", nothing) == "true"
+if DECAES_COMPILE_APP
     @info "DECAES: Building App"
     include(joinpath(DECAES_PROJECT_SCRATCH, "app_builder.jl"))
 else

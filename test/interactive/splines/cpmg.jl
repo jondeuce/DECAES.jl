@@ -1,13 +1,7 @@
-if normpath(@__DIR__) ∉ LOAD_PATH
-    pushfirst!(LOAD_PATH, normpath(@__DIR__, "../.."))
-    pushfirst!(LOAD_PATH, normpath(@__DIR__))
-end
+include(joinpath(@__DIR__, "setup.jl"))
 
-using DECAES
 using Statistics
-using LaTeXStrings
-using CairoMakie
-set_theme!(theme_minimal(); resolution = (800, 600), font = "CMU Serif")
+set_theme!(theme_minimal(); size = (800, 600), font = "CMU Serif")
 
 const AbstractTensor{N} = AbstractArray{T, N} where {T}
 

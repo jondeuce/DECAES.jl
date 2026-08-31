@@ -1,6 +1,5 @@
 using Pkg
 Pkg.activate(@__DIR__)
-cd(@__DIR__)
 
 using MAT
 using Statistics
@@ -8,120 +7,103 @@ using UnicodePlots
 
 iqr(x) = quantile(x, 0.75) - quantile(x, 0.25)
 
-versions = [
-    "1.9" => ["v0.5.1"],
-    "1.10" => ["v0.5.2-DEV"],
-]
-settings_files = [
-    "settings.txt",
-]
-cli_extra_args = `--Reg lcurve --SaveResidualNorm --SaveRegParam --quiet`
-
-for (julia_version, decaes_versions) in versions
-    for decaes_version in decaes_versions, settings in settings_files
-        project_dir = joinpath(@__DIR__, "envs", "julia-v" * julia_version, decaes_version)
-        output_dir = joinpath(@__DIR__, "output", splitext(settings)[1], "julia-v" * julia_version * "_" * decaes_version)
-        cmd = `julia +$(julia_version) --startup-file=no --project=$(project_dir) --threads=auto -e "using DECAES; main()" -- @$(joinpath(@__DIR__, "settings", settings)) --output $(output_dir) $(cli_extra_args)`
-
-        @info "Running DECAES with Julia $(julia_version) and DECAES $(decaes_version)" cmd
-        println()
-        @time run(cmd)
-        println()
-    end
+function matfiles(dir)
+    files = filter(endswith(".mat"), readdir(dir))
+    isempty(files) && error("no MAT files found in $dir")
+    return files
 end
 
-for settings in settings_files
-    r = r"julia\-v1\.(?<julia_minor>(?:\d)+)_v0\.(?<decaes_major>(?:\d)+)\.(?<decaes_minor>(?:\d)+)(?:\-DEV)?"
-    outputs = readdir(joinpath(@__DIR__, "output", splitext(settings)[1]); join = true, sort = true)
-    sort!(outputs; by = s -> match(r, s) |> m -> parse.(Int, (m[:julia_minor], m[:decaes_major], m[:decaes_minor])))
-    for i in eachindex(outputs)
-        t2mapfile = only(filter(endswith(".t2maps.mat"), readdir(outputs[i]; join = true)))
-        t2maps = matread(t2mapfile)
-        mask = isfinite.(t2maps["resnorm"])
-        resnorm = t2maps["resnorm"][mask]
-        alpha = t2maps["alpha"][mask]
-        @info "Image stats" t2mapfile num_zeros = sum(iszero, resnorm)
-        histogram(
-            log10.(resnorm);
-            xlabel = "log10(resnorm)", ylabel = "count",
-            title = "resnorm = $(median(resnorm)) ± $(iqr(resnorm) / 2), log10(resnorm) = $(median(log10.(resnorm))) ± $(iqr(log10.(resnorm)) / 2)",
-            nbins = 64, vertical = true, height = 10, width = 80,
-        ) |> display
-        histogram(
-            cosd.(alpha);
-            xlabel = "cosd(alpha)", ylabel = "count",
-            title = "alpha = $(median(alpha)) ± $(iqr(alpha) / 2), cosd(alpha) = $(median(cosd.(alpha))) ± $(iqr(cosd.(alpha)) / 2)",
-            nbins = 64, vertical = true, height = 10, width = 80,
-        ) |> display
+function summarize(file)
+    t2maps = matread(file)
+    @info "Image statistics" file
+
+    if haskey(t2maps, "resnorm")
+        resnorm = filter(isfinite, vec(t2maps["resnorm"]))
+        positive = filter(>(0), resnorm)
+        @info "Residual norm" median = median(resnorm) half_iqr = iqr(resnorm) / 2 num_zeros = count(iszero, resnorm)
+        isempty(positive) || display(histogram(log10.(positive); xlabel = "log10(resnorm)", ylabel = "count", nbins = 64, vertical = true, height = 10, width = 80))
     end
+
+    if haskey(t2maps, "alpha")
+        alpha = filter(isfinite, vec(t2maps["alpha"]))
+        @info "Refocusing angle" median = median(alpha) half_iqr = iqr(alpha) / 2
+        display(histogram(cosd.(alpha); xlabel = "cosd(alpha)", ylabel = "count", nbins = 64, vertical = true, height = 10, width = 80))
+    end
+    return nothing
 end
 
-for settings in settings_files
-    r = r"julia\-v1\.(?<julia_minor>(?:\d)+)_v0\.(?<decaes_major>(?:\d)+)\.(?<decaes_minor>(?:\d)+)(?:\-DEV)?"
-    outputs = readdir(joinpath(@__DIR__, "output", splitext(settings)[1]); join = true, sort = true)
-    sort!(outputs; by = s -> match(r, s) |> m -> parse.(Int, (m[:julia_minor], m[:decaes_major], m[:decaes_minor])))
-    for i in 1:length(outputs)-1
-        @info "----------------"
-        @info "Comparing outputs: $(basename(outputs[i])) vs. $(basename(outputs[i+1]))"
-        @info "----------------"
-        println()
+function relative_error(x, y)
+    numerator = mean(abs, x .- y)
+    denominator = mean(abs, x)
+    return iszero(denominator) ? ifelse(iszero(numerator), zero(numerator), oftype(numerator, Inf)) : numerator / denominator
+end
 
-        for file in readdir(outputs[i]; join = false, sort = true)
-            endswith(file, ".mat") || continue
-            @assert isfile(joinpath(outputs[i+1], file)) "File $(file) not found in $(outputs[i+1])"
-            global file1 = joinpath(outputs[i], file)
-            global file2 = joinpath(outputs[i+1], file)
+function compare_arrays(key, x, y)
+    size(x) == size(y) || return @error "Arrays have different sizes" key size1 = size(x) size2 = size(y)
+    finite1 = isfinite.(x)
+    finite2 = isfinite.(y)
+    finite1 == finite2 || @error "Arrays have different NaN/Inf locations" key
+    mask = finite1 .& finite2
+    any(mask) || return @warn "Array has no jointly finite values" key
 
-            @info "Comparing file: $(file)"
-            global data1 = matread(file1)
-            global data2 = matread(file2)
-            for key in keys(data1)
-                @assert key in keys(data2) "Key $(key) not found in $(file2)"
-                @assert ndims(data1[key]) == ndims(data2[key]) "Keys $(key) have different number of dimensions"
-                ndims(data1[key]) >= 3 || continue
-
-                I = findall(isfinite.(data1[key]))
-                if I != (I2 = findall(isfinite.(data2[key])))
-                    @error "Keys $(key) have different NaN/Inf locations"
-                    I = intersect(I, I2)
-                end
-
-                global x1 = data1[key][I]
-                global x2 = data2[key][I]
-                if key == "mu"
-                    x1 .= log.(x1)
-                    x2 .= log.(x2)
-                end
-
-                # err = maximum(abs, @. (x1 - x2) / ifelse(iszero(x1) || iszero(x2), one(x1), max(abs(x1), abs(x2)))) # maximum relative error
-                # err = √(mean(abs2, x1 .- x2) / mean(abs2, x1 .- mean(x1))) # RRSE: root relative squared error
-                # err = mean(abs, x1 .- x2) / mean(abs, x1 .- mean(x1)) # RAE: relative absolute error
-                # err = mean(abs, x1 .- x2) / max(mean(abs, x1), mean(abs, x1 .- mean(x1))) # RAE: relative absolute error
-                # err = norm((x1 .- mean(x1)) - (x2 .- mean(x2))) ./ norm(x1 .- mean(x1)) # RAE, de-trended
-                err = mean(abs, x1 .- x2) / mean(abs, x1) # mean relative error
-
-                if err <= √eps()
-                    println("$(key => err)") # error is negligible
-                    continue
-                elseif err <= 1e-6
-                    @warn "$(key => err): relative error is small but non-negligible"
-                    continue
-                else
-                    @error "$(key => err): relative error is large"
-                    # global dx = x1 .- x2
-                    # global dx = abs.(x1 .- x2) ./ mean(abs, x1 .- mean(x1))
-                    # global dx = abs.(x1 .- x2) ./ max(mean(abs, x1), mean(abs, x1 .- mean(x1)))
-                    global dx = abs.(x1 .- x2) ./ mean(abs, x1)
-                    dx_low = 0.0 #quantile(dx, 0.01)
-                    dx_high = quantile(dx, 0.99)
-                    nz = count(iszero, dx)
-                    n99 = count(>(dx_high), dx)
-                    dxhist = filter(x -> dx_low < x < dx_high, dx)
-                    @info "$key: nz = $nz, n99 = $n99, $dx_low < dx < $dx_high"
-                    !isempty(dxhist) && display(histogram(dxhist; nbins = 64, vertical = true, height = 10, width = 80))
-                end
-            end
-            println()
-        end
+    xfinite = x[mask]
+    yfinite = y[mask]
+    err = relative_error(xfinite, yfinite)
+    if err <= √eps(Float64)
+        println(key => err)
+    elseif err <= 1e-6
+        @warn "Relative error is small but non-negligible" key err
+    else
+        @error "Relative error is large" key err
+        scale = mean(abs, xfinite)
+        dx = iszero(scale) ? abs.(xfinite .- yfinite) : abs.(xfinite .- yfinite) ./ scale
+        dx_high = quantile(dx, 0.99)
+        dxhist = filter(x -> 0 < x <= dx_high, dx)
+        @info "Error distribution" key num_zeros = count(iszero, dx) above_q99 = count(>(dx_high), dx) q99 = dx_high
+        isempty(dxhist) || display(histogram(dxhist; nbins = 64, vertical = true, height = 10, width = 80))
     end
+    return nothing
+end
+
+function compare_files(file1, file2)
+    data1 = matread(file1)
+    data2 = matread(file2)
+    @info "Comparing file" file = basename(file1)
+
+    for key in sort!(collect(union(keys(data1), keys(data2))))
+        haskey(data1, key) || (@error "Key is missing from first file" key; continue)
+        haskey(data2, key) || (@error "Key is missing from second file" key; continue)
+        x, y = data1[key], data2[key]
+        x isa AbstractArray{<:Number} && y isa AbstractArray{<:Number} || continue
+        compare_arrays(key, x, y)
+    end
+    return nothing
+end
+
+function compare_outputs(dir1, dir2)
+    @info "Comparing outputs" first = abspath(dir1) second = abspath(dir2)
+    files1 = matfiles(dir1)
+    files2 = matfiles(dir2)
+    for file in sort!(collect(union(files1, files2)))
+        file in files1 || (@error "File is missing from first output" file; continue)
+        file in files2 || (@error "File is missing from second output" file; continue)
+        compare_files(joinpath(dir1, file), joinpath(dir2, file))
+    end
+    return nothing
+end
+
+function main(args = ARGS)
+    if length(args) < 2
+        println(stderr, "usage: julia --project=. compare.jl OUTPUT_DIR1 OUTPUT_DIR2 [OUTPUT_DIR3 ...]")
+        return
+    end
+    for dir in args, file in filter(endswith(".t2maps.mat"), matfiles(dir))
+        summarize(joinpath(dir, file))
+    end
+    foreach(dirs -> compare_outputs(dirs...), zip(args, Iterators.drop(args, 1)))
+    return nothing
+end
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
 end

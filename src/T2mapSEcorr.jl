@@ -391,8 +391,8 @@ function FlipAngleOptimizationWorkspace(o::T2mapOptions{T}, decay_basis::Matrix{
         α_searcher = nothing
     else
         (; As, ∇As, Gs) = global_buffer.grid_model
-        nnls_search_prob = NNLSDiscreteSurrogateSearch(As, ∇As, Gs, (flip_angles(o),), decay_data; legacy = o.legacy)
-        α_surrogate = o.legacy ? CubicSplineSurrogate(nnls_search_prob; legacy = true) : CubicHermiteSplineSurrogate(nnls_search_prob)
+        nnls_search_prob = NNLSDiscreteSurrogateSearch(As, ∇As, Gs, (flip_angles(o),), decay_data)
+        α_surrogate = CubicHermiteSplineSurrogate(nnls_search_prob)
         α_searcher = DiscreteSurrogateSearcher(α_surrogate.grid) # reused per voxel; see `optimize_flip_angle!`
     end
 
@@ -557,7 +557,6 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
         work.α[] = α_opt[1]
 
         # Refine the surrogate minimizer against true off-grid loss evaluations; `true` means the basis at the final α is already built.
-        # The legacy cubic-spline surrogate has no polish workspace: it carries no envelope derivatives, and its returned angle is the MATLAB-compatible reference.
         basis_current = work.α_polish_work !== nothing && polish_flip_angle!(work)
 
         # Compute basis using optimized flip angles
@@ -593,7 +592,6 @@ struct Reginska <: RegularizationMethod end
 struct ReginskaLasso <: RegularizationMethod end
 struct ChiSquared{T} <: RegularizationMethod
     Chi2Factor::T
-    legacy::Bool
 end
 struct ChiSquaredLasso{T} <: RegularizationMethod
     Chi2Factor::T
@@ -612,7 +610,7 @@ function regularization_method(o::T2mapOptions)
         o.Reg == "lcurve"   ? (l1 ? LCurveLasso() : LCurve()) : # Fit T2 distribution using L-curve-based regularized NNLS
         o.Reg == "gcv"      ? GCV() : # Fit T2 distribution using GCV-based regularized NNLS
         o.Reg == "reginska" ? (l1 ? ReginskaLasso() : Reginska()) : # Fit T2 distribution using Reginska's minimum-product criterion
-        o.Reg == "chi2"     ? (l1 ? ChiSquaredLasso(o.Chi2Factor) : ChiSquared(o.Chi2Factor, o.legacy)) : # Fit T2 distribution using chi2-based regularized NNLS
+        o.Reg == "chi2"     ? (l1 ? ChiSquaredLasso(o.Chi2Factor) : ChiSquared(o.Chi2Factor)) : # Fit T2 distribution using chi2-based regularized NNLS
         o.Reg == "mdp"      ? (l1 ? MDPLasso(o.NoiseLevel) : MDP(o.NoiseLevel)) : # Fit T2 distribution using Morozov discrepancy principle-based regularized NNLS
         error("Unrecognized regularization method: $(o.Reg)")
     return reg
@@ -688,7 +686,7 @@ end
 
 function T2_distribution!(t2work::T2DistWorkspace{ChiSquared{T}, T}) where {T}
     (; reg, nnls_work, μ, χ²fact) = t2work
-    x, μ[], χ²fact[] = lsqnonneg_chi2!(nnls_work, reg.Chi2Factor, reg.legacy)
+    x, μ[], χ²fact[] = lsqnonneg_chi2!(nnls_work, reg.Chi2Factor)
     return x
 end
 
@@ -828,7 +826,7 @@ end
 # Read-only data shared by all workers: `grid_model` requires a flip-angle grid; `spectrum_interp` additionally requires GCV.
 function global_buffer_maker(o::T2mapOptions{T}) where {T}
     θ = default_epg_parameters(o)
-    decay_basis_work = !o.legacy && o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ? EPGCosineSeriesBasis(θ, T2_component_times(o)) : nothing
+    decay_basis_work = o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ? EPGCosineSeriesBasis(θ, T2_component_times(o)) : nothing
     grid_model = o.SetFlipAngle === nothing ? epg_grid_model(o, θ) : nothing
     spectrum_interp = grid_model === nothing || !(regularization_method(o) isa GCV) ? nothing : GriddedSpectrumInterpolator(grid_model.As, grid_model.∇As, flip_angles(o))
     return (; decay_basis_work, grid_model, spectrum_interp)

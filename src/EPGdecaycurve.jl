@@ -50,7 +50,7 @@ end
 
 @inline Base.eltype(::EPGOptions{T}) where {T} = T
 @inline echotrainlength(θ::EPGOptions) = θ.ETL
-@inline B1correctedflipangle(θ::EPGOptions{T}, i::Int) where {T} = ifelse(i == 0, θ.α / 2, ifelse(i == 1, θ.α, θ.α * θ.β / T(π))) # B1-corrected pulse sequence: α/2, α, αβ/π, αβ/π, ...
+@inline B1correctedflipangle(θ::EPGOptions{T}, n::Int) where {T} = ifelse(n == 0, θ.α / 2, ifelse(n == 1, θ.α, θ.α * θ.β / T(π))) # B1-corrected pulse sequence: α/2, α, αβ/π, αβ/π, ...
 @inline echotime(θ::EPGOptions) = θ.TE
 @inline T2time(θ::EPGOptions) = θ.T2
 @inline T1time(θ::EPGOptions) = θ.T1
@@ -73,7 +73,7 @@ end
 
 @inline Base.eltype(::EPGConstantFlipAngleOptions{T}) where {T} = T
 @inline echotrainlength(θ::EPGConstantFlipAngleOptions) = θ.ETL
-@inline B1correctedflipangle(θ::EPGConstantFlipAngleOptions{T}, i::Int) where {T} = ifelse(i == 0, θ.α / 2, θ.α) # B1-corrected pulse sequence: α/2, α, α, α, ...
+@inline B1correctedflipangle(θ::EPGConstantFlipAngleOptions{T}, n::Int) where {T} = ifelse(n == 0, θ.α / 2, θ.α) # B1-corrected pulse sequence: α/2, α, α, α, ...
 @inline echotime(θ::EPGConstantFlipAngleOptions) = θ.TE
 @inline T2time(θ::EPGConstantFlipAngleOptions) = θ.T2
 @inline T1time(θ::EPGConstantFlipAngleOptions) = θ.T1
@@ -98,7 +98,7 @@ end
 
 @inline Base.eltype(::EPGIncreasingFlipAnglesOptions{T}) where {T} = T
 @inline echotrainlength(θ::EPGIncreasingFlipAnglesOptions) = θ.ETL
-@inline B1correctedflipangle(θ::EPGIncreasingFlipAnglesOptions{T}, i::Int) where {T} = ifelse(i == 0, θ.α / 2, ifelse(i == 1, θ.α * θ.α1 / T(π), ifelse(i == 2, θ.α * θ.α2 / T(π), θ.α))) # B1-corrected pulse sequence: α/2, αα₁/π, αα₂/π, α, α, ...
+@inline B1correctedflipangle(θ::EPGIncreasingFlipAnglesOptions{T}, n::Int) where {T} = ifelse(n == 0, θ.α / 2, ifelse(n == 1, θ.α * θ.α1 / T(π), ifelse(n == 2, θ.α * θ.α2 / T(π), θ.α))) # B1-corrected pulse sequence: α/2, αα₁/π, αα₂/π, α, α, ...
 @inline echotime(θ::EPGIncreasingFlipAnglesOptions) = θ.TE
 @inline T2time(θ::EPGIncreasingFlipAnglesOptions) = θ.T2
 @inline T1time(θ::EPGIncreasingFlipAnglesOptions) = θ.T1
@@ -117,7 +117,7 @@ end
 @inline Base.Tuple(::SymbolVector{Fs}) where {Fs} = Fs
 @inline Base.length(::SymbolVector{Fs}) where {Fs} = length(Fs)
 @inline Base.size(::SymbolVector{Fs}) where {Fs} = (length(Fs),)
-@inline Base.getindex(::SymbolVector{Fs}, i::Int) where {Fs} = Fs[i] #TODO uncomment
+@inline Base.getindex(::SymbolVector{Fs}, i::Int) where {Fs} = Fs[i]
 
 @generated function constructorof(::Type{T}) where {T}
     return :($(getfield(parentmodule(T), nameof(T))))
@@ -197,6 +197,7 @@ pulse sequence.
   - `decay_curve::AbstractVector`: normalized echo decay curve with length `ETL`
 
 !!! note "Units of time"
+
     The decay curve depends on `TE`, `T2`, and `T1` only through the ratios `TE/T2` and `TE/T1`, so no particular unit of time is assumed; the three need only use the same units.
 
 The four-argument method omits `β`, fixing the refocusing control angle at 180 degrees, which is the standard CPMG sequence.
@@ -301,7 +302,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
     (; MPSV) = work
     αₑₓ = B1correctedflipangle(θ, 0)
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -311,7 +312,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
     E1, E2 = exp(-(TE / 2) / T1), exp(-(TE / 2) / T2)
     E = SA{T}[E2, E2, E1]
     R₁ = element_flipmat(α₁)
-    Rᵢ = element_flipmat(αᵢ)
+    R₂₊ = element_flipmat(α)
 
     # Initialize magnetization phase state vector (MPSV)
     @inbounds for j in 1:ETL
@@ -319,28 +320,28 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
     end
     @inbounds MPSV[1] = V[sin(αₑₓ), 0, 0] # initial magnetization in F1 state
 
-    @inbounds for i in 1:ETL
+    @inbounds for n in 1:ETL
         # Relaxation for TE/2, followed by flip matrix
-        R = i == 1 ? R₁ : Rᵢ
+        R = n == 1 ? R₁ : R₂₊
         for j in 1:ETL
             MPSV[j] = R * (E .* MPSV[j])
         end
 
         # Transition between phase states
-        Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
-        MPSV[1] = V[Mᵢ[2], Mᵢ₊₁[2], Mᵢ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
+        Ωⱼ, Ωⱼ₊₁ = MPSV[1], MPSV[2]
+        MPSV[1] = V[Ωⱼ[2], Ωⱼ₊₁[2], Ωⱼ[3]] # (F⁺₁, F⁺₁*, Z₁)⁺ = (F⁺₁*, F⁺₂*, Z₁)
         for j in 2:ETL-1
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
-            MPSV[j] = V[Mᵢ₋₁[1], Mᵢ₊₁[2], Mᵢ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV[j+1]
+            MPSV[j] = V[Ωⱼ₋₁[1], Ωⱼ₊₁[2], Ωⱼ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
         end
-        Mᵢ₋₁, Mᵢ = Mᵢ, Mᵢ₊₁
-        MPSV[ETL] = V[Mᵢ₋₁[1], 0, Mᵢ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
+        Ωⱼ₋₁, Ωⱼ = Ωⱼ, Ωⱼ₊₁
+        MPSV[ETL] = V[Ωⱼ₋₁[1], 0, Ωⱼ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
 
         # Relaxation for TE/2
         for j in 1:ETL
             MPSV[j] = E .* MPSV[j] # Relaxation for TE/2
         end
-        dc[i] = abs(MPSV[1][1]) # first echo amplitude
+        dc[n] = abs(MPSV[1][1]) # first echo amplitude
     end
 
     return dc
@@ -367,28 +368,28 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
     end
     @inbounds MPSV[1] = V[sin(αₑₓ), 0, 0] # initial magnetization in F1 state
 
-    @inbounds for i in 1:ETL
+    @inbounds for n in 1:ETL
         # Relaxation for TE/2, followed by flip matrix
-        R = element_flipmat(B1correctedflipangle(θ, i))
+        R = element_flipmat(B1correctedflipangle(θ, n))
         for j in 1:ETL
             MPSV[j] = R * (E .* MPSV[j])
         end
 
         # Transition between phase states
-        Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
-        MPSV[1] = V[Mᵢ[2], Mᵢ₊₁[2], Mᵢ[3]] # (F₁, F₁*, Z₁)⁺ = (F₁*, F₂*, Z₁)
+        Ωⱼ, Ωⱼ₊₁ = MPSV[1], MPSV[2]
+        MPSV[1] = V[Ωⱼ[2], Ωⱼ₊₁[2], Ωⱼ[3]] # (F⁺₁, F⁺₁*, Z₁)⁺ = (F⁺₁*, F⁺₂*, Z₁)
         for j in 2:ETL-1
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
-            MPSV[j] = V[Mᵢ₋₁[1], Mᵢ₊₁[2], Mᵢ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV[j+1]
+            MPSV[j] = V[Ωⱼ₋₁[1], Ωⱼ₊₁[2], Ωⱼ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
         end
-        Mᵢ₋₁, Mᵢ = Mᵢ, Mᵢ₊₁
-        MPSV[ETL] = V[Mᵢ₋₁[1], 0, Mᵢ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
+        Ωⱼ₋₁, Ωⱼ = Ωⱼ, Ωⱼ₊₁
+        MPSV[ETL] = V[Ωⱼ₋₁[1], 0, Ωⱼ[3]] # (Fₙ, Fₙ*, Zₙ)⁺ = (Fₙ₋₁, 0, Zₙ)
 
         # Relaxation for TE/2
         for j in 1:ETL
             MPSV[j] = E .* MPSV[j] # Relaxation for TE/2
         end
-        dc[i] = abs(MPSV[1][1]) # first echo amplitude
+        dc[n] = abs(MPSV[1][1]) # first echo amplitude
     end
 
     return dc
@@ -415,7 +416,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T}, θ::EPGO
     # Unpack workspace
     (; MPSV) = work
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -426,46 +427,46 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T}, θ::EPGO
     sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ = sincos(αᵢ)
-    cos²½αᵢ = (1 + cosαᵢ) / 2
-    sin²½αᵢ = 1 - cos²½αᵢ
+    sinα, cosα = sincos(α)
+    cos²½α = (1 + cosα) / 2
+    sin²½α = 1 - cos²½α
     a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    a, b, c, d = E₂^2 * cos²½α, E₂^2 * sin²½α, E₁ * E₂ * sinα, E₁^2 * cosα
+    F⁺, F⁻, Z = V[a, b, c], V[b, a, -c], V[-c/2, c/2, d]
 
-    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    # Initialize magnetization phase state vector (MPSV), pulling n=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1] = abs(Mᵢ⁺[1])
-        MPSV[1] = Mᵢ⁺
+        Ω₁′ = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1] = abs(Ω₁′[1])
+        MPSV[1] = Ω₁′
         MPSV[2] = V[a₁*m₀, 0, 0]
         MPSV[3] = V[0, 0, 0]
     end
 
-    @inbounds for i in 2:ETL-1
+    @inbounds for n in 2:ETL-1
         # j = 1, initialize and update `dc`
-        Mᵢ, Mᵢ₊₁ = MPSV[1], MPSV[2]
-        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i] = abs(Mᵢ⁺[1])
-        MPSV[1] = Mᵢ⁺
+        Ωⱼ, Ωⱼ₊₁ = MPSV[1], MPSV[2]
+        Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
+        dc[n] = abs(Ω₁′[1])
+        MPSV[1] = Ω₁′
 
         # inner loop
-        jup = min(i, ETL - i)
+        jup = min(n, ETL - n)
         for j in 2:jup
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV[j+1]
-            MPSV[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV[j+1]
+            MPSV[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
 
         # cleanup for next iteration
-        if i == jup
-            Mᵢ₋₁ = Mᵢ
-            MPSV[i+1] = V[F⋅Mᵢ₋₁, 0, 0]
-            MPSV[i+2] = V[0, 0, 0]
+        if n == jup
+            Ωⱼ₋₁ = Ωⱼ
+            MPSV[n+1] = V[F⁺⋅Ωⱼ₋₁, 0, 0]
+            MPSV[n+2] = V[0, 0, 0]
         end
     end
 
-    @inbounds dc[ETL] = abs(F̄ ⋅ MPSV[1])
+    @inbounds dc[ETL] = abs(F⁻ ⋅ MPSV[1])
 
     return dc
 end
@@ -488,11 +489,11 @@ end
 EPGWork_ReIm_Generated(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_Generated(T, Val(ETL))
 
 function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T, ETL, A <: AbstractVector{T}, W <: EPGWork_ReIm_Generated{T, Val{ETL}}, O <: EPGOptions{T, Val{ETL}}}
-    MPSV(i::Int) = Symbol(:MPSV, i)
+    MPSV(n::Int) = Symbol(:MPSV, n)
     quote
         # Unpack workspace
         α₁ = B1correctedflipangle(θ, 1)
-        αᵢ = B1correctedflipangle(θ, 2)
+        α = B1correctedflipangle(θ, 2)
         TE = echotime(θ)
         T2 = T2time(θ)
         T1 = T1time(θ)
@@ -503,25 +504,25 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
         sin½α₁, cos½α₁   = sincos(α₁ / 2)
         sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
         sinα₁            = 2 * sin½α₁ * cos½α₁
-        sinαᵢ, cosαᵢ     = sincos(αᵢ)
-        cos²½αᵢ          = (1 + cosαᵢ) / 2
-        sin²½αᵢ          = 1 - cos²½αᵢ
+        sinα, cosα     = sincos(α)
+        cos²½α          = (1 + cosα) / 2
+        sin²½α          = 1 - cos²½α
         a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-        aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-        F, F̄, Z         = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+        a, b, c, d   = E₂^2 * cos²½α, E₂^2 * sin²½α, E₁ * E₂ * sinα, E₁^2 * cosα
+        F⁺, F⁻, Z         = V[a, b, c], V[b, a, -c], V[-c/2, c/2, d]
 
         # Initialize MPSV vector elements
         $([
-            :($(MPSV(i)) = zero(SVector{3, $T}))
-            for i in 1:ETL
+            :($(MPSV(n)) = zero(SVector{3, $T}))
+            for n in 1:ETL
         ]...)
 
-        # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+        # Initialize magnetization phase state vector (MPSV), pulling n=1 iteration out of loop
         @inbounds begin
             m₀         = sin½α₁ # since αₑₓ = ½α₁
-            Mᵢ⁺        = V[b₁*m₀, 0, -c₁*m₀/2]
-            dc[1]      = abs(Mᵢ⁺[1])
-            $(MPSV(1)) = Mᵢ⁺
+            Ω₁′        = V[b₁*m₀, 0, -c₁*m₀/2]
+            dc[1]      = abs(Ω₁′[1])
+            $(MPSV(1)) = Ω₁′
             $(MPSV(2)) = V[a₁*m₀, 0, 0]
         end
 
@@ -530,26 +531,26 @@ function epg_decay_curve_impl!(dc::Type{A}, work::Type{W}, θ::Type{O}) where {T
             quote
                 # Initialize and update `dc` (j = 1)
                 @inbounds begin
-                    Mᵢ, Mᵢ₊₁   = $(MPSV(1)), $(MPSV(2))
-                    Mᵢ⁺        = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-                    dc[$i]     = abs(Mᵢ⁺[1])
-                    $(MPSV(1)) = Mᵢ⁺
+                    Ωⱼ, Ωⱼ₊₁   = $(MPSV(1)), $(MPSV(2))
+                    Ω₁′        = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
+                    dc[$n]     = abs(Ω₁′[1])
+                    $(MPSV(1)) = Ω₁′
                 end
 
                 # Inner loop
                 $([
                     quote
-                        (Mᵢ₋₁, Mᵢ, Mᵢ₊₁) = (Mᵢ, Mᵢ₊₁, $(MPSV(j + 1)))
-                        $(MPSV(j))       = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+                        (Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁) = (Ωⱼ, Ωⱼ₊₁, $(MPSV(j + 1)))
+                        $(MPSV(j))       = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
                     end
-                    for j in 2:min(i, ETL - i)+1
+                    for j in 2:min(n, ETL - n)+1
                 ]...)
             end
-            for i in 2:ETL-1
+            for n in 2:ETL-1
         ]...)
 
         # Last echo
-        @inbounds dc[$ETL] = abs(F̄ ⋅ $(MPSV(1)))
+        @inbounds dc[$ETL] = abs(F⁻ ⋅ $(MPSV(1)))
 
         return dc
     end
@@ -583,7 +584,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -594,48 +595,48 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T
     sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ = sincos(αᵢ)
-    cos²½αᵢ = (1 + cosαᵢ) / 2
-    sin²½αᵢ = 1 - cos²½αᵢ
+    sinα, cosα = sincos(α)
+    cos²½α = (1 + cosα) / 2
+    sin²½α = 1 - cos²½α
     a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    a, b, c, d = E₂^2 * cos²½α, E₂^2 * sin²½α, E₁ * E₂ * sinα, E₁^2 * cosα
+    F⁺, F⁻, Z = V[a, b, c], V[b, a, -c], V[-c/2, c/2, d]
 
-    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    # Initialize magnetization phase state vector (MPSV), pulling n=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
+        Ω₁′ = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
         MPSV₁[2] = V[a₁*m₀, 0, 0]
         MPSV₁[3] = V[0, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in 2:ETL-1
+    @inbounds for n in 2:ETL-1
         # j = 1, initialize and update `dc`
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2]
-        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2]
+        Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
+        dc[n] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
 
         # inner loop
-        jup = min(i, ETL - i)
+        jup = min(n, ETL - n)
         @simd for j in 2:jup
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
 
         # cleanup for next iteration
-        if i == jup
-            Mᵢ₋₁ = Mᵢ
-            MPSV₁[i+1] = V[F⋅Mᵢ₋₁, 0, 0]
-            MPSV₁[i+2] = V[0, 0, 0]
+        if n == jup
+            Ωⱼ₋₁ = Ωⱼ
+            MPSV₁[n+1] = V[F⁺⋅Ωⱼ₋₁, 0, 0]
+            MPSV₁[n+2] = V[0, 0, 0]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds dc[ETL] = abs(F̄ ⋅ MPSV₂[1])
+    @inbounds dc[ETL] = abs(F⁻ ⋅ MPSV₂[1])
 
     return dc
 end
@@ -663,7 +664,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_S
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -674,50 +675,50 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_S
     sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ = sincos(αᵢ)
-    cos²½αᵢ = (1 + cosαᵢ) / 2
-    sin²½αᵢ = 1 - cos²½αᵢ
+    sinα, cosα = sincos(α)
+    cos²½α = (1 + cosα) / 2
+    sin²½α = 1 - cos²½α
     a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    a, b, c, d = E₂^2 * cos²½α, E₂^2 * sin²½α, E₁ * E₂ * sinα, E₁^2 * cosα
+    F⁺, F⁻, Z = V[a, b, c], V[b, a, -c], V[-c/2, c/2, d]
 
-    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    # Initialize magnetization phase state vector (MPSV), pulling n=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
+        Ω₁′ = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
         MPSV₁[2] = V[a₁*m₀, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in 2:ETL÷2
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        @simd for j in 2:i-1
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+    @inbounds for n in 2:ETL÷2
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
+        dc[n] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
+        @simd for j in 2:n-1
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
-        MPSV₁[i] = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁]
-        MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0]
+        MPSV₁[n] = V[F⁺⋅Ωⱼ, 0, Z⋅Ωⱼ₊₁]
+        MPSV₁[n+1] = V[F⁺⋅Ωⱼ₊₁, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in ETL÷2+1:ETL-1
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        @simd for j in 2:ETL-i
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+    @inbounds for n in ETL÷2+1:ETL-1
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
+        dc[n] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
+        @simd for j in 2:ETL-n
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds dc[ETL] = abs(F̄ ⋅ MPSV₂[1])
+    @inbounds dc[ETL] = abs(F⁻ ⋅ MPSV₂[1])
 
     return dc
 end
@@ -747,7 +748,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     (; MPSV₁, MPSV₂) = work
 
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -757,81 +758,81 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
     sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ = sincos(αᵢ)
-    cos²½αᵢ = (1 + cosαᵢ) / 2
-    sin²½αᵢ = 1 - cos²½αᵢ
+    sinα, cosα = sincos(α)
+    cos²½α = (1 + cosα) / 2
+    sin²½α = 1 - cos²½α
     a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    a, b, c, d = E₂^2 * cos²½α, E₂^2 * sin²½α, E₁ * E₂ * sinα, E₁^2 * cosα
+    F⁺, F⁻, Z = V[a, b, c], V[b, a, -c], V[-c/2, c/2, d]
 
     @inbounds begin
-        # i = 1 iteration
+        # n = 1 iteration
         # Initialize magnetization phase state vector (MPSV)
         m₀ = sin½α₁ # since αₑₓ = ½α₁
-        M₀ = V[b₁*m₀, 0, -c₁*m₀/2]
-        MPSV₁[1] = M₀
+        Ω₁ = V[b₁*m₀, 0, -c₁*m₀/2]
+        MPSV₁[1] = Ω₁
         MPSV₁[2] = V[a₁*m₀, 0, 0]
 
-        dc[1] = abs(M₀[1])
+        dc[1] = abs(Ω₁[1])
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
 
-        # i = 2 iteration
-        M₀, M₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        FM₀, F̄M₀, ZM₀ = F ⋅ M₀, F̄ ⋅ M₀, Z ⋅ M₀
-        FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
+        # n = 2 iteration
+        Ω₁, Ω₂ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        FΩ₁, F⁻Ω₁, ZΩ₁ = F⁺ ⋅ Ω₁, F⁻ ⋅ Ω₁, Z ⋅ Ω₁
+        FΩ₂, F⁻Ω₂, ZΩ₂ = F⁺ ⋅ Ω₂, F⁻ ⋅ Ω₂, Z ⋅ Ω₂
 
-        MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
-        MPSV₁[2] = V[FM₀, 0, ZM₁]
-        MPSV₁[3] = V[FM₁, 0, 0]
+        MPSV₁[1] = V[F⁻Ω₁, F⁻Ω₂, ZΩ₁]
+        MPSV₁[2] = V[FΩ₁, 0, ZΩ₂]
+        MPSV₁[3] = V[FΩ₂, 0, 0]
 
-        dc[2] = abs(F̄M₀)
+        dc[2] = abs(F⁻Ω₁)
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in 3:ETL÷2
-        M₀, M₁, M₂ = MPSV₂[1], MPSV₂[2], MPSV₂[3] # j = 1, initialize and update `dc`
-        FM₀, F̄M₀, ZM₀ = F ⋅ M₀, F̄ ⋅ M₀, Z ⋅ M₀
-        FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
-        FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
+    @inbounds for n in 3:ETL÷2
+        Ω₁, Ω₂, Ω₃ = MPSV₂[1], MPSV₂[2], MPSV₂[3] # j = 1, initialize and update `dc`
+        FΩ₁, F⁻Ω₁, ZΩ₁ = F⁺ ⋅ Ω₁, F⁻ ⋅ Ω₁, Z ⋅ Ω₁
+        FΩ₂, F⁻Ω₂, ZΩ₂ = F⁺ ⋅ Ω₂, F⁻ ⋅ Ω₂, Z ⋅ Ω₂
+        FΩ₃, F⁻Ω₃, ZΩ₃ = F⁺ ⋅ Ω₃, F⁻ ⋅ Ω₃, Z ⋅ Ω₃
 
-        MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
-        MPSV₁[2] = V[FM₀, F̄M₂, ZM₁]
+        MPSV₁[1] = V[F⁻Ω₁, F⁻Ω₂, ZΩ₁]
+        MPSV₁[2] = V[FΩ₁, F⁻Ω₃, ZΩ₂]
 
-        for j in 3:i-1
-            FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
-            M₂ = MPSV₂[j+1]
-            FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
-            MPSV₁[j] = V[FM₀, F̄M₂, ZM₁]
+        for j in 3:n-1
+            FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
+            Ω₃ = MPSV₂[j+1]
+            FΩ₃, F⁻Ω₃, ZΩ₃ = F⁺ ⋅ Ω₃, F⁻ ⋅ Ω₃, Z ⋅ Ω₃
+            MPSV₁[j] = V[FΩ₁, F⁻Ω₃, ZΩ₂]
         end
 
-        MPSV₁[i] = V[FM₁, 0, ZM₂]
-        MPSV₁[i+1] = V[FM₂, 0, 0]
+        MPSV₁[n] = V[FΩ₂, 0, ZΩ₃]
+        MPSV₁[n+1] = V[FΩ₃, 0, 0]
 
-        dc[i] = abs(F̄M₀)
+        dc[n] = abs(F⁻Ω₁)
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in ETL÷2+1:ETL-1
-        M₀, M₁, M₂ = MPSV₂[1], MPSV₂[2], MPSV₂[3] # j = 1, initialize and update `dc`
-        FM₀, F̄M₀, ZM₀ = F ⋅ M₀, F̄ ⋅ M₀, Z ⋅ M₀
-        FM₁, F̄M₁, ZM₁ = F ⋅ M₁, F̄ ⋅ M₁, Z ⋅ M₁
-        FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
+    @inbounds for n in ETL÷2+1:ETL-1
+        Ω₁, Ω₂, Ω₃ = MPSV₂[1], MPSV₂[2], MPSV₂[3] # j = 1, initialize and update `dc`
+        FΩ₁, F⁻Ω₁, ZΩ₁ = F⁺ ⋅ Ω₁, F⁻ ⋅ Ω₁, Z ⋅ Ω₁
+        FΩ₂, F⁻Ω₂, ZΩ₂ = F⁺ ⋅ Ω₂, F⁻ ⋅ Ω₂, Z ⋅ Ω₂
+        FΩ₃, F⁻Ω₃, ZΩ₃ = F⁺ ⋅ Ω₃, F⁻ ⋅ Ω₃, Z ⋅ Ω₃
 
-        MPSV₁[1] = V[F̄M₀, F̄M₁, ZM₀]
-        MPSV₁[2] = V[FM₀, F̄M₂, ZM₁]
+        MPSV₁[1] = V[F⁻Ω₁, F⁻Ω₂, ZΩ₁]
+        MPSV₁[2] = V[FΩ₁, F⁻Ω₃, ZΩ₂]
 
-        for j in 3:ETL-i
-            FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
-            M₂ = MPSV₂[j+1]
-            FM₂, F̄M₂, ZM₂ = F ⋅ M₂, F̄ ⋅ M₂, Z ⋅ M₂
-            MPSV₁[j] = V[FM₀, F̄M₂, ZM₁]
+        for j in 3:ETL-n
+            FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
+            Ω₃ = MPSV₂[j+1]
+            FΩ₃, F⁻Ω₃, ZΩ₃ = F⁺ ⋅ Ω₃, F⁻ ⋅ Ω₃, Z ⋅ Ω₃
+            MPSV₁[j] = V[FΩ₁, F⁻Ω₃, ZΩ₂]
         end
 
-        dc[i] = abs(F̄M₀)
+        dc[n] = abs(F⁻Ω₁)
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds dc[ETL] = abs(F̄ ⋅ MPSV₂[1])
+    @inbounds dc[ETL] = abs(F⁻ ⋅ MPSV₂[1])
 
     return dc
 end
@@ -841,8 +842,8 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
 
     # Scale impulse response by initial magnetization and take absolute value
     m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
-    @simd ivdep for i in eachindex(dc)
-        dc[i] = abs(m₀ * dc[i])
+    @simd ivdep for n in eachindex(dc)
+        dc[n] = abs(m₀ * dc[n])
     end
 
     return dc
@@ -863,72 +864,72 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVec
     c′ = -c / 2
 
     @inbounds begin
-        M₀ = V[a-b, zero(T), c′]
-        MPSV₁[1] = M₀
+        Ω₁ = V[a-b, zero(T), c′]
+        MPSV₁[1] = Ω₁
         MPSV₁[2] = V[a+b, zero(T), zero(T)]
 
-        dc[1] = M₀[1]
+        dc[1] = Ω₁[1]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
 
-        for i in 2:ETL÷2
-            F, F̄, Z = MPSV₂[1]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            F̄M₁, FM₁, ZM₁ = muladd(-c, Z, C′ - S′), muladd(c, Z, C′ + S′), muladd(c′, S, d * Z)
+        for n in 2:ETL÷2
+            F⁺, F⁻, Z = MPSV₂[1]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            F⁻Ω₂, FΩ₂, ZΩ₂ = muladd(-c, Z, x′ - y′), muladd(c, Z, x′ + y′), muladd(c′, y, d * Z)
 
-            F, F̄, Z = MPSV₂[2]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            F̄M₂, FM₂, ZM₂ = muladd(-c, Z, C′ - S′), muladd(c, Z, C′ + S′), muladd(c′, S, d * Z)
+            F⁺, F⁻, Z = MPSV₂[2]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            F⁻Ω₃, FΩ₃, ZΩ₃ = muladd(-c, Z, x′ - y′), muladd(c, Z, x′ + y′), muladd(c′, y, d * Z)
 
-            MPSV₁[1] = V[F̄M₁, F̄M₂, ZM₁]
-            dc[i] = F̄M₁
-            FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+            MPSV₁[1] = V[F⁻Ω₂, F⁻Ω₃, ZΩ₂]
+            dc[n] = F⁻Ω₂
+            FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
 
-            @simd ivdep for k in 2:i-1
-                F, F̄, Z = MPSV₂[k+1]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a * C, b * S
-                FM₂, F̄M₂, ZM₂ = muladd(c, Z, C′ + S′), muladd(-c, Z, C′ - S′), muladd(c′, S, d * Z)
-                MPSV₁[k] = V[FM₀, F̄M₂, ZM₁]
-                FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+            @simd ivdep for j in 2:n-1
+                F⁺, F⁻, Z = MPSV₂[j+1]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a * x, b * y
+                FΩ₃, F⁻Ω₃, ZΩ₃ = muladd(c, Z, x′ + y′), muladd(-c, Z, x′ - y′), muladd(c′, y, d * Z)
+                MPSV₁[j] = V[FΩ₁, F⁻Ω₃, ZΩ₂]
+                FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
             end
 
-            MPSV₁[i], MPSV₁[i+1] = V[FM₀, zero(T), ZM₁], V[FM₁, zero(T), zero(T)]
+            MPSV₁[n], MPSV₁[n+1] = V[FΩ₁, zero(T), ZΩ₂], V[FΩ₂, zero(T), zero(T)]
             MPSV₁, MPSV₂ = MPSV₂, MPSV₁
         end
 
-        for i in ETL÷2+1:ETL-1
-            F, F̄, Z = MPSV₂[1]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            F̄M₁, FM₁, ZM₁ = muladd(-c, Z, C′ - S′), muladd(c, Z, C′ + S′), muladd(c′, S, d * Z)
+        for n in ETL÷2+1:ETL-1
+            F⁺, F⁻, Z = MPSV₂[1]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            F⁻Ω₂, FΩ₂, ZΩ₂ = muladd(-c, Z, x′ - y′), muladd(c, Z, x′ + y′), muladd(c′, y, d * Z)
 
-            F, F̄, Z = MPSV₂[2]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            F̄M₂, FM₂, ZM₂ = muladd(-c, Z, C′ - S′), muladd(c, Z, C′ + S′), muladd(c′, S, d * Z)
+            F⁺, F⁻, Z = MPSV₂[2]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            F⁻Ω₃, FΩ₃, ZΩ₃ = muladd(-c, Z, x′ - y′), muladd(c, Z, x′ + y′), muladd(c′, y, d * Z)
 
-            MPSV₁[1] = V[F̄M₁, F̄M₂, ZM₁]
-            dc[i] = F̄M₁
-            FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+            MPSV₁[1] = V[F⁻Ω₂, F⁻Ω₃, ZΩ₂]
+            dc[n] = F⁻Ω₂
+            FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
 
-            @simd ivdep for k in 2:ETL-i
-                F, F̄, Z = MPSV₂[k+1]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a * C, b * S
-                FM₂, F̄M₂, ZM₂ = muladd(c, Z, C′ + S′), muladd(-c, Z, C′ - S′), muladd(c′, S, d * Z)
-                MPSV₁[k] = V[FM₀, F̄M₂, ZM₁]
-                FM₀, FM₁, ZM₁ = FM₁, FM₂, ZM₂
+            @simd ivdep for j in 2:ETL-n
+                F⁺, F⁻, Z = MPSV₂[j+1]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a * x, b * y
+                FΩ₃, F⁻Ω₃, ZΩ₃ = muladd(c, Z, x′ + y′), muladd(-c, Z, x′ - y′), muladd(c′, y, d * Z)
+                MPSV₁[j] = V[FΩ₁, F⁻Ω₃, ZΩ₂]
+                FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
             end
 
-            MPSV₁[ETL-i+1] = V[FM₀, zero(T), ZM₁]
+            MPSV₁[ETL-n+1] = V[FΩ₁, zero(T), ZΩ₂]
             MPSV₁, MPSV₂ = MPSV₂, MPSV₁
         end
 
-        F, F̄, Z = MPSV₂[1]
-        C, S = F + F̄, F - F̄
-        dc[ETL] = muladd(-c, Z, muladd(a, C, -b * S))
+        F⁺, F⁻, Z = MPSV₂[1]
+        x, y = F⁺ + F⁻, F⁺ - F⁻
+        dc[ETL] = muladd(-c, Z, muladd(a, x, -b * y))
     end
 
     return dc
@@ -957,8 +958,8 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualFlat_Split_
 
     # Scale impulse response by initial magnetization and take absolute value
     m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
-    @simd ivdep for i in eachindex(dc)
-        dc[i] = abs(m₀ * dc[i])
+    @simd ivdep for n in eachindex(dc)
+        dc[n] = abs(m₀ * dc[n])
     end
 
     return dc
@@ -987,60 +988,60 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualFla
         MPSV₁[2], MPSV₁[2+Δy], MPSV₁[2+Δz] = a + b, zero(T), zero(T)
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
 
-        for i in 2:ETL÷2
-            F, F̄, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            dc[i] = MPSV₁[1] = muladd(-c, Z, C′ - S′)
-            MPSV₁[2] = muladd(c, Z, C′ + S′)
-            MPSV₁[1+Δz] = muladd(c′, S, d * Z)
+        for n in 2:ETL÷2
+            F⁺, F⁻, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            dc[n] = MPSV₁[1] = muladd(-c, Z, x′ - y′)
+            MPSV₁[2] = muladd(c, Z, x′ + y′)
+            MPSV₁[1+Δz] = muladd(c′, y, d * Z)
 
-            @simd ivdep for k in 2:i-1
-                F, F̄, Z = MPSV₂[k], MPSV₂[k+Δy], MPSV₂[k+Δz]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a * C, b * S
-                MPSV₁[k+1] = muladd(c, Z, C′ + S′)
-                MPSV₁[k-1+Δy] = muladd(-c, Z, C′ - S′)
-                MPSV₁[k+Δz] = muladd(c′, S, d * Z)
+            @simd ivdep for j in 2:n-1
+                F⁺, F⁻, Z = MPSV₂[j], MPSV₂[j+Δy], MPSV₂[j+Δz]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a * x, b * y
+                MPSV₁[j+1] = muladd(c, Z, x′ + y′)
+                MPSV₁[j-1+Δy] = muladd(-c, Z, x′ - y′)
+                MPSV₁[j+Δz] = muladd(c′, y, d * Z)
             end
 
-            F, F̄, Z = MPSV₂[i], MPSV₂[i+Δy], MPSV₂[i+Δz]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            MPSV₁[i+1] = muladd(c, Z, C′ + S′)
-            MPSV₁[i-1+Δy] = muladd(-c, Z, C′ - S′)
-            MPSV₁[i+Δz] = muladd(c′, S, d * Z)
+            F⁺, F⁻, Z = MPSV₂[n], MPSV₂[n+Δy], MPSV₂[n+Δz]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            MPSV₁[n+1] = muladd(c, Z, x′ + y′)
+            MPSV₁[n-1+Δy] = muladd(-c, Z, x′ - y′)
+            MPSV₁[n+Δz] = muladd(c′, y, d * Z)
 
-            MPSV₁[i+Δy] = zero(T)
-            MPSV₁[i+1+Δy] = zero(T)
-            MPSV₁[i+1+Δz] = zero(T)
+            MPSV₁[n+Δy] = zero(T)
+            MPSV₁[n+1+Δy] = zero(T)
+            MPSV₁[n+1+Δz] = zero(T)
 
             MPSV₁, MPSV₂ = MPSV₂, MPSV₁
         end
 
-        for i in ETL÷2+1:ETL-1
-            F, F̄, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            dc[i] = MPSV₁[1] = muladd(-c, Z, C′ - S′)
-            MPSV₁[2] = muladd(c, Z, C′ + S′)
-            MPSV₁[1+Δz] = muladd(c′, S, d * Z)
+        for n in ETL÷2+1:ETL-1
+            F⁺, F⁻, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            dc[n] = MPSV₁[1] = muladd(-c, Z, x′ - y′)
+            MPSV₁[2] = muladd(c, Z, x′ + y′)
+            MPSV₁[1+Δz] = muladd(c′, y, d * Z)
 
-            @simd ivdep for k in 2:ETL-i+1
-                F, F̄, Z = MPSV₂[k], MPSV₂[k+Δy], MPSV₂[k+Δz]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a * C, b * S
-                MPSV₁[k+1] = muladd(c, Z, C′ + S′)
-                MPSV₁[k-1+Δy] = muladd(-c, Z, C′ - S′)
-                MPSV₁[k+Δz] = muladd(c′, S, d * Z)
+            @simd ivdep for j in 2:ETL-n+1
+                F⁺, F⁻, Z = MPSV₂[j], MPSV₂[j+Δy], MPSV₂[j+Δz]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a * x, b * y
+                MPSV₁[j+1] = muladd(c, Z, x′ + y′)
+                MPSV₁[j-1+Δy] = muladd(-c, Z, x′ - y′)
+                MPSV₁[j+Δz] = muladd(c′, y, d * Z)
             end
 
             MPSV₁, MPSV₂ = MPSV₂, MPSV₁
         end
 
-        F, F̄, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
-        C, S = F + F̄, F - F̄
-        dc[ETL] = muladd(-c, Z, muladd(a, C, -b * S))
+        F⁺, F⁻, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
+        x, y = F⁺ + F⁻, F⁺ - F⁻
+        dc[ETL] = muladd(-c, Z, muladd(a, x, -b * y))
     end
 
     return dc
@@ -1069,8 +1070,8 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualTuple_Split
 
     # Scale impulse response by initial magnetization and take absolute value
     m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
-    @simd ivdep for i in eachindex(dc)
-        dc[i] = abs(m₀ * dc[i])
+    @simd ivdep for n in eachindex(dc)
+        dc[n] = abs(m₀ * dc[n])
     end
 
     return dc
@@ -1100,60 +1101,60 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTup
         MPSVx₁[2], MPSVy₁[2], MPSVz₁[2] = a + b, zero(T), zero(T)
         (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = (MPSVx₂, MPSVy₂, MPSVz₂), (MPSVx₁, MPSVy₁, MPSVz₁)
 
-        for i in 2:ETL÷2
-            F, F̄, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            dc[i] = MPSVx₁[1] = muladd(-c, Z, C′ - S′)
-            MPSVx₁[2] = muladd(c, Z, C′ + S′)
-            MPSVz₁[1] = muladd(c′, S, d * Z)
+        for n in 2:ETL÷2
+            F⁺, F⁻, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            dc[n] = MPSVx₁[1] = muladd(-c, Z, x′ - y′)
+            MPSVx₁[2] = muladd(c, Z, x′ + y′)
+            MPSVz₁[1] = muladd(c′, y, d * Z)
 
-            @simd ivdep for k in 2:i-1
-                F, F̄, Z = MPSVx₂[k], MPSVy₂[k], MPSVz₂[k]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a * C, b * S
-                MPSVx₁[k+1] = muladd(c, Z, C′ + S′)
-                MPSVy₁[k-1] = muladd(-c, Z, C′ - S′)
-                MPSVz₁[k] = muladd(c′, S, d * Z)
+            @simd ivdep for j in 2:n-1
+                F⁺, F⁻, Z = MPSVx₂[j], MPSVy₂[j], MPSVz₂[j]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a * x, b * y
+                MPSVx₁[j+1] = muladd(c, Z, x′ + y′)
+                MPSVy₁[j-1] = muladd(-c, Z, x′ - y′)
+                MPSVz₁[j] = muladd(c′, y, d * Z)
             end
 
-            F, F̄, Z = MPSVx₂[i], MPSVy₂[i], MPSVz₂[i]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            MPSVx₁[i+1] = muladd(c, Z, C′ + S′)
-            MPSVy₁[i-1] = muladd(-c, Z, C′ - S′)
-            MPSVz₁[i] = muladd(c′, S, d * Z)
+            F⁺, F⁻, Z = MPSVx₂[n], MPSVy₂[n], MPSVz₂[n]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            MPSVx₁[n+1] = muladd(c, Z, x′ + y′)
+            MPSVy₁[n-1] = muladd(-c, Z, x′ - y′)
+            MPSVz₁[n] = muladd(c′, y, d * Z)
 
-            MPSVy₁[i] = zero(T)
-            MPSVy₁[i+1] = zero(T)
-            MPSVz₁[i+1] = zero(T)
+            MPSVy₁[n] = zero(T)
+            MPSVy₁[n+1] = zero(T)
+            MPSVz₁[n+1] = zero(T)
 
             (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = (MPSVx₂, MPSVy₂, MPSVz₂), (MPSVx₁, MPSVy₁, MPSVz₁)
         end
 
-        for i in ETL÷2+1:ETL-1
-            F, F̄, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
-            C, S = F + F̄, F - F̄
-            C′, S′ = a * C, b * S
-            dc[i] = MPSVx₁[1] = muladd(-c, Z, C′ - S′)
-            MPSVx₁[2] = muladd(c, Z, C′ + S′)
-            MPSVz₁[1] = muladd(c′, S, d * Z)
+        for n in ETL÷2+1:ETL-1
+            F⁺, F⁻, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            x′, y′ = a * x, b * y
+            dc[n] = MPSVx₁[1] = muladd(-c, Z, x′ - y′)
+            MPSVx₁[2] = muladd(c, Z, x′ + y′)
+            MPSVz₁[1] = muladd(c′, y, d * Z)
 
-            @simd ivdep for k in 2:ETL-i+1
-                F, F̄, Z = MPSVx₂[k], MPSVy₂[k], MPSVz₂[k]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a * C, b * S
-                MPSVx₁[k+1] = muladd(c, Z, C′ + S′)
-                MPSVy₁[k-1] = muladd(-c, Z, C′ - S′)
-                MPSVz₁[k] = muladd(c′, S, d * Z)
+            @simd ivdep for j in 2:ETL-n+1
+                F⁺, F⁻, Z = MPSVx₂[j], MPSVy₂[j], MPSVz₂[j]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a * x, b * y
+                MPSVx₁[j+1] = muladd(c, Z, x′ + y′)
+                MPSVy₁[j-1] = muladd(-c, Z, x′ - y′)
+                MPSVz₁[j] = muladd(c′, y, d * Z)
             end
 
             (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = (MPSVx₂, MPSVy₂, MPSVz₂), (MPSVx₁, MPSVy₁, MPSVz₁)
         end
 
-        F, F̄, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
-        C, S = F + F̄, F - F̄
-        dc[ETL] = muladd(-c, Z, muladd(a, C, -b * S))
+        F⁺, F⁻, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
+        x, y = F⁺ + F⁻, F⁺ - F⁻
+        dc[ETL] = muladd(-c, Z, muladd(a, x, -b * y))
     end
 
     return dc
@@ -1233,64 +1234,64 @@ function epg_impulse_response_batched!(work::EPGWork_ReIm_Batched_Split_Dynamic{
         end
         (X₁, Y₁, Z₁), (X₂, Y₂, Z₂) = (X₂, Y₂, Z₂), (X₁, Y₁, Z₁)
 
-        for i in 2:(ETL÷2)
+        for n in 2:ETL÷2
             @simd ivdep for l in 1:W
-                F, F̄, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a[l] * C, b[l] * S
-                v = muladd(-c[l], Z, C′ - S′)
-                dcb[l, i] = v
+                F⁺, F⁻, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a[l] * x, b[l] * y
+                v = muladd(-c[l], Z, x′ - y′)
+                dcb[l, n] = v
                 X₁[l, 1] = v
-                X₁[l, 2] = muladd(c[l], Z, C′ + S′)
-                Z₁[l, 1] = muladd(c′[l], S, d[l] * Z)
+                X₁[l, 2] = muladd(c[l], Z, x′ + y′)
+                Z₁[l, 1] = muladd(c′[l], y, d[l] * Z)
             end
 
-            for k in 2:i-1
+            for j in 2:n-1
                 @simd ivdep for l in 1:W
-                    F, F̄, Z = X₂[l, k], Y₂[l, k], Z₂[l, k]
-                    C, S = F + F̄, F - F̄
-                    C′, S′ = a[l] * C, b[l] * S
-                    X₁[l, k+1] = muladd(c[l], Z, C′ + S′)
-                    Y₁[l, k-1] = muladd(-c[l], Z, C′ - S′)
-                    Z₁[l, k] = muladd(c′[l], S, d[l] * Z)
+                    F⁺, F⁻, Z = X₂[l, j], Y₂[l, j], Z₂[l, j]
+                    x, y = F⁺ + F⁻, F⁺ - F⁻
+                    x′, y′ = a[l] * x, b[l] * y
+                    X₁[l, j+1] = muladd(c[l], Z, x′ + y′)
+                    Y₁[l, j-1] = muladd(-c[l], Z, x′ - y′)
+                    Z₁[l, j] = muladd(c′[l], y, d[l] * Z)
                 end
             end
 
             @simd ivdep for l in 1:W
-                F, F̄, Z = X₂[l, i], Y₂[l, i], Z₂[l, i]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a[l] * C, b[l] * S
-                X₁[l, i+1] = muladd(c[l], Z, C′ + S′)
-                Y₁[l, i-1] = muladd(-c[l], Z, C′ - S′)
-                Z₁[l, i] = muladd(c′[l], S, d[l] * Z)
-                Y₁[l, i] = zero(T)
-                Y₁[l, i+1] = zero(T)
-                Z₁[l, i+1] = zero(T)
+                F⁺, F⁻, Z = X₂[l, n], Y₂[l, n], Z₂[l, n]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a[l] * x, b[l] * y
+                X₁[l, n+1] = muladd(c[l], Z, x′ + y′)
+                Y₁[l, n-1] = muladd(-c[l], Z, x′ - y′)
+                Z₁[l, n] = muladd(c′[l], y, d[l] * Z)
+                Y₁[l, n] = zero(T)
+                Y₁[l, n+1] = zero(T)
+                Z₁[l, n+1] = zero(T)
             end
 
             (X₁, Y₁, Z₁), (X₂, Y₂, Z₂) = (X₂, Y₂, Z₂), (X₁, Y₁, Z₁)
         end
 
-        for i in (ETL÷2+1):ETL-1
+        for n in ETL÷2+1:ETL-1
             @simd ivdep for l in 1:W
-                F, F̄, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
-                C, S = F + F̄, F - F̄
-                C′, S′ = a[l] * C, b[l] * S
-                v = muladd(-c[l], Z, C′ - S′)
-                dcb[l, i] = v
+                F⁺, F⁻, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
+                x, y = F⁺ + F⁻, F⁺ - F⁻
+                x′, y′ = a[l] * x, b[l] * y
+                v = muladd(-c[l], Z, x′ - y′)
+                dcb[l, n] = v
                 X₁[l, 1] = v
-                X₁[l, 2] = muladd(c[l], Z, C′ + S′)
-                Z₁[l, 1] = muladd(c′[l], S, d[l] * Z)
+                X₁[l, 2] = muladd(c[l], Z, x′ + y′)
+                Z₁[l, 1] = muladd(c′[l], y, d[l] * Z)
             end
 
-            for k in 2:(ETL-i+1)
+            for j in 2:ETL-n+1
                 @simd ivdep for l in 1:W
-                    F, F̄, Z = X₂[l, k], Y₂[l, k], Z₂[l, k]
-                    C, S = F + F̄, F - F̄
-                    C′, S′ = a[l] * C, b[l] * S
-                    X₁[l, k+1] = muladd(c[l], Z, C′ + S′)
-                    Y₁[l, k-1] = muladd(-c[l], Z, C′ - S′)
-                    Z₁[l, k] = muladd(c′[l], S, d[l] * Z)
+                    F⁺, F⁻, Z = X₂[l, j], Y₂[l, j], Z₂[l, j]
+                    x, y = F⁺ + F⁻, F⁺ - F⁻
+                    x′, y′ = a[l] * x, b[l] * y
+                    X₁[l, j+1] = muladd(c[l], Z, x′ + y′)
+                    Y₁[l, j-1] = muladd(-c[l], Z, x′ - y′)
+                    Z₁[l, j] = muladd(c′[l], y, d[l] * Z)
                 end
             end
 
@@ -1298,9 +1299,9 @@ function epg_impulse_response_batched!(work::EPGWork_ReIm_Batched_Split_Dynamic{
         end
 
         @simd ivdep for l in 1:W
-            F, F̄, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
-            C, S = F + F̄, F - F̄
-            dcb[l, ETL] = muladd(-c[l], Z, muladd(a[l], C, -b[l] * S))
+            F⁺, F⁻, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
+            x, y = F⁺ + F⁻, F⁺ - F⁻
+            dcb[l, ETL] = muladd(-c[l], Z, muladd(a[l], x, -b[l] * y))
         end
     end
 
@@ -1315,8 +1316,8 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_Batched_Split_D
     # Scale impulse response by initial magnetization and take absolute value
     m₀ = sin(B1correctedflipangle(θ, 0)) # B1-corrected excitation angle
     (; dcb) = work
-    @inbounds @simd ivdep for i in 1:ETL
-        dc[i] = abs(m₀ * dcb[1, i])
+    @inbounds @simd ivdep for n in 1:ETL
+        dc[n] = abs(m₀ * dcb[1, n])
     end
 
     return dc
@@ -1332,8 +1333,8 @@ function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::EPGW
         epg_setup_lanes!(decay_curve_work, θ, T2_times, j0, nT2)
         epg_impulse_response_batched!(decay_curve_work)
         for l in 1:min(W, nT2-j0+1)
-            @simd ivdep for i in 1:ETL
-                decay_basis[i, j0+l-1] = abs(m₀ * dcb[l, i])
+            @simd ivdep for n in 1:ETL
+                decay_basis[n, j0+l-1] = abs(m₀ * dcb[l, n])
             end
         end
     end
@@ -1362,7 +1363,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -1373,50 +1374,50 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
     sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ = sincos(αᵢ)
-    cos²½αᵢ = (1 + cosαᵢ) / 2
-    sin²½αᵢ = 1 - cos²½αᵢ
+    sinα, cosα = sincos(α)
+    cos²½α = (1 + cosα) / 2
+    sin²½α = 1 - cos²½α
     a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z = V[aᵢ, bᵢ, cᵢ], V[bᵢ, aᵢ, -cᵢ], V[-cᵢ/2, cᵢ/2, dᵢ]
+    a, b, c, d = E₂^2 * cos²½α, E₂^2 * sin²½α, E₁ * E₂ * sinα, E₁^2 * cosα
+    F⁺, F⁻, Z = V[a, b, c], V[b, a, -c], V[-c/2, c/2, d]
 
-    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    # Initialize magnetization phase state vector (MPSV), pulling n=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2]
-        dc[1] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
+        Ω₁′ = V[b₁*m₀, 0, -c₁*m₀/2]
+        dc[1] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
         MPSV₁[2] = V[a₁*m₀, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in 2:ETL÷2
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        @simd for j in 2:i-1
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+    @inbounds for n in 2:ETL÷2
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
+        dc[n] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
+        @simd for j in 2:n-1
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
-        MPSV₁[i] = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁]
-        MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0]
+        MPSV₁[n] = V[F⁺⋅Ωⱼ, 0, Z⋅Ωⱼ₊₁]
+        MPSV₁[n+1] = V[F⁺⋅Ωⱼ₊₁, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in ETL÷2+1:ETL-1
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
-        dc[i] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        @simd for j in 2:ETL-i
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ]
+    @inbounds for n in ETL÷2+1:ETL-1
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
+        dc[n] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
+        @simd for j in 2:ETL-n
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds dc[ETL] = abs(F̄ ⋅ MPSV₂[1])
+    @inbounds dc[ETL] = abs(F⁻ ⋅ MPSV₂[1])
 
     return dc
 end
@@ -1444,7 +1445,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMV
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -1455,50 +1456,50 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedMV
     sin½α₁, cos½α₁   = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁            = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ     = sincos(αᵢ)
-    cos²½αᵢ          = (1 + cosαᵢ) / 2
-    sin²½αᵢ          = 1 - cos²½αᵢ
+    sinα, cosα     = sincos(α)
+    cos²½α          = (1 + cosα) / 2
+    sin²½α          = 1 - cos²½α
     a₁, b₁, c₁       = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ   = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z         = V((aᵢ, bᵢ, cᵢ, 0)), V((bᵢ, aᵢ, -cᵢ, 0)), V((-cᵢ / 2, cᵢ / 2, dᵢ, 0))
+    a, b, c, d   = E₂^2 * cos²½α, E₂^2 * sin²½α, E₁ * E₂ * sinα, E₁^2 * cosα
+    F⁺, F⁻, Z         = V((a, b, c, 0)), V((b, a, -c, 0)), V((-c / 2, c / 2, d, 0))
 
-    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    # Initialize magnetization phase state vector (MPSV), pulling n=1 iteration out of loop
     @inbounds begin
         m₀           = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺          = V((b₁ * m₀, 0, -c₁ * m₀ / 2, 0))
-        dc[1]        = abs(Mᵢ⁺[1])
-        MPSV₁[1]     = Mᵢ⁺
+        Ω₁′          = V((b₁ * m₀, 0, -c₁ * m₀ / 2, 0))
+        dc[1]        = abs(Ω₁′[1])
+        MPSV₁[1]     = Ω₁′
         MPSV₁[2]     = V((a₁ * m₀, 0, 0, 0))
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in 2:ETL÷2
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V((sum(F̄ * Mᵢ), sum(F̄ * Mᵢ₊₁), sum(Z * Mᵢ), 0))
-        dc[i]    = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        @simd for j in 2:i-1
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V((sum(F * Mᵢ₋₁), sum(F̄ * Mᵢ₊₁), sum(Z * Mᵢ), 0))
+    @inbounds for n in 2:ETL÷2
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Ω₁′      = V((sum(F⁻ * Ωⱼ), sum(F⁻ * Ωⱼ₊₁), sum(Z * Ωⱼ), 0))
+        dc[n]    = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
+        @simd for j in 2:n-1
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j]       = V((sum(F⁺ * Ωⱼ₋₁), sum(F⁻ * Ωⱼ₊₁), sum(Z * Ωⱼ), 0))
         end
-        MPSV₁[i]     = V((sum(F * Mᵢ), 0, sum(Z * Mᵢ₊₁), 0))
-        MPSV₁[i+1]   = V((sum(F * Mᵢ₊₁), 0, 0, 0))
+        MPSV₁[n]     = V((sum(F⁺ * Ωⱼ), 0, sum(Z * Ωⱼ₊₁), 0))
+        MPSV₁[n+1]   = V((sum(F⁺ * Ωⱼ₊₁), 0, 0, 0))
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in ETL÷2+1:ETL-1
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺      = V((sum(F̄ * Mᵢ), sum(F̄ * Mᵢ₊₁), sum(Z * Mᵢ), 0))
-        dc[i]    = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        @simd for j in 2:ETL-i
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j]       = V((sum(F * Mᵢ₋₁), sum(F̄ * Mᵢ₊₁), sum(Z * Mᵢ), 0))
+    @inbounds for n in ETL÷2+1:ETL-1
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Ω₁′      = V((sum(F⁻ * Ωⱼ), sum(F⁻ * Ωⱼ₊₁), sum(Z * Ωⱼ), 0))
+        dc[n]    = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
+        @simd for j in 2:ETL-n
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j]       = V((sum(F⁺ * Ωⱼ₋₁), sum(F⁻ * Ωⱼ₊₁), sum(Z * Ωⱼ), 0))
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds dc[ETL] = abs(sum(F̄ * MPSV₂[1]))
+    @inbounds dc[ETL] = abs(sum(F⁻ * MPSV₂[1]))
 
     return dc
 end
@@ -1527,7 +1528,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVe
     # Unpack workspace
     (; MPSV₁, MPSV₂) = work
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -1538,50 +1539,50 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVe
     sin½α₁, cos½α₁ = sincos(α₁ / 2)
     sin²½α₁, cos²½α₁ = sin½α₁^2, cos½α₁^2
     sinα₁ = 2 * sin½α₁ * cos½α₁
-    sinαᵢ, cosαᵢ = sincos(αᵢ)
-    cos²½αᵢ = (1 + cosαᵢ) / 2
-    sin²½αᵢ = 1 - cos²½αᵢ
+    sinα, cosα = sincos(α)
+    cos²½α = (1 + cosα) / 2
+    sin²½α = 1 - cos²½α
     a₁, b₁, c₁ = E₂^2 * cos²½α₁, E₂^2 * sin²½α₁, E₁ * E₂ * sinα₁
-    aᵢ, bᵢ, cᵢ, dᵢ = E₂^2 * cos²½αᵢ, E₂^2 * sin²½αᵢ, E₁ * E₂ * sinαᵢ, E₁^2 * cosαᵢ
-    F, F̄, Z = V[aᵢ, bᵢ, cᵢ, 0], V[bᵢ, aᵢ, -cᵢ, 0], V[-cᵢ/2, cᵢ/2, dᵢ, 0]
+    a, b, c, d = E₂^2 * cos²½α, E₂^2 * sin²½α, E₁ * E₂ * sinα, E₁^2 * cosα
+    F⁺, F⁻, Z = V[a, b, c, 0], V[b, a, -c, 0], V[-c/2, c/2, d, 0]
 
-    # Initialize magnetization phase state vector (MPSV), pulling i=1 iteration out of loop
+    # Initialize magnetization phase state vector (MPSV), pulling n=1 iteration out of loop
     @inbounds begin
         m₀ = sin½α₁ # since αₑₓ = ½α₁
-        Mᵢ⁺ = V[b₁*m₀, 0, -c₁*m₀/2, 0]
-        dc[1] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
+        Ω₁′ = V[b₁*m₀, 0, -c₁*m₀/2, 0]
+        dc[1] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
         MPSV₁[2] = V[a₁*m₀, 0, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in 2:ETL÷2
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
-        dc[i] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        @simd for j in 2:i-1
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+    @inbounds for n in 2:ETL÷2
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ, 0]
+        dc[n] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
+        @simd for j in 2:n-1
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ, 0]
         end
-        MPSV₁[i] = V[F⋅Mᵢ, 0, Z⋅Mᵢ₊₁, 0]
-        MPSV₁[i+1] = V[F⋅Mᵢ₊₁, 0, 0, 0]
+        MPSV₁[n] = V[F⁺⋅Ωⱼ, 0, Z⋅Ωⱼ₊₁, 0]
+        MPSV₁[n+1] = V[F⁺⋅Ωⱼ₊₁, 0, 0, 0]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for i in ETL÷2+1:ETL-1
-        Mᵢ, Mᵢ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
-        Mᵢ⁺ = V[F̄⋅Mᵢ, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
-        dc[i] = abs(Mᵢ⁺[1])
-        MPSV₁[1] = Mᵢ⁺
-        @simd for j in 2:ETL-i
-            Mᵢ₋₁, Mᵢ, Mᵢ₊₁ = Mᵢ, Mᵢ₊₁, MPSV₂[j+1]
-            MPSV₁[j] = V[F⋅Mᵢ₋₁, F̄⋅Mᵢ₊₁, Z⋅Mᵢ, 0]
+    @inbounds for n in ETL÷2+1:ETL-1
+        Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
+        Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ, 0]
+        dc[n] = abs(Ω₁′[1])
+        MPSV₁[1] = Ω₁′
+        @simd for j in 2:ETL-n
+            Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
+            MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ, 0]
         end
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds dc[ETL] = abs(F̄ ⋅ MPSV₂[1])
+    @inbounds dc[ETL] = abs(F⁻ ⋅ MPSV₂[1])
 
     return dc
 end
@@ -1613,7 +1614,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T}, θ::EPGOp
     # Setup
     (; MPSV) = work
     α₁ = B1correctedflipangle(θ, 1)
-    αᵢ = B1correctedflipangle(θ, 2)
+    α = B1correctedflipangle(θ, 2)
     TE = echotime(θ)
     T2 = T2time(θ)
     T1 = T1time(θ)
@@ -1635,28 +1636,28 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Vec{T}, θ::EPGOp
         MPSV[4] = Vec((E2 * M1x, zero(T)))
 
         # Extract matrix elements + initialize temporaries
-        a1, a2, a3, a4, a5 = sin(αᵢ), cos(αᵢ), sin(αᵢ / 2)^2, cos(αᵢ / 2)^2, sin(αᵢ) / 2 # independent elements of T2mat
+        a1, a2, a3, a4, a5 = sin(α), cos(α), sin(α / 2)^2, cos(α / 2)^2, sin(α) / 2 # independent elements of T2mat
         b1, b2, b3, b4, b5 = E2 * a1, E1 * a2, E2 * a3, E2 * a4, E1 * a5
         c1, c3, c4         = E2_half * a1, E2_half * a3, E2_half * a4
         b1F, b5F, c1F      = Vec((-b1, b1)), Vec((-b5, b5)), Vec((-c1, c1))
         Mz3                = MPSV[3]
     end
 
-    @inbounds for i in 2:ETL-1
+    @inbounds for n in 2:ETL-1
         ###########################
         # Unroll first flipmat/relaxmat iteration
         Vx, Vy  = MPSV[1], MPSV[2]
         c1z     = shufflevector(c1F * Mz3, Val((1, 0)))
         Mz2     = muladd(c3, Vx, muladd(c4, Vy, -c1z)) # flipmat: 2 -> dc
         Mz4     = muladd(b4, Vx, muladd(b3, Vy, E2_half * c1z)) # relaxmat: 1 -> 4, save in buffer
-        dc[i]   = √(sum(Mz2 * Mz2)) # decay curve coefficient
+        dc[n]   = √(sum(Mz2 * Mz2)) # decay curve coefficient
         MPSV[1] = E2_half * Mz2 # relaxmat: 2 -> 1
         b5xy    = shufflevector(b5F * (Vx - Vy), Val((1, 0)))
         Mz3     = muladd(b2, Mz3, b5xy) # relaxmat: 3 -> 3, save in buffer
 
         ###########################
         # flipmat + relaxmat loop
-        for j in 4:3:3*min(i - 1, ETL)
+        for j in 4:3:3*min(n - 1, ETL)
             Vx, Vy, Vz = MPSV[j], MPSV[j+1], MPSV[j+2]
             b1z        = shufflevector(b1F * Vz, Val((1, 0)))
             MPSV[j]    = Mz4 # relaxmat: assign forward, j -> j+3

@@ -11,15 +11,3 @@ Modules = [DECAES.NNLS]
 ```@autodocs
 Modules = [DECAES.NNLS]
 ```
-
-## [`NormalHermiteSplines` submodule](@id nhs-module)
-
-This submodule is derived from a [fork of the `NormalHermiteSplines.jl` package](https://github.com/jondeuce/NormalHermiteSplines.jl).
-
-```@index
-Modules = [DECAES.NormalHermiteSplines]
-```
-
-```@autodocs
-Modules = [DECAES.NormalHermiteSplines]
-```

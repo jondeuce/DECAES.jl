@@ -1,18 +1,14 @@
-using Pkg
-Pkg.activate(@__DIR__)
-
-using DECAES
+include(joinpath(@__DIR__, "setup.jl"))
+Base.include(DECAES, joinpath(pkgdir(DECAES), "src", "NormalHermiteSplines.jl"))
+Base.include(DECAES, joinpath(@__DIR__, "nhs.jl"))
 using DECAES.NormalHermiteSplines
 const nhs = DECAES.NormalHermiteSplines
 
-# Packages from this local env
 using Random
 using LinearAlgebra
 using StaticArrays
 using BenchmarkTools
-using LaTeXStrings
-using CairoMakie
-set_theme!(theme_ggplot2(); resolution = (500, 400), font = "CMU Serif")
+set_theme!(theme_ggplot2(); size = (500, 400), font = "CMU Serif")
 
 function plot_neighbours(::Val{D} = Val(2)) where {D}
     grid  = DECAES.meshgrid(SVector{D, Float64}, [range(0, 1; length = 25) for _ in 1:D]...)
@@ -69,21 +65,15 @@ function plot_bisection_search(
     # solve discrete search problem
     state = DECAES.DiscreteSurrogateSearcher(surr; mineval, maxeval)
     minx, miny = DECAES.bisection_search(surr, state; maxeval = min(D == 1 ? 5 : 12, maxeval))
-    # x₀ = (minx + DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))) / 2
-    # x₀ = DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))
-    # x₀ = DECAES.is_inside(state, minx) ? minx : DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
-    x₀ = DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
-    minx, miny = DECAES.local_search(surr, x₀, state; maxeval)
-    # xmid = DECAES.centre(state, DECAES.minimal_bounding_box(state, minx))
-    # xopt = DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
-    # minx₂, miny₂ = DECAES.local_search(surr, xopt, state; maxeval)
-    # minx₁, miny₁ = DECAES.local_search(surr, xmid, state; maxeval)
-    # minx = ifelse(miny₁ < miny₂, minx₁, minx₂)
+    if surrtype === :hermite
+        x₀ = DECAES.nearest_interior_gridpoint(surr.grid, minx)[2]
+        minx, miny = DECAES.local_search(surr, x₀, state; maxeval)
+    end
 
     # reconstruct surrogate from evaluated points and plot
     if surrtype === :cubic
-        nodes = () -> surr.p
-        values = () -> surr.u
+        nodes = () -> @views surr.grid[surr.idx[1:surr.npts[]]]
+        values = () -> @views surr.u[surr.idx[1:surr.npts[]]]
         spl = DECAES.make_spline(first.(nodes()), values())
     else
         nodes = () -> map(x -> nhs._unnormalize(surr.spl, x), nhs._get_nodes(surr.spl))

@@ -22,9 +22,6 @@ See also:
 * [`T2mapSEcorr`](@ref)
 """
 @with_kw_noshow struct T2mapOptions{T <: Real}
-    "Perform T2-mapping using legacy algorithms."
-    legacy::Bool = false
-
     "Perform T2-mapping using multiple threads."
     Threaded::Bool = Threads.nthreads() > 1
 
@@ -61,11 +58,11 @@ See also:
     @assert 0.0 <= MinRefAngle <= 180.0 "Minimum refocusing angle must be in the range [0, 180], but MinRefAngle = $MinRefAngle."
 
     "During flip angle optimization, goodness of fit is checked for up to `nRefAngles` angles in the range `[MinRefAngle, 180]`. The optimal angle is then determined through interpolation from these samples."
-    nRefAngles::Int = !legacy ? 64 : 8
+    nRefAngles::Int = 64
     @assert nRefAngles >= 2 "Maximum number of angles to check during flip angle optimization must be at least 2, but nRefAngles = $nRefAngles."
 
     "Initial number of angles to check during flip angle optimization before refinement near likely optima. Setting `nRefAnglesMin` equal to `nRefAngles` forces all angles to be checked."
-    nRefAnglesMin::Int = !legacy ? min(9, nRefAngles) : nRefAngles
+    nRefAnglesMin::Int = min(9, nRefAngles)
     @assert 2 <= nRefAnglesMin <= nRefAngles "Minimum number of angles to check during flip angle optimization must be in the range [2, nRefAngles], but nRefAngles = $nRefAngles and nRefAnglesMin = $nRefAnglesMin."
 
     "Regularization routine to use. One of \"gcv\", \"lcurve\", \"reginska\", \"chi2\", \"mdp\", or \"none\", representing the Generalized Cross-Validation method, the L-Curve method, Regińska's minimum-product criterion, `Chi2Factor`-based regularization, the Morozov discrepancy principle, or no regularization, respectively."
@@ -149,9 +146,6 @@ See also:
 * [`T2partSEcorr`](@ref)
 """
 @with_kw_noshow struct T2partOptions{T <: Real}
-    "Calculate T2-parts using legacy algorithms."
-    legacy::Bool = false
-
     "Perform T2-parts using multiple threads."
     Threaded::Bool = Threads.nthreads() > 1
 
@@ -191,7 +185,6 @@ Base.Dict{T, Any}(o::T2partOptions) where {T} = convert(Dict{T, Any}, o)
 
 function T2partOptions(o::T2mapOptions{T}; kwargs...) where {T}
     return T2partOptions{T}(;
-        legacy = o.legacy,
         Threaded = o.Threaded,
         MatrixSize = o.MatrixSize,
         nT2 = o.nT2,

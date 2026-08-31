@@ -74,6 +74,7 @@ function main()
     outpath(xs...) = joinpath(outfolder, xs...)
 
     # Benchmarking command
+    show_output = args["show-output"] ? `--show-output` : Cmd(String[])
     cmd = `
     hyperfine
         "JULIA_NUM_THREADS={threads} {julia} --project=$(joinpath(@__DIR__, ".bench.tmp"))/{julia}/{version} --startup-file=no --quiet --optimize={optimize} -e 'using DECAES; main()' -- @{input} --quiet"
@@ -87,8 +88,8 @@ function main()
         --parameter-list input $(join(args["input"], ","))
         --export-markdown $(outpath("results.md"))
         --export-json $(outpath("results.json"))
+        $show_output
     `
-    # --show-output
 
     # Save benchmarking settings/files for future reference
     open(outpath("settings.txt"); write = true) do io
@@ -98,11 +99,13 @@ function main()
             println(io, arg)
         end
     end
+
     open(outpath("run_benchmarks.jl"); write = true) do io
         println(io, "mkpath(\"$(outpath())\")")
         println(io, "run($cmd)")
         return nothing
     end
+
     for jl in filter(endswith(".jl"), readdir(@__DIR__; join = true))
         cp(jl, outpath(basename(jl)); force = true)
     end

@@ -55,13 +55,6 @@ add_arg_table!(CLI_SETTINGS,
         :action => :store_true,
         :help => "execute dry run of processing without saving any results",
     ),
-    "--legacy",
-    Dict(
-        :action => :store_const, # deprecated flags use :store_const with default value nothing (instead of :store_true with default value false)
-        :constant => true,
-        :default => nothing,
-        :help => "use legacy settings and algorithms from the original MATLAB pipeline. Note: this flag is now deprecated and will be removed in future releases",
-    ),
 )
 
 add_arg_group!(CLI_SETTINGS,
@@ -167,14 +160,6 @@ add_arg_table!(CLI_SETTINGS,
         :help => "first echo intensity cutoff for empty voxels. Processing is skipped for voxels with intensity <= --Threshold. (default: 0.0) (units: signal magnitude)",
         :group => :t2_map_part_optional,
     ),
-    # "--Progress",
-    # Dict(
-    #     :action => :store_const, # deprecated flags use :store_const with default value nothing (instead of :store_true with default value false)
-    #     :constant => true,
-    #     :default => nothing,
-    #     :help => "Print progress updates during T2 distribution computation. Note: this flag is now deprecated; progress updates are always printed unless the --quiet flag is passed",
-    #     :group => :t2_map_part_optional,
-    # ),
 )
 
 add_arg_group!(CLI_SETTINGS,
@@ -440,14 +425,6 @@ function parse_cli(args)
 end
 
 function handle_cli_deprecations!(opts)
-    # if get(opts, :Progress, nothing) !== nothing
-    #     warn_deprecated_future_removed(:Progress)
-    # end
-
-    if get(opts, :legacy, nothing) !== nothing
-        warn_deprecated_future_removed(:legacy)
-    end
-
     if get(opts, :Chi2Factor, nothing) !== nothing
         if get(opts, :RegParams, Float64[]) != Float64[]
             error_conflicted_flags(:Chi2Factor, :RegParams)

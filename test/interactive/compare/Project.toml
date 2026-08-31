@@ -1,4 +1,12 @@
 [deps]
 MAT = "23992714-dd62-5051-b70f-ba57cb901cac"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
+
+[compat]
+MAT = "0.10"
+Pkg = "1"
+Statistics = "1"
+UnicodePlots = "3"
+julia = "1.9"

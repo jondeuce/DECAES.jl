@@ -204,50 +204,6 @@ function test_cubic_hermite_spline_surrogate()
     @test u ≈ utrue
 end
 
-function test_normal_hermite_spline_surrogate()
-    npts = 10
-    x = range(-0.5, 2.0; length = npts)
-
-    coeffs = (-2, -1, -5, 3) # 3x^3 - 5x^2 - x - 2
-    ∇coeffs = (-1, -10, 9) # 9x^2 - 10x - 1
-    fg = i -> (evalpoly(x[i], coeffs), SVector(evalpoly(x[i], ∇coeffs)))
-    surr = DECAES.NormalHermiteSplineSurrogate(fg, SVector.(x))
-
-    @test all(==(false), surr.seen)
-    @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == 0
-
-    DECAES.update!(surr, CartesianIndex(3))
-    @test surr.seen[3] == true
-    @test all(==(false), surr.seen[[1:2; 4:end]])
-    @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == 1
-
-    DECAES.update!(surr, CartesianIndex(3))
-    @test surr.seen[3] == true
-    @test all(==(false), surr.seen[[1:2; 4:end]])
-    @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == 1
-
-    for i in 1:npts
-        i == 3 && continue
-        @test surr.seen[i] == false
-        DECAES.update!(surr, CartesianIndex(i))
-        @test surr.seen[i] == true
-        @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == i + (i < 3)
-    end
-
-    @test all(==(true), surr.seen)
-    @test surr.spl._num_nodes[] == surr.spl._num_d_nodes[] == npts
-
-    second(x) = x[2]
-    @test surr.ugrid == first.(fg.(1:npts))
-    @test surr.∇ugrid == second.(fg.(1:npts))
-
-    # Ten points should be sufficient to make a Normal Hermite spline a near-exact surrogate of a cubic function
-    p, u = DECAES.suggest_point(surr)
-    xtrue, utrue = DECAES.minimize_cubic(float.(coeffs), x[1], x[end])
-    @test p[1] ≈ xtrue atol = 1e-4
-    @test u ≈ utrue atol = 1e-4
-end
-
 function hermite_boundary_conditions_iter()
     # Pairs of endpoint slopes
     ms = Iterators.flatten((
@@ -283,63 +239,6 @@ function test_minimize_cubic_hermite_interpolator()
         xmin, umin = DECAES.minimize(spl)
         @test umin ≈ spl(xmin) rtol = 1e-12 atol = 1e-12
         @test all(spl(x) >= umin - 1e-12 for x in range(a, b; length = 1024 + 1))
-    end
-end
-
-function test_minimize_normal_hermite_interpolator()
-    @testset "$(nameof(typeof(kernel)))" for kernel in (DECAES.RK_H1(1.0), DECAES.RK_H2(1.0))
-        for (u0, u1, m0, m1) in hermite_boundary_conditions_iter()
-            dom = randn() .+ (1 + rand()) .* (-0.5, 0.5)
-            spl = NormalHermiteSplines.interpolate([dom...], [u0, u1], [dom...], [m0, m1], kernel)
-
-            f = Base.Fix1(NormalHermiteSplines.evaluate, spl)
-            ∂f = Base.Fix1(NormalHermiteSplines.evaluate_derivative, spl)
-            cache = ForwardDiff.DiffResults.ImmutableDiffResult(1.0, (1.0,))
-            function ∂f_and_∂²f(x)
-                res = ForwardDiff.derivative!(cache, ∂f, x)
-                return ForwardDiff.DiffResults.value(res), ForwardDiff.DiffResults.derivative(res)
-            end
-
-            xatol = xrtol = 1e-12
-            xs = range(dom...; length = 1024 + 1)
-            us = f.(xs)
-            ulo, ilo = findmin(us)
-            isbdry = ilo ∈ (1, length(xs))
-
-            # Minimize via Brent's method
-            xmin, umin = DECAES.brent_minimize(f, dom...; xatol, xrtol)
-            ∂xmin, ∂²xmin = ∂f_and_∂²f(xmin)
-            isbdry_brent = min(xmin - dom[1], dom[2] - xmin) < 1e-6
-            islocal_brent = abs(∂xmin) < 1e-3 && ∂²xmin > 0
-
-            if isbdry
-                # Brent's method should converge towards an endpoint or a local minimum
-                @test isbdry_brent || islocal_brent
-                @test ulo ≈ min(u0, u1) # min should be achieved at one of the endpoints
-                @test umin == f(xmin)
-            else
-                # Should converge to a local minimum
-                @test abs(∂xmin) < 1e-3
-                @test ∂²xmin > 0
-                @test umin == f(xmin)
-            end
-
-            # Minimize via Newton-Bisect
-            xmin, umin = DECAES.newton_bisect_minimize(f, ∂f_and_∂²f, dom...; xatol, xrtol)
-            ∂xmin, ∂²xmin = ∂f_and_∂²f(xmin)
-
-            if isnan(xmin)
-                # Newton-Bisect returns NaN if no local minimum is found, therefore global min should be at boundary
-                @test isnan(umin)
-                @test isbdry
-                @test ulo ≈ min(u0, u1) # min should be achieved at one of the endpoints
-            else
-                # Should converge to a local minimum
-                @test abs(∂xmin) < 1e-8
-                @test ∂²xmin > 0
-                @test umin == f(xmin)
-            end
-        end
     end
 end
 
@@ -413,8 +312,7 @@ end
 
 function test_discrete_searcher()
     grid = DECAES.meshgrid(SVector{2, Float64}, 1:5, 1:10)
-    surr = DECAES.NormalHermiteSplineSurrogate(I -> (1.0, zero(SVector{2, Float64})), grid)
-    state = DECAES.DiscreteSurrogateSearcher(surr; mineval = 0, maxeval = 0)
+    state = DECAES.DiscreteSurrogateSearcher(grid)
     state.seen[[1, 5], [1, 10]] .= true
 
     @test DECAES.sorted_corners(state, DECAES.BoundingBox(((2, 4), (3, 7))), SA[3.5, 6.5]) == SMatrix{2, 2}((CartesianIndex(4, 7), CartesianIndex(2, 7), CartesianIndex(4, 3), CartesianIndex(2, 3)))
@@ -510,11 +408,9 @@ end
     @testset "surrogate splines" begin
         @testset "cubic" test_cubic_spline_surrogate()
         @testset "cubic hermite" test_cubic_hermite_spline_surrogate()
-        @testset "normal hermite" test_normal_hermite_spline_surrogate()
     end
     @testset "hermite interpolators" begin
         @testset "cubic" test_minimize_cubic_hermite_interpolator()
-        @testset "normal" test_minimize_normal_hermite_interpolator()
     end
     @testset "mock surrogate search problem" begin
         test_mock_surrogate_search_problem()

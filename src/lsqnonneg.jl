@@ -666,7 +666,7 @@ function lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real,
 end
 lsqnonneg_chi2_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSChi2RegProblem(A, b, nnls_prob_seed)
 
-function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bool = false; method::Symbol = legacy ? :legacy : :brent_gram) where {T}
+function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T; method::Symbol = :brent_gram) where {T}
     # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
     x_unreg = solution(work.nnls_prob)
@@ -683,20 +683,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
     res²_target = chi2_target * res²_min
     reset_cache!(work.nnls_prob_smooth_cache)
 
-    if method === :legacy
-        # Use the legacy algorithm: double μ starting from an initial guess, then interpolate the root using a cubic spline fit
-        mu_final, res²_final = chi2_search_from_minimum(res²_min, chi2_target; legacy) do μ
-            μ == 0 && return res²_min
-            solve!(work.nnls_prob_smooth_cache, μ)
-            return resnorm_sq(work.nnls_prob_smooth_cache[])
-        end
-        if mu_final == 0
-            x_final = x_unreg
-        else
-            x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
-        end
-
-    elseif method === :bisect
+    if method === :bisect
         function f_bisect(logμ)
             solve!(work.nnls_prob_smooth_cache, exp(logμ))
             return chi2_relerr!(work.nnls_prob_smooth_cache[], res²_target, logμ)
@@ -783,49 +770,6 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T, legacy::Bo
     end
 
     return (; x = x_final, mu = mu_final, chi2 = res²_final / res²_min)
-end
-
-function chi2_search_from_minimum(f, res²min::T, χ²fact::T, μmin::T = T(1e-3), μfact = T(2.0); legacy = false) where {T}
-    # Minimize energy of spectrum; loop to find largest μ that keeps chi-squared in desired range
-    μ_cache = T[zero(T)]
-    res²_cache = T[res²min]
-    μnew = μmin
-    while true
-        # Cache function value at μ = μnew
-        res²new = f(μnew)
-        push!(μ_cache, μnew)
-        push!(res²_cache, res²new)
-
-        # Break when χ²fact reached, else increase regularization
-        (res²new >= χ²fact * res²min) && break
-        μnew *= μfact
-    end
-
-    # Solve res²(μ) = χ²fact * res²min using a spline fitting root finding method
-    if legacy
-        # Legacy algorithm fits spline to all (μ, res²) values observed, including for μ=0.
-        # This poses several problems:
-        #   1) while unlikely, it is possible for the spline to return a negative regularization parameter
-        #   2) the μ values are exponentially spaced, leading to poorly conditioned splines
-        μ = spline_root_legacy(μ_cache, res²_cache, χ²fact * res²min)
-    else
-        if length(μ_cache) == 2
-            # Solution is contained in [0,μmin]; `spline_root` with two points performs root finding via simple linear interpolation
-            μ = spline_root(μ_cache, res²_cache, χ²fact * res²min; deg_spline = 1)
-            μ = isnan(μ) ? μmin : μ
-        else
-            # Perform spline fit on log-log scale on data with μ > 0. This solves the above problems with the legacy algorithm:
-            #   1) Root is found in terms of logμ, guaranteeing μ > 0
-            #   2) logμ is linearly spaced, leading to well-conditioned splines
-            logμ = spline_root(log.(μ_cache[2:end]), log.(res²_cache[2:end]), log(χ²fact * res²min); deg_spline = 1)
-            μ = isnan(logμ) ? μmin : exp(logμ)
-        end
-    end
-
-    # Compute the final regularized solution
-    res² = f(μ)
-
-    return μ, res²
 end
 
 ####
@@ -1392,79 +1336,6 @@ function menger(ξ, η; h = 1e-3)
         return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
     end
 end
-
-#=
-lin_interp(t, t₁, t₂, y₁, y₂) = y₁ + (y₂ - y₁) * (t - t₁) / (t₂ - t₁)
-exp_interp(t, t₁, t₂, y₁, y₂) = y₁ + log1p(expm1(y₂ - y₁) * (t - t₁) / (t₂ - t₁))
-
-function menger(ξ::Dierckx.Spline1D, η::Dierckx.Spline1D)
-    function menger_curvature_inner(t)
-        ξ′  = Dierckx.derivative(ξ, t; nu = 1)
-        ξ′′ = Dierckx.derivative(ξ, t; nu = 2)
-        η′  = Dierckx.derivative(η, t; nu = 1)
-        η′′ = Dierckx.derivative(η, t; nu = 2)
-        return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
-    end
-end
-
-function menger(y::Dierckx.Spline1D)
-    function menger_curvature_inner(t)
-        y′  = Dierckx.derivative(y, t; nu = 1)
-        y′′ = Dierckx.derivative(y, t; nu = 2)
-        return y′′ / √((1 + y′^2)^3)
-    end
-end
-
-function menger(tⱼ::T, tₖ::T, tₗ::T, Pⱼ::V, Pₖ::V, Pₗ::V; interp_uniform = true, linear_deriv = true) where {T, V <: SVector{2, T}}
-    if interp_uniform
-        φ = T(Base.MathConstants.φ)
-        h = min(abs(tₖ - tⱼ), abs(tₗ - tₖ)) / φ
-        h₋ = h₊ = h
-        t₋, t₀, t₊ = tₖ - h, tₖ, tₖ + h
-        P₀ = Pₖ
-        P₋ = exp_interp.(t₋, tⱼ, tₖ, Pⱼ, Pₖ)
-        P₊ = exp_interp.(t₊, tₖ, tₗ, Pₖ, Pₗ)
-    else
-        P₋, P₀, P₊ = Pⱼ, Pₖ, Pₗ
-        t₋, t₀, t₊ = tⱼ, tₖ, tₗ
-        h₋, h₊ = t₀ - t₋, t₊ - t₀
-    end
-    ξ₋, ξ₀, ξ₊ = P₋[1], P₀[1], P₊[1]
-    η₋, η₀, η₊ = P₋[2], P₀[2], P₊[2]
-
-    if linear_deriv
-        ξ′ = (ξ₊ - ξ₋) / (h₊ + h₋)
-        η′ = (η₊ - η₋) / (h₊ + h₋)
-    else
-        ξ′ = (h₋^2 * ξ₊ + (h₊ + h₋) * (h₊ - h₋) * ξ₀ - h₊^2 * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
-        η′ = (h₋^2 * η₊ + (h₊ + h₋) * (h₊ - h₋) * η₀ - h₊^2 * η₋) / (h₊ * h₋ * (h₊ + h₋))
-    end
-
-    ξ′′ = 2 * (h₋ * ξ₊ - (h₊ + h₋) * ξ₀ + h₊ * ξ₋) / (h₊ * h₋ * (h₊ + h₋))
-    η′′ = 2 * (h₋ * η₊ - (h₊ + h₋) * η₀ + h₊ * η₋) / (h₊ * h₋ * (h₊ + h₋))
-
-    return (ξ′ * η′′ - η′ * ξ′′) / √((ξ′^2 + η′^2)^3)
-end
-
-function directed_angle(v₁::V, v₂::V) where {T, V <: SVector{2, T}}
-    α = atan(v₁[2], v₁[1]) - atan(v₂[2], v₂[1])
-    return α < 0 ? 2 * T(π) + α : α
-end
-directed_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = directed_angle(Pⱼ - Pₖ, Pₗ - Pₖ)
-
-function kahan_angle(v₁::V, v₂::V) where {T, V <: SVector{2, T}}
-    # Kahan's method for computing the angle between v₁ and v₂.
-    #   see: https://scicomp.stackexchange.com/a/27694
-    a, b, c = norm(v₁), norm(v₂), norm(v₁ - v₂)
-    a, b = max(a, b), min(a, b)
-    μ = b ≥ c ? c - (a - b) : (b - (a - c))
-    num = ((a - b) + c) * max(μ, zero(T))
-    den = (a + (b + c)) * ((a - c) + b)
-    α = 2 * atan(√(num / den))
-    return v₁ × v₂ > 0 ? 2 * T(π) - α : α
-end
-kahan_angle(Pⱼ::V, Pₖ::V, Pₗ::V) where {V <: SVector{2}} = kahan_angle(Pⱼ - Pₖ, Pₗ - Pₖ)
-=#
 
 ####
 #### Reginska (minimum-product) method for choosing the Tikhonov regularization parameter

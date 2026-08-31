@@ -55,7 +55,7 @@ function cli_script()
 
     # Julia executable path
     exe = joinpath(Sys.BINDIR, Base.julia_exename())
-    push!(cmds, exe)
+    push!(cmds, Sys.iswindows() ? "\"%JULIA%\"" : "\"\$JULIA\"")
 
     # Julia flags. Note that --threads and --project are set via environment variables below so that users can overload them
     push!(cmds, "--startup-file=no")
@@ -73,6 +73,8 @@ function cli_script()
         """
         @echo off
         setlocal
+        if not defined JULIA set JULIA=$(exe)
+        if not exist "%JULIA%" set JULIA=julia
         if not defined JULIA_PROJECT set JULIA_PROJECT=$(DECAES_PROJECT_SCRATCH)
         if not defined JULIA_NUM_THREADS set JULIA_NUM_THREADS=auto
         $(join(cmds, " ^\n    "))
@@ -84,6 +86,8 @@ function cli_script()
         """
         #!/usr/bin/env bash
         #=
+        JULIA=\"\${JULIA:-$(exe)}\"
+        [ -x \"\$JULIA\" ] || JULIA=julia
         JULIA_PROJECT=\"\${JULIA_PROJECT:-$(DECAES_PROJECT_SCRATCH)}\" \\
         JULIA_NUM_THREADS=\"\${JULIA_NUM_THREADS:-auto}\" \\
         exec $(join(cmds, " \\\n    "))

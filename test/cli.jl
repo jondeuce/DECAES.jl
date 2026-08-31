@@ -7,19 +7,6 @@ default_paramdict = Dict{Symbol, Any}(
     :SPWin => (12e-3, 37e-3),
     :MPWin => (37e-3, 650e-3),
     :Reg => "lcurve",
-    :legacy => false,
-)
-
-# Legacy settings which previously had defaults, or whose defaults have changed (nTE and nT2 handled separately)
-legacy_default_paramdict = Dict{Symbol, Any}(
-    :TE => 10e-3,
-    :T2Range => (15e-3, 2.0),
-    :SPWin => (14e-3, 40e-3),
-    :MPWin => (40e-3, 200e-3),
-    :Reg => "chi2",
-    :RegParams => 1.02,
-    :Threshold => 200.0,
-    :legacy => true,
 )
 
 # Write 4D image to disk
@@ -31,7 +18,7 @@ function write_image(filename, image)
     end
 end
 
-# Build t2map and t2part arguments for calling `DECAES.main` via CLI, MATLAB, or Julia
+# Build t2map and t2part arguments for calling `DECAES.main` via the CLI or Julia API
 function construct_args(
     paramdict;
     argstype,
@@ -43,14 +30,6 @@ function construct_args(
 )
 
     paramdict = copy(paramdict)
-    legacy = get!(paramdict, :legacy, false)
-    if legacy
-        # Add legacy default options to paramdict
-        for (k, v) in legacy_default_paramdict
-            get!(paramdict, k, v)
-        end
-    end
-
     if argstype === :cli
         #### CLI
 
@@ -76,24 +55,6 @@ function construct_args(
         end
 
         return args
-
-    elseif argstype === :mat
-        #### MATLAB
-
-        @assert legacy
-        t2map_args  = T2map ? Dict{Symbol, Any}() : nothing
-        t2part_args = T2part ? Dict{Symbol, Any}() : nothing
-
-        # Only these params are used within MATLAB (possibly spelled differently)
-        mat_t2map_params  = [:MinRefAngle, :nRefAngles, :nT2, :RefConAngle, :Reg, :RegParams, :SaveRegParam, :SetFlipAngle, :T1, :T2Range, :TE, :Threshold, :vTEparam]
-        mat_t2part_params = [:T2Range, :SPWin, :MPWin, :Sigmoid]
-
-        for (param, paramval) in paramdict
-            T2map && (param ∈ mat_t2map_params) && jl_to_mat_param!(t2map_args, param, paramval)
-            T2part && (param ∈ mat_t2part_params) && jl_to_mat_param!(t2part_args, param, paramval)
-        end
-
-        return t2map_args, t2part_args
 
     elseif argstype === :jl
         #### Julia
@@ -185,39 +146,6 @@ function run_main(image, args; make_settings_file::Bool)
     return (; t2maps, t2dist, t2parts)
 end
 
-function jl_to_mat_param!(opts, param, paramval)
-
-    # T2mapSEcorr parameters which aren't in the MATLAB API
-    new_t2map_params = Set{Symbol}([
-        :NoiseLevel,
-        :SaveResidualNorm,
-        :SaveDecayCurve,
-        :SaveNNLSBasis,
-        :Silent,
-    ])
-
-    if param == :SaveRegParam # renamed parameter
-        opts[:Save_regparam] = ifelse(paramval, "yes", "no")
-    elseif param == :nRefAngles # renamed parameter
-        opts[:nAngles] = paramval
-    elseif param == :RefConAngle # renamed parameter
-        opts[:RefCon] = paramval
-    elseif param == :Reg # renamed value
-        paramvalmap = Dict("none" => "no", "gcv" => "lcurve", "chi2" => "chi2")
-        opts[:Reg] = paramvalmap[paramval]
-    elseif param == :RegParams # renamed parameter
-        opts[:Chi2Factor] = paramval
-    elseif param == :SPWin # renamed parameter
-        opts[:spwin] = paramval
-    elseif param == :MPWin # renamed parameter
-        opts[:mpwin] = paramval
-    elseif param ∉ new_t2map_params # skip Julia-only parameters
-        opts[param] = paramval
-    end
-
-    return opts
-end
-
 function showall(; kwargs...)
     for (k, v) in kwargs
         @info string(k) * " => " * sprint(show, MIME"text/plain"(), v)
@@ -285,12 +213,6 @@ function run_cli_tests()
         (:nRefAnglesMin .=> [4, 7],), # Include even/odd
         (:nTE .=> [4, 5, 8, 47],), # Include even/odd, and minimum number (4)
         (:nT2 .=> [2, 3, 8, 47],), # Include even/odd, and minimum number (2)
-        (
-            :legacy    .=> [true, true],
-            :Threshold .=> [1.0, 0.0],
-            :Reg       .=> ["none", "gcv", "chi2"],
-            :RegParams .=> [nothing, nothing, 1.025],
-        ),
     ]
 
     make_settings_perms = [false, true]
@@ -380,193 +302,6 @@ end
 
 @testset "Command line interface" begin
     run_cli_tests()
-end
-
-# ================================================================================
-# UBC MWI Toolbox MATLAB compatibility tests
-#   NOTE: For these tests to run, MATLAB must be installed on your default path.
-#   Additionally, the MWI NNLS toolbox (https://github.com/ubcmri/ubcmwf)
-#   folder "MWI_NNLS_toolbox_0319" (and subfolders) must be added to your
-#   default MATLAB path.
-# ================================================================================
-
-# Environment flags
-RUN_MATLAB_TESTS = !is_ci() && get(ENV, "DECAES_RUN_MATLAB_TESTS", "") != "0"
-MWI_TOOLBOX_PATH = get(ENV, "DECAES_MWI_TOOLBOX_PATH", "")
-RUN_MWI_TOOLBOX_TESTS = get(ENV, "DECAES_RUN_MWI_TOOLBOX_TESTS", "") != "0"
-
-# Try loading MATLAB.jl
-if RUN_MATLAB_TESTS
-    try
-        @eval using MATLAB
-        mxcall(:addpath, 0, joinpath(pkgdir(DECAES), "api"))
-    catch e
-        global RUN_MATLAB_TESTS = false
-        @warn "Failed to load Julia package MATLAB.jl; skipping MATLAB tests"
-        @warn sprint(showerror, e, catch_backtrace())
-    end
-end
-
-# Try finding UBC MWI toolbox
-mfile_exists(fname) = MATLAB.mxcall(:exist, 1, fname) == 2
-if RUN_MATLAB_TESTS && RUN_MWI_TOOLBOX_TESTS
-    try
-        if !isempty(MWI_TOOLBOX_PATH)
-            mxcall(:addpath, 0, MWI_TOOLBOX_PATH)
-        end
-        if !mfile_exists("T2map_SEcorr_nechoes_2019") || !mfile_exists("T2part_SEcorr_2019")
-            global RUN_MWI_TOOLBOX_TESTS = false
-            @warn "Files T2map_SEcorr_nechoes_2019.m and T2part_SEcorr_2019.m were not found on the default MATLAB path. " *
-                  "Modify your default MATLAB path to include these files, or set the DECAES_MWI_TOOLBOX_PATH environment variable.\n\n" *
-                  "For example, on unix-like systems run" *
-                  "\n\n    export DECAES_MWI_TOOLBOX_PATH=/path/to/MWI_NNLS_toolbox_0319\n\n" *
-                  "before testing DECAES, or add a command such as" *
-                  "\n\n    addpath /path/to/MWI_NNLS_toolbox_0319\n\n" *
-                  "to your startup.m file in MATLAB."
-        end
-    catch e
-        global RUN_MWI_TOOLBOX_TESTS = false
-        @warn "Failed to find the UBC MWI toolbox; skipping tests"
-        @warn sprint(showerror, e, catch_backtrace())
-    end
-end
-
-# Helper functions
-matlabify(x::AbstractString) = String(x)
-matlabify(x::AbstractArray) = Float64.(x)
-matlabify(x::Tuple) = [Float64.(x)...]
-matlabify(x::Bool) = x
-matlabify(x) = map(Float64, x)
-matlabify(kwargs::Base.Iterators.Pairs) = Iterators.flatten([(string(k), matlabify(v)) for (k, v) in kwargs if v !== nothing])
-
-mxT2mapSEcorr(image, maxCores = 1; kwargs...) = MATLAB.mxcall(:T2map_SEcorr_nechoes_2019, 2, image, maxCores, matlabify(kwargs)...)
-mxT2partSEcorr(image; kwargs...) = MATLAB.mxcall(:T2part_SEcorr_2019, 1, image, matlabify(kwargs)...)
-
-function matlab_tests()
-    # Arbitrary non-default T2mapSEcorr options for testing
-    mat_t2map_params_perms = Any[
-        (:TE .=> [9e-3],),
-        (:T1 .=> [1.1],),
-        (:Threshold .=> [0.0, 1.0],),
-        (:nT2 .=> [10, 59],), # Include even/odd
-        (:T2Range .=> [(9e-3, 1.0)],),
-        (:RefConAngle .=> [175.0],),
-        (:MinRefAngle .=> [60.0],),
-        (:nRefAngles .=> [7, 12],),
-        (
-            :Reg       .=> ["none", "gcv", "chi2"],
-            :RegParams .=> [nothing, nothing, 1.03],
-        ),
-        (:SetFlipAngle .=> [178.0],),
-        (:SaveRegParam .=> [true],),
-    ]
-
-    # Arbitrary non-default T2partSEcorr options for testing
-    mat_t2part_params_perms = Any[
-        (:T2Range .=> [(11e-3, 1.5)],),
-        (:SPWin .=> [(12e-3, 28e-3)],),
-        (:MPWin .=> [(35e-3, 150e-3)],),
-        (:Sigmoid .=> [1.5],),
-    ]
-
-    # Relative tolerance threshold for legacy algorithms to match MATLAB version
-    default_rtol = 1e-10
-
-    @testset "T2mapSEcorr" begin
-        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true, false]), :T2map => true, :T2part => true)
-        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true, false]), :T2map => true, :T2part => true)
-
-        for param_val_lists in mat_t2map_params_perms, param_val_pairs in zip(param_val_lists...)
-            rtol = default_rtol
-            paramdict = deepcopy(legacy_default_paramdict)
-            for (param, paramval) in param_val_pairs
-                paramdict[param] = paramval
-            end
-
-            image_params!(paramdict)
-            image = construct_test_image(paramdict)
-
-            # The MATLAB flag "lcurve" for choosing the regularization parameter uses the Generalized Cross-Validation (GCV) method.
-            # There are several issues with comparing the DECAES implementation with MATLAB:
-            #   1.  GCV involves minimizing a functional GCV(mu), which is implemented using an internal call to `fminbnd` with a tolerance of 1e-3,
-            #       and therefore the Julia outputs would only match to at best a tolerance of 1e-3
-            #   2.  There is an error in the `G(mu,C_g,d_g)` subfunction in the MATLAB MWI Toolbox:
-            #       -   Numerator should be ||A*x_mu - b||^2, not ||A*x_mu - b||
-            #       -   See e.g. equation (1.4) in Fenu, C. et al., 2017, GCV for Tikhonov regularization by partial SVD (https://doi.org/10.1007/s10543-017-0662-0)
-            #   3.  There is an error in methodology:
-            #       -   Solving regularized ||Ax-b||^2 via [A; mu*I] \ [b; 0] is equivalent to minimizing
-            #               ||Ax-b||^2 + mu^2 * ||x||^2
-            #           as opposed to
-            #               ||Ax-b||^2 + mu * ||x||^2
-            #           as is used in the MWI toolbox
-            #   4.  The MATLAB equivalent to --Reg="lcurve" has been replaced with the more accurate --Reg="gcv".
-            #       In DECAES, --Reg="lcurve" implements a different method which utilizes the L-curve method; see:
-            #           A. Cultrera and L. Callegaro, “A simple algorithm to find the L-curve corner in the regularization of ill-posed inverse problems”
-            #           IOPSciNotes, vol. 1, no. 2, p. 025004, Aug. 2020, doi: 10.1088/2633-1357/abad0d
-            # This comparison is therefore skipped by default. If you have a version in which these errors are fixed,
-            # the below line can be modified (with rtol set appropriately in accordance with your solver tolerance)
-            if any(param === :Reg && paramval ∈ ("gcv", "lcurve") for (param, paramval) in param_val_pairs)
-                continue
-                # rtol = 1e-3
-            end
-
-            jl_t2map_kwargs, _  = construct_args(paramdict; settings_kwargs_jl...)
-            mat_t2map_kwargs, _ = construct_args(paramdict; settings_kwargs_mat...)
-
-            # Run T2mapSEcorr
-            t2maps_jl, t2dist_jl = DECAES.redirect_to_devnull() do
-                return T2mapSEcorr(image; jl_t2map_kwargs...)
-            end
-            t2maps_mat, t2dist_mat = DECAES.redirect_to_devnull() do
-                return mxT2mapSEcorr(image; mat_t2map_kwargs...)
-            end
-            allpassed = test_compare_t2map(t2maps_jl, t2dist_jl, t2maps_mat, t2dist_mat; rtol)
-            if !allpassed
-                println("\n ------------------------------- \n")
-                @error "MATLAB T2mapSEcorr comparison failed"
-                showall(; paramdict, param_val_pairs, jl_t2map_kwargs, mat_t2map_kwargs)
-                println("\n ------------------------------- \n")
-            end
-        end
-    end
-
-    @testset "T2partSEcorr" begin
-        settings_kwargs_jl = Dict{Symbol, Any}(:argstype => :jl, :quiet => rand([true, false]), :T2map => false, :T2part => true)
-        settings_kwargs_mat = Dict{Symbol, Any}(:argstype => :mat, :quiet => rand([true, false]), :T2map => false, :T2part => true)
-
-        for param_val_lists in mat_t2part_params_perms, param_val_pairs in zip(param_val_lists...)
-            paramdict = deepcopy(legacy_default_paramdict)
-            delete!(paramdict, :nT2) # inferred
-            for (param, paramval) in param_val_pairs
-                paramdict[param] = paramval
-            end
-
-            _, jl_t2part_kwargs  = construct_args(paramdict; settings_kwargs_jl...)
-            _, mat_t2part_kwargs = construct_args(paramdict; settings_kwargs_mat...)
-
-            # Run T2partSEcorr
-            T2dist = DECAES.mock_t2dist(; nT2 = rand(4:64))
-            t2part_jl = DECAES.redirect_to_devnull() do
-                return T2partSEcorr(T2dist; jl_t2part_kwargs...)
-            end
-            t2part_mat = DECAES.redirect_to_devnull() do
-                return mxT2partSEcorr(T2dist; mat_t2part_kwargs...)
-            end
-            allpassed = test_compare_t2part(t2part_jl, t2part_mat; rtol = default_rtol)
-            if !allpassed
-                println("\n ------------------------------- \n")
-                @error "MATLAB T2partSEcorr comparison failed"
-                showall(; paramdict, param_val_pairs, jl_t2part_kwargs, mat_t2part_kwargs)
-                println("\n ------------------------------- \n")
-            end
-        end
-    end
-end
-
-if RUN_MATLAB_TESTS
-    @testset "UBC MWI toolbox" begin
-        matlab_tests()
-    end
 end
 
 nothing

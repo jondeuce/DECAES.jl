@@ -120,9 +120,9 @@ for (gesdd, elty) in ((:dgesdd_, :Float64), (:sgesdd_, :Float32))
         (; job, m, n, A, S, U, VT, work, lwork, iwork, info) = work
         Base.require_one_based_indexing(A)
         @assert 1 <= ncols <= n
-        # lwork[] = BlasInt(-1) # uncomment this line to query lwork every call
+        # The first pass is the LAPACK workspace query, and is skipped once a size has been cached.
         for i in 1:2
-            i == 1 && lwork[] != BlasInt(-1) && continue # uncomment this line to skip lwork query after first call
+            i == 1 && lwork[] != BlasInt(-1) && continue
             ccall((@blasfunc($gesdd), libblastrampoline), Cvoid,
                 (Ref{UInt8}, Ref{BlasInt}, Ref{BlasInt}, Ptr{$elty},
                     Ref{BlasInt}, Ptr{$elty}, Ptr{$elty}, Ref{BlasInt},
@@ -435,42 +435,45 @@ function pretty_time(t)
     end
 end
 
-@with_kw struct DECAESProgress
+struct DECAESProgress
     progress_meter::Progress
     io_buffer::IOBuffer
-    io_lock::ReentrantLock = Threads.ReentrantLock()
-    last_msg::Base.RefValue{String} = Ref("")
 end
 
 function DECAESProgress(n::Int, desc::AbstractString = ""; kwargs...)
     io_buffer = IOBuffer()
-    return DECAESProgress(;
-        progress_meter = Progress(n; dt = 0.0, desc = desc, color = :cyan, output = io_buffer, barglyphs = BarGlyphs("[=> ]"), kwargs...),
-        io_buffer = io_buffer,
-    )
+    progress_meter = Progress(n; dt = 0.0, desc, color = :cyan, output = io_buffer, barglyphs = BarGlyphs("[=> ]"), kwargs...)
+    return DECAESProgress(progress_meter, io_buffer)
 end
 
-ProgressMeter.next!(p::DECAESProgress) = (ProgressMeter.next!(p.progress_meter); maybe_print!(p))
 ProgressMeter.finish!(p::DECAESProgress) = (ProgressMeter.finish!(p.progress_meter); maybe_print!(p))
 ProgressMeter.update!(p::DECAESProgress, counter) = (ProgressMeter.update!(p.progress_meter, counter); maybe_print!(p))
 
 function maybe_print!(p::DECAESProgress)
-    # Internal `progress_meter` prints to the IOBuffer `p.io_buffer`; check this buffer for new messages
-    msg = String(take!(p.io_buffer)) # note: take!(::IOBuffer) is threadsafe
+    msg = String(take!(p.io_buffer))
     if !isempty(msg)
-        # Format message
         msg = replace(msg, "\r" => "", "\u1b[K" => "", "\u1b[A" => "")
-
-        # Update last message
-        last_msg = lock(p.io_lock) do
-            last_msg, p.last_msg[] = p.last_msg[], msg
-            return last_msg
-        end
-
-        # Print progress message and flush
         @info msg
-        flush(stderr)
     end
+    return nothing
+end
+
+function with_progress(f, n::Int, counter; dt::Real)
+    progress = DECAESProgress(n)
+    last_time = Ref(time())
+
+    function update_progress()
+        counter[] += 1
+        if (new_time = time()) > last_time[] + dt
+            ProgressMeter.update!(progress, counter[])
+            last_time[] = new_time
+        end
+        return nothing
+    end
+
+    f(update_progress)
+    ProgressMeter.finish!(progress)
+
     return nothing
 end
 
@@ -576,17 +579,7 @@ function workerpool(work!, allocate, inputs::Channel; ninputs::Int, ntasks::Int 
                 end
             end
 
-            dt = 5.0
-            last_time = Ref(time())
-            progmeter = DECAESProgress(ninputs)
-            consumer() do
-                counter[] += 1
-                if (new_time = time()) > last_time[] + dt
-                    ProgressMeter.update!(progmeter, counter[])
-                    last_time[] = new_time
-                end
-            end
-            ProgressMeter.finish!(progmeter)
+            with_progress(consumer, ninputs, counter; dt = 5.0)
         end
     end
 
@@ -670,64 +663,6 @@ function redirect_to_devnull(f)
         end
     end
 end
-
-####
-#### Optimizers
-####
-
-#=
-struct ADAM{N, T}
-    η::T
-    β::SVector{2, T}
-    mt::SVector{N, T}
-    vt::SVector{N, T}
-    βp::SVector{2, T}
-end
-function ADAM{N, T}(η = 0.001, β = (0.9, 0.999)) where {N, T}
-    @assert N >= 1
-    S2 = SVector{2, T}
-    SN = SVector{N, T}
-    return ADAM{N, T}(T(η), S2(β), zero(SN), zero(SN), ones(S2))
-end
-
-function update(∇::SVector{N, T}, o::ADAM{N, T}) where {N, T}
-    (; η, β, mt, vt, βp) = o
-
-    ε  = T(1e-8)
-    βp = @. βp * β
-    ηt = η * √(1 - βp[2]) / (1 - βp[1])
-    mt = @. β[1] * mt + (1 - β[1]) * ∇
-    vt = @. β[2] * vt + (1 - β[2]) * ∇^2
-    Δ  = @. ηt * mt / (√vt + ε)
-
-    return Δ, ADAM{N, T}(η, β, mt, vt, βp)
-end
-
-function optimize(∇f, x0::SVector{N, T}, lb::SVector{N, T}, ub::SVector{N, T}, o::ADAM{N, T}; maxiters::Int = 1, xtol_rel = T(1e-3)) where {N, T}
-    x = x0
-    t = inv_xform_periodic(x, lb, ub)
-    for i in 1:maxiters
-        # Change of variables x->t
-        x = xform_periodic(t, lb, ub)
-        dxdt = ∇xform_periodic(t, lb, ub)
-        dfdx = ∇f(x)
-        dfdt = dfdx .* dxdt
-
-        # Update in t-space
-        Δt, o = update(dfdt, o)
-        t -= Δt
-
-        # Check for convegence in x-space
-        xold, x = x, xform_periodic(t, lb, ub)
-        maximum(abs.(x - xold)) < max(maximum(abs.(x)), maximum(abs.(xold))) * xtol_rel && break
-    end
-    return x, o
-end
-
-@inline xform_periodic(t::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> clamp(((lb[i] + ub[i]) / 2) + ((ub[i] - lb[i]) / 2) * sinpi(t[i]), lb[i], ub[i]), N))
-@inline ∇xform_periodic(t::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> ((ub[i] - lb[i]) / 2) * T(π) * cospi(t[i]), N))
-@inline inv_xform_periodic(x::S, lb::S, ub::S) where {N, T, S <: SVector{N, T}} = S(ntuple(i -> asin(clamp((x[i] - ((lb[i] + ub[i]) / 2)) / ((ub[i] - lb[i]) / 2), -one(T), one(T))) / T(π), N))
-=#
 
 ####
 #### Generate (moderately) realistic mock images

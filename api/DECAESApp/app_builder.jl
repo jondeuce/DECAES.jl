@@ -12,7 +12,6 @@ function build(; create_symlink = true)
             package_dir,
             compiled_app;
             executables = ["decaes" => "julia_main"],
-            precompile_execution_file = joinpath(package_dir, "app_precompile.jl"),
             incremental = false,
             filter_stdlibs = false,
             force = true,

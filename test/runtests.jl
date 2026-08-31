@@ -13,7 +13,6 @@ using TOML
 
 using DECAES
 using DECAES: NNLS
-using DECAES: NormalHermiteSplines
 using DECAES:
     GrowableCache, GrowableCachePairs, CachedFunction, MappedArray,
     LCurveCornerPoint, LCurveCornerState, LCurveCornerCachedFunction,
@@ -28,7 +27,7 @@ is_ci() = lowercase(get(ENV, "CI", "false")) == "true"
 #   julia --project=test test/runtests.jl nnls splines
 #   julia -e 'using Pkg; Pkg.test("DECAES"; test_args = ["nnls"])'
 
-const TEST_FILES = ["misc", "nhs", "utils", "optimization", "splines", "nnls", "epg", "t2map", "cli", "aqua"]
+const TEST_FILES = ["misc", "utils", "optimization", "splines", "nnls", "epg", "t2map", "cli", "aqua"]
 const SELECTED_TEST_FILES = isempty(ARGS) ? TEST_FILES : filter(name -> any(arg -> occursin(arg, name), ARGS), TEST_FILES)
 
 for name in SELECTED_TEST_FILES
