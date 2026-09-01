@@ -14,35 +14,28 @@ Depth = 2
 
 ## Introduction
 
-DECAES provides tools for decomposing multi-exponential signals which arise from multi spin-echo magnetic resonance imaging (MRI) scans into exponential components.
-The main decomposition method used is an inverse Laplace transform-based technique which involves solving the regularized nonnegative least squares (NNLS) inverse problem
+DECAES decomposes multiexponential signals from multi-spin echo magnetic resonance imaging (MRI) into exponential components by solving the regularized nonnegative least-squares (NNLS) problem
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; \lVert Ax - b\rVert_2^2 + \mu^2 \lVert x\rVert_2^2,
 ```
 
-where $b$ is the signal magnitude data, $A$ is a matrix of exponential decay bases, and $\mu$ is a regularization parameter.
-$A$ is constructed using the extended phase graph algorithm with stimulated echo correction.
-The columns of $A$ are exponential bases with differing characteristic $T_2$ decay times $T_{2, j}$.
-
-The output $X_{\mu}$ is the spectrum of (nonnegative) exponential decay amplitudes.
-Amplitude $X_{\mu, j}$ of the spectrum $X_{\mu}$ is therefore interpreted physically as the amount of the signal $b$ which decays with time constant $T_{2, j}$.
-For this reason, the spectrum $X_{\mu}$ is commonly referred to as the $T_2$ *distribution*.
-DECAES provides methods for [computing $T_2$-distributions](@ref t2map).
+where $b$ is the signal magnitude, $A$ contains exponential decay bases constructed using the extended phase graph (EPG) algorithm with stimulated echo correction, and $\mu$ is the regularization parameter.
+Each component $x_{\mu,j}$ is the nonnegative amplitude associated with decay time $T_{2,j}$, so $x_\mu$ is called the [$T_2$ distribution](@ref t2map).
 
 ## [Installation](@id installation)
 
-Using Julia v1.9 or later you can install DECAES as follows:
+Install DECAES using Julia v1.9 or later:
 
 ```bash
 $ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
 ```
 
-This will add DECAES.jl to a named Julia project environment separate from your global environment, and build the `decaes` launcher script at `~/.julia/bin` for running DECAES from the command line.
+This installs DECAES in the named project `@decaes` and builds the command-line launcher `~/.julia/bin/decaes`.
 
 ## [Updating DECAES](@id updating)
 
-DECAES can similarly be updated to the latest version as follows:
+Update DECAES with:
 
 ```bash
 $ julia --project=@decaes -e 'import Pkg; Pkg.update("DECAES"); Pkg.build("DECAES")'
@@ -50,10 +43,8 @@ $ julia --project=@decaes -e 'import Pkg; Pkg.update("DECAES"); Pkg.build("DECAE
 
 ## Myelin water imaging
 
-Myelin water imaging (MWI) is an MRI technique used to visualize the myelin water contained within the sheaths of myelinated axons within the body, such as within the brain's white matter.
-
-Through analysing $T_2$-distributions computed from multi spin-echo MRI scans, one can separate the contribution due to the myelin water from the intra- and extra-cellular water and compute the myelin water fraction (MWF).
-The MWF describes the fraction of water trapped between myelin lipid bilayers relative to the total water in the region.
+Myelin water imaging (MWI) uses $T_2$ distributions from multi-spin echo MRI to distinguish signal arising from myelin water and from intra- and extracellular water.
+The myelin water fraction (MWF) is the fraction of water associated with the short-$T_2$ myelin-water component.
 DECAES provides methods for [computing the MWF](@ref t2part).
 
 MWI was pioneered at the University of British Columbia by Alex MacKay and Ken Whittal.

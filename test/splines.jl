@@ -202,6 +202,17 @@ function test_cubic_hermite_spline_surrogate()
     xtrue, utrue = DECAES.minimize_cubic(float.(coeffs), x[1], x[end])
     @test p[1] ≈ xtrue
     @test u ≈ utrue
+
+    x = range(-0.5, 2.0; length = 9)
+    fg = i -> (evalpoly(x[i], coeffs), SVector(evalpoly(x[i], ∇coeffs)))
+    surr = DECAES.CubicHermiteSplineSurrogate(fg, SVector.(x))
+    state = DECAES.DiscreteSurrogateSearcher(surr; mineval = 2, maxeval = 9)
+    p, u = DECAES.projected_search(surr, state; maxeval = 9)
+    i = searchsortedlast(x, p[1])
+    @test state.numeval[] == 4
+    @test state.seen[i] && state.seen[i+1]
+    @test p[1] ≈ xtrue
+    @test u ≈ utrue
 end
 
 function hermite_boundary_conditions_iter()
@@ -356,7 +367,7 @@ function test_initialization_plan()
         return sort!(p)
     end
 
-    @test first.(Tuple.(plan(64, 9))) == [1, 8, 16, 24, 32, 40, 48, 56, 64] # flip-angle defaults: nRefAngles = 64, nRefAnglesMin = 9
+    @test first.(Tuple.(plan(64, 9))) == [1, 8, 16, 24, 32, 40, 48, 56, 64]
     @test plan(64, 5) == dyadic(64, 5)
     @test plan(64, 9) == dyadic(64, 9)
 

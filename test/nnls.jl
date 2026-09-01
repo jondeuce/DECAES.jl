@@ -341,6 +341,50 @@ end
     end
 end
 
+# Global NNLS minimum by exhaustive support search.
+function nnls_brute(A, b; rtol = 1e-12)
+    n = size(A, 2)
+    res★, supports = Inf, Vector{Int}[]
+    for mask in 0:(1<<n)-1
+        S = [j for j in 1:n if mask & (1 << (j - 1)) != 0]
+        AS = A[:, S]
+        rank(AS) < length(S) && continue
+        xS = AS \ b
+        all(>(0), xS) || continue
+        res = norm(AS * xS - b)
+        if res <= res★ * (1 + rtol) + rtol
+            res < res★ && (res★ = res)
+            push!(supports, S)
+        end
+    end
+    filter!(S -> norm(A[:, S] * (A[:, S] \ b) - b) <= res★ * (1 + rtol) + rtol, supports)
+    return res★, supports
+end
+
+@testset "NNLS exhaustive support search" begin
+    for (m, n) in ((1, 1), (2, 2), (2, 3), (3, 3), (3, 5), (4, 4), (5, 3), (5, 6)), _ in 1:3
+        for μ in (0.0, 1e-2, 1.0)
+            A0, b0 = rand_NNLS_data(m, n)
+            A, b = maybe_pad_NNLS_data(A0, b0, μ)
+            res★, supports = nnls_brute(A, b)
+            work = NNLS.NNLSWorkspace(A, b)
+
+            for warm in (false, true)
+                idx0, nsetp0 = Random.randperm(n), rand(0:min(size(A, 1), n))
+                x = μ > 0 ?
+                    (warm ? NNLS.nnls!(work, A, b, μ, idx0, nsetp0) : NNLS.nnls!(work, A, b, μ)) :
+                    (warm ? NNLS.nnls!(work, A, b, idx0, nsetp0) : NNLS.nnls!(work, A, b))
+                P = sort(NNLS.components(work))
+
+                @test norm(A * x - b) <= res★ * (1 + 1e-12) + 1e-12
+                @test P ∈ supports
+                @test x[P] ≈ A[:, P] \ b
+                @test all(>(0), x[P])
+            end
+        end
+    end
+end
+
 # Direct workspace calling convention: load the workspace manually, preload the initial dual w, and call `unsafe_nnls!` with `init_dual = false`.
 # The solver must use the preloaded w and derive all other internal state from the loaded workspace fields (A, b, x, idx, diag) alone.
 @testset "NNLS direct workspace API" begin
@@ -1089,7 +1133,7 @@ end
 function lasso_brute(A, b, μ)
     n = size(A, 2)
     f★, x★ = Inf, zeros(n)
-    for mask in 0:(1<<n-1)
+    for mask in 0:(1<<n)-1
         S = [j for j in 1:n if mask & (1 << (j - 1)) != 0]
         AS = A[:, S]
         rank(AS) < length(S) && continue

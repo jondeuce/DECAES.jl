@@ -47,6 +47,10 @@ include("T2mapSEcorr.jl")
 include("T2partSEcorr.jl")
 include("main.jl")
 
+@static if Base.VERSION >= v"1.12-"
+    include("CLI.jl")
+end
+
 # Exported symbols
 export MAT, NIfTI, ParXRec, load_image
 export T2mapOptions, T2mapSEcorr, T2partOptions, T2partSEcorr

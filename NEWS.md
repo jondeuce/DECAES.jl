@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Added [Regińska's minimum-product criterion](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_reginska) as the `reginska` regularization method
+- Added ℓ¹ regularization for the L-curve, Regińska, chi-squared, and Morozov discrepancy methods via `--RegNorm l1`
+- Added an experimental Julia v1.12 app entry point, installable via `Pkg.Apps`
+
+### Changed
+- Improved the accuracy and robustness of the [L-curve](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_lcurve) and [GCV](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_gcv) regularization methods
+- Improved flip angle estimation and increased the defaults to `nRefAnglesMin = 15`, `nRefAngles = 500`, and `MinRefAngle = 90`
+- Greatly improved performance throughout the NNLS, EPG, flip-angle estimation, and regularization methods
+
+### Removed
+- Removed the deprecated `--legacy` pipeline and its MATLAB comparison tests
+
 ## [0.6.0] - Apr 17, 2024
 
 ### Changed

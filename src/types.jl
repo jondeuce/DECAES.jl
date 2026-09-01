@@ -54,15 +54,15 @@ See also:
     @assert Threshold >= 0.0 || Threshold == -Inf "First echo signal threshold must be non-negative or -Inf to force processing of every voxel, but Threshold = $Threshold."
 
     "Minimum refocusing angle for flip angle optimization (Units: degrees)."
-    MinRefAngle::T = 50.0 # degrees
+    MinRefAngle::T = 90.0 # degrees
     @assert 0.0 <= MinRefAngle <= 180.0 "Minimum refocusing angle must be in the range [0, 180], but MinRefAngle = $MinRefAngle."
 
-    "During flip angle optimization, goodness of fit is checked for up to `nRefAngles` angles in the range `[MinRefAngle, 180]`. The optimal angle is then determined through interpolation from these samples."
-    nRefAngles::Int = 64
-    @assert nRefAngles >= 2 "Maximum number of angles to check during flip angle optimization must be at least 2, but nRefAngles = $nRefAngles."
+    "Maximum number of candidate angles spanning `[MinRefAngle, 180]` during flip angle optimization."
+    nRefAngles::Int = 500
+    @assert nRefAngles >= 2 "Number of candidate angles during flip angle optimization must be at least 2, but nRefAngles = $nRefAngles."
 
-    "Initial number of angles to check during flip angle optimization before refinement near likely optima. Setting `nRefAnglesMin` equal to `nRefAngles` forces all angles to be checked."
-    nRefAnglesMin::Int = min(9, nRefAngles)
+    "Initial number of angles evaluated before refinement near likely optima. Setting `nRefAnglesMin` equal to `nRefAngles` evaluates every candidate angle."
+    nRefAnglesMin::Int = min(15, nRefAngles)
     @assert 2 <= nRefAnglesMin <= nRefAngles "Minimum number of angles to check during flip angle optimization must be in the range [2, nRefAngles], but nRefAngles = $nRefAngles and nRefAnglesMin = $nRefAnglesMin."
 
     "Regularization routine to use. One of \"gcv\", \"lcurve\", \"reginska\", \"chi2\", \"mdp\", or \"none\", representing the Generalized Cross-Validation method, the L-Curve method, Regińska's minimum-product criterion, `Chi2Factor`-based regularization, the Morozov discrepancy principle, or no regularization, respectively."

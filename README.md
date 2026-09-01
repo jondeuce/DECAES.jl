@@ -11,7 +11,7 @@
 [![Build Status](https://github.com/jondeuce/DECAES.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/jondeuce/DECAES.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 [![codecov.io](https://codecov.io/github/jondeuce/DECAES.jl/branch/master/graph/badge.svg)](https://codecov.io/github/jondeuce/DECAES.jl/branch/master)
 
-DECAES is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) from multi spin-echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
+DECAES is a *fast* Julia implementation of the [MATLAB toolbox](https://mriresearch.med.ubc.ca/news-projects/myelin-water-fraction/) from the [UBC MRI Research Centre](https://mriresearch.med.ubc.ca/) for computing voxelwise [T2-distributions](https://doi.org/10.1016/0022-2364(89)90011-5) from multi-spin echo MRI images using the extended phase graph algorithm with stimulated echo corrections.
 Post-processing of these T2-distributions allows for the computation of measures such as the [myelin water fraction (MWF)](https://doi.org/10.1002/mrm.1910310614) or the [luminal water fraction (LWF)](https://doi.org/10.1148/radiol.2017161687).
 
 DECAES is written in the open-source [Julia programming language](https://julialang.org/).
@@ -24,7 +24,7 @@ If you use DECAES in your research, please [cite our work](./CITATION.bib):
 
 ## Installation
 
-Using Julia v1.9 or later you can install DECAES as follows:
+Install Julia v1.9 or later using the official [`juliaup`](https://github.com/JuliaLang/juliaup) installer, then run:
 
 ```bash
 $ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
@@ -35,16 +35,17 @@ This will do two things:
 1. Add DECAES.jl to a named Julia project environment separate from your global environment
 2. Build the `decaes` launcher script at `~/.julia/bin` for running DECAES from the command line
 
-DECAES can then be run from the command line via `decaes <COMMAND LINE ARGS>`, provided `~/.julia/bin` is added to your `PATH`.
-Run `decaes --help` for available arguments.
+DECAES can then be run as `decaes <COMMAND LINE ARGS>`.
+Add `~/.julia/bin` to your `PATH` so the shell can find the launcher;
+otherwise, invoke it using the full path `~/.julia/bin/decaes`.
+Run `decaes --help` to list the available arguments.
 
 ## Quickstart
 
-If you are new to DECAES, the best place to start is the [examples repository](https://github.com/jondeuce/mwiexamples).
-There, we provide:
+If you are new to DECAES, start with the [examples repository](https://github.com/jondeuce/mwiexamples), which provides:
 
 * A walk-through tutorial for using the MATLAB and command-line DECAES interfaces
-* Example multi spin-echo (MSE) data for demonstrating MWI processing
+* Example multi-spin echo (MSE) data for demonstrating MWI processing
 
 ## Documentation
 
@@ -52,14 +53,14 @@ There, we provide:
 
 Find package documentation at the above link, which includes:
 
-* The command line interface [API](https://jondeuce.github.io/DECAES.jl/dev/cli), available [command line arguments](https://jondeuce.github.io/DECAES.jl/dev/cli/#Arguments-1), and [examples](https://jondeuce.github.io/DECAES.jl/dev/cli/#Examples-1)
-* API reference detailing how to use DECAES.jl from within Julia
-* Other internals and algorithmic details
+* A [command-line tutorial](https://jondeuce.github.io/DECAES.jl/dev/cli), including [available arguments](https://jondeuce.github.io/DECAES.jl/dev/cli/#Arguments) and examples
+* A Julia API reference
+* Internal API and algorithm documentation
 
 ## Benchmarks
 
 Due to performance optimizations enabled by Julia, DECAES is *fast*.
-As an illustration, here is a comparison between DECAES and [UBC MWF MATLAB toolbox](https://github.com/ubcmri/ubcmwf) T2-distribution computation times for two multi spin-echo (MSE) datasets:
+As an illustration, here is a comparison between DECAES and [UBC MWF MATLAB toolbox](https://github.com/ubcmri/ubcmwf) T2-distribution computation times for two multi-spin echo (MSE) datasets:
 
 <center>
 

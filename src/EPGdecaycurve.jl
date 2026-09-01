@@ -172,7 +172,7 @@ abstract type AbstractEPGWorkspace{T, ETL} end
 """
     EPGdecaycurve(ETL::Int, α::Real, TE::Real, T2::Real, T1::Real, β::Real)
 
-Computes the normalized echo decay curve for a multi spin echo sequence
+Computes the normalized echo decay curve for a multi-spin echo sequence
 using the extended phase graph algorithm using the given input parameters.
 
 The sequence of flip angles used is slight generalization of the standard

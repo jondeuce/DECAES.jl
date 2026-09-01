@@ -1,4 +1,31 @@
 ####
+#### Regularization methods
+####
+
+abstract type RegularizationMethod end
+struct NoRegularization <: RegularizationMethod end
+struct Tikhonov{T} <: RegularizationMethod
+    mu::T
+end
+struct LCurve <: RegularizationMethod end
+struct LCurveLasso <: RegularizationMethod end
+struct GCV <: RegularizationMethod end
+struct Reginska <: RegularizationMethod end
+struct ReginskaLasso <: RegularizationMethod end
+struct ChiSquared{T} <: RegularizationMethod
+    Chi2Factor::T
+end
+struct ChiSquaredLasso{T} <: RegularizationMethod
+    Chi2Factor::T
+end
+struct MDP{T} <: RegularizationMethod
+    NoiseLevel::T
+end
+struct MDPLasso{T} <: RegularizationMethod
+    NoiseLevel::T
+end
+
+####
 #### Unregularized NNLS problem
 ####
 
@@ -272,10 +299,10 @@ end
 @doc raw"""
     lsqnonneg(A::AbstractMatrix, b::AbstractVector)
 
-Compute the nonnegative least-squares (NNLS) solution ``X`` of the problem:
+Compute the nonnegative least-squares (NNLS) solution ``x`` of the problem:
 
 ```math
-X = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2.
+x_{0} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2.
 ```
 
 # Arguments
@@ -285,7 +312,7 @@ X = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2.
 
 # Outputs
 
-  - `X::AbstractVector`: NNLS solution
+  - `x::AbstractVector`: NNLS solution
 """
 lsqnonneg(A::AbstractMatrix, b::AbstractVector) = lsqnonneg!(lsqnonneg_work(A, b))
 lsqnonneg_work(A::AbstractMatrix, b::AbstractVector) = NNLSProblem(A, b)
@@ -382,10 +409,10 @@ end
 @doc raw"""
     lsqnonneg_tikh(A::AbstractMatrix, b::AbstractVector, μ::Real)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2.
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2.
 ```
 
 # Arguments
@@ -396,7 +423,7 @@ X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x
 
 # Outputs
 
-  - `X::AbstractVector`: NNLS solution
+  - `x::AbstractVector`: NNLS solution
 """
 lsqnonneg_tikh(A::AbstractMatrix, b::AbstractVector, μ::Real) = lsqnonneg_tikh!(lsqnonneg_tikh_work(A, b), μ)
 lsqnonneg_tikh_work(A::AbstractMatrix, b::AbstractVector) = NNLSTikhonovRegProblem(A, b)
@@ -506,6 +533,9 @@ function chi2_relerr!(work::NNLSTikhonovRegProblem, res²_target, logμ, ∇log�
     return relerr
 end
 chi2_relerr⁻¹(res²_target, relerr) = res²_target * (1 + relerr)
+
+# χ²(μ) = ‖Ax(μ)-b‖² / ‖Ax(0)-b‖², with zero-residual guards.
+chi2_ratio(res²::T, res²_min::T) where {T} = res²_min == 0 ? (res² == 0 ? one(T) : T(Inf)) : res² / res²_min
 
 # `N` `NNLSTikhonovRegProblem` workspaces in rotation. A μ-search rarely ends at its last evaluation, so keeping the recent ones lets the selected μ be recovered without re-solving.
 struct NNLSTikhonovRegProblemCache{T, N, W <: AbstractVector}
@@ -633,16 +663,16 @@ end
 @doc raw"""
     lsqnonneg_chi2(A::AbstractMatrix, b::AbstractVector, chi2_target::Real)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
 ```
 
 where ``\mu`` is determined by solving:
 
 ```math
-\chi^2(\mu) = \frac{||AX_{\mu} - b||_2^2}{||AX_{0} - b||_2^2} = \chi^2_{\mathrm{target}}.
+\chi^2(\mu) = \frac{||Ax_{\mu} - b||_2^2}{||Ax_{0} - b||_2^2} = \chi^2_{\mathrm{target}}.
 ```
 
 That is, ``\mu`` is chosen such that the squared residual norm of the regularized problem is `chi2_target`
@@ -656,7 +686,7 @@ times larger than the squared residual norm of the unregularized problem.
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
   - `chi2::Real`: Resulting ``\chi^2(\mu)``, which should be approximately equal to `chi2_target`
 """
@@ -711,7 +741,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T; method::Sy
             mu_final, res²_final = exp(logmu_final), chi2_relerr⁻¹(res²_target, relerr_final)
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         else
-            x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
+            x_final, mu_final, res²_final = x_unreg, zero(T), res²_min
         end
 
     elseif method === :brent
@@ -736,7 +766,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T; method::Sy
             mu_final, res²_final = exp(logmu_final), chi2_relerr⁻¹(res²_target, relerr_final)
             x_final = solve!(work.nnls_prob_smooth_cache, mu_final)
         else
-            x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
+            x_final, mu_final, res²_final = x_unreg, zero(T), res²_min
         end
 
     elseif method === :brent_gram
@@ -763,13 +793,13 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T; method::Sy
             mu_final, res²_final = exp(logmu_final), chi2_relerr⁻¹(res²_target, relerr_final)
             x_final = nnls_gram_polish_solve!(work, mu_final)
         else
-            x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
+            x_final, mu_final, res²_final = x_unreg, zero(T), res²_min
         end
     else
         error("Unknown root-finding method: :$method")
     end
 
-    return (; x = x_final, mu = mu_final, chi2 = res²_final / res²_min)
+    return (; x = x_final, mu = mu_final, chi2 = chi2_ratio(res²_final, res²_min))
 end
 
 ####
@@ -800,16 +830,16 @@ end
 @doc raw"""
     lsqnonneg_mdp(A::AbstractMatrix, b::AbstractVector, δ::Real)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
 ```
 
 where ``\mu`` is chosen using Morozov's Discrepancy Principle (MDP)[1,2]:
 
 ```math
-\mu = \operatorname{sup}\; \left\{ \nu \ge 0 : ||AX_{\nu} - b|| \le \delta \right\}.
+\mu = \operatorname{sup}\; \left\{ \nu \ge 0 : ||Ax_{\nu} - b|| \le \delta \right\}.
 ```
 
 That is, ``\mu`` is maximized subject to the constraint that the residual norm of the regularized problem is at most ``\delta``[1].
@@ -822,7 +852,7 @@ That is, ``\mu`` is maximized subject to the constraint that the residual norm o
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
   - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\mu = 0`` solution
 
@@ -854,7 +884,7 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
     if δ >= √res²_max
         # Limit as δ -> ‖b‖ from below is the infinitely regularized solution, i.e. x = 0, since ‖A * x(μ -> +∞) - b‖ -> ‖b‖.
         x_final = work.nnls_prob_smooth_cache[].buffers.null_soln # zero solution
-        return (; x = x_final, mu = T(Inf), chi2 = res²_max / res²_min)
+        return (; x = x_final, mu = T(Inf), chi2 = chi2_ratio(res²_max, res²_min))
     end
 
     # Search evaluations for the root ‖Ax(μ)-b‖² = δ² take the Gram fast path, seeded from the unregularized solve.
@@ -881,10 +911,10 @@ function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
         mu_final, res²_final = exp(logmu_final), δ^2 + err_final
         x_final = nnls_gram_polish_solve!(work, mu_final)
     else
-        x_final, mu_final, res²_final = x_unreg, zero(T), one(T)
+        x_final, mu_final, res²_final = x_unreg, zero(T), res²_min
     end
 
-    return (; x = x_final, mu = mu_final, chi2 = res²_final / res²_min)
+    return (; x = x_final, mu = mu_final, chi2 = chi2_ratio(res²_final, res²_min))
 end
 
 ####
@@ -923,10 +953,10 @@ const LCURVE_SLOPE_MAX_DEFAULT = 10.0
 @doc raw"""
     lsqnonneg_lcurve(A::AbstractMatrix, b::AbstractVector; max_slope = $(LCURVE_SLOPE_MAX_DEFAULT))
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||L x||_2^2
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||L x||_2^2
 ```
 
 where ``L`` is the identity matrix, and ``\mu`` is chosen at a corner of the "L-curve"[1], a local maximum of the curvature of ``\mu \mapsto (\log||Ax_\mu - b||_2^2, \log||x_\mu||_2^2)``.
@@ -941,7 +971,7 @@ Details of L-curve theory can be found in Hansen (1992)[2].
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
   - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\mu = 0`` solution
 
@@ -1000,7 +1030,7 @@ function lsqnonneg_lcurve!(work::NNLSLCurveRegProblem{T}; max_slope = LCURVE_SLO
     # Return the final regularized solution, recomputed via QR
     mu_final = exp(logmu_final)
     x_final = nnls_gram_polish_solve!(work, mu_final)
-    chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
+    chi2_final = chi2_ratio(resnorm_sq(work.nnls_prob_smooth_cache[]), resnorm_sq(work.nnls_prob))
 
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
 end
@@ -1365,21 +1395,21 @@ end
 @doc raw"""
     lsqnonneg_reginska(A::AbstractMatrix, b::AbstractVector)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||x||_2^2
 ```
 
 where ``\mu`` is chosen by Regińska's minimum-product criterion[1]:
 
 ```math
-\mu = \underset{\nu > 0}{\operatorname{argmin}}\; \Psi(\nu) = ||AX_{\nu} - b||_2^2 \, ||X_{\nu}||_2^2,
+\mu = \underset{\nu > 0}{\operatorname{argmin}}\; \Psi(\nu) = ||Ax_{\nu} - b||_2^2 \, ||x_{\nu}||_2^2,
 ```
 
 taking the smallest local minimizer of ``\Psi``.
-Stationarity of ``\Psi`` is equivalent to a log-log L-curve tangent slope of ``-1``, so the selected ``\mu`` is the balance point ``||AX_{\mu} - b|| = \mu ||X_{\mu}||``.
-The smallest local minimizer is taken because ``\Psi \to 0`` trivially as ``\mu \to \infty``, where ``X_{\mu} \to 0``.
+Stationarity of ``\Psi`` is equivalent to a log-log L-curve tangent slope of ``-1``, so the selected ``\mu`` is the balance point ``||Ax_{\mu} - b|| = \mu ||x_{\mu}||``.
+The smallest local minimizer is taken because ``\Psi \to 0`` trivially as ``\mu \to \infty``, where ``x_{\mu} \to 0``.
 If ``\Psi`` has no interior local minimum, the unregularized solution is returned with ``\mu = 0``.
 
 # Arguments
@@ -1389,7 +1419,7 @@ If ``\Psi`` has no interior local minimum, the unregularized solution is returne
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
   - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\mu = 0`` solution
 
@@ -1458,7 +1488,7 @@ function lsqnonneg_reginska!(
 
     mu_final = exp(logmu_final)
     x_final = nnls_gram_polish_solve!(work, mu_final)
-    chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / res²_min
+    chi2_final = chi2_ratio(resnorm_sq(work.nnls_prob_smooth_cache[]), res²_min)
 
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
 end
@@ -1509,16 +1539,16 @@ end
 @doc raw"""
     lsqnonneg_gcv(A::AbstractMatrix, b::AbstractVector)
 
-Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the Tikhonov-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||L x||_2^2
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu^2 ||L x||_2^2
 ```
 
 where ``L`` is the identity matrix, and ``\mu`` is chosen via the Generalized Cross-Validation (GCV) method:
 
 ```math
-\mu = \underset{\nu \ge 0}{\operatorname{argmin}}\; \frac{||AX_{\nu} - b||_2^2}{\mathcal{T}(\nu)^2}
+\mu = \underset{\nu \ge 0}{\operatorname{argmin}}\; \frac{||Ax_{\nu} - b||_2^2}{\mathcal{T}(\nu)^2}
 ```
 
 where ``\mathcal{T}(\mu)`` is the "degrees of freedom" of the regularized system
@@ -1536,7 +1566,7 @@ Details of the GCV method can be found in Hansen (1992)[1].
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
   - `chi2::Real`: Resulting increase in residual norm relative to the unregularized ``\mu = 0`` solution
 
@@ -1642,7 +1672,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, rtol = 0.0,
     # Return the final regularized solution, (re)computed via QR
     mu_final = exp(logmu_final)
     x_final = use_gram ? nnls_gram_polish_solve!(work, mu_final) : solve!(work.nnls_prob_smooth_cache, mu_final)
-    chi2_final = resnorm_sq(work.nnls_prob_smooth_cache[]) / resnorm_sq(work.nnls_prob)
+    chi2_final = chi2_ratio(resnorm_sq(work.nnls_prob_smooth_cache[]), resnorm_sq(work.nnls_prob))
 
     return (; x = x_final, mu = mu_final, chi2 = chi2_final)
 end
@@ -1788,10 +1818,10 @@ end
 @doc raw"""
     lsqnonneg_lasso(A::AbstractMatrix, b::AbstractVector, μ::Real)
 
-Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1.
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1.
 ```
 
 Nonnegativity makes ``||x||_1 = \mathbf{1}^T x`` linear, so this is a smooth bound-constrained convex quadratic program, solved by a Lawson-Hanson active-set method.
@@ -1804,7 +1834,7 @@ Nonnegativity makes ``||x||_1 = \mathbf{1}^T x`` linear, so this is a smooth bou
 
 # Outputs
 
-  - `X::AbstractVector`: NNLS solution
+  - `x::AbstractVector`: NNLS solution
 """
 lsqnonneg_lasso(A::AbstractMatrix, b::AbstractVector, μ::Real; kwargs...) = lsqnonneg_lasso!(lsqnonneg_lasso_work(A, b), μ; kwargs...)
 lsqnonneg_lasso_work(A::AbstractMatrix, b::AbstractVector) = NNLS.NNLSLassoWorkspace(A, b)
@@ -1845,16 +1875,16 @@ end
 @doc raw"""
     lsqnonneg_chi2_lasso(A::AbstractMatrix, b::AbstractVector, chi2_target::Real)
 
-Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
 ```
 
 where ``\mu`` is determined by solving:
 
 ```math
-\chi^2(\mu) = \frac{||AX_{\mu} - b||_2^2}{||AX_{0} - b||_2^2} = \chi^2_{\mathrm{target}}.
+\chi^2(\mu) = \frac{||Ax_{\mu} - b||_2^2}{||Ax_{0} - b||_2^2} = \chi^2_{\mathrm{target}}.
 ```
 
 This is the ``\ell^1`` counterpart of [`lsqnonneg_chi2`](@ref).
@@ -1867,7 +1897,7 @@ This is the ``\ell^1`` counterpart of [`lsqnonneg_chi2`](@ref).
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
   - `chi2::Real`: Resulting ``\chi^2(\mu)``, which should be approximately equal to `chi2_target`
 """
@@ -1894,11 +1924,11 @@ function lsqnonneg_chi2_lasso!(work::NNLSChi2LassoRegProblem{T}, chi2_target::Re
     if res²_target >= b²
         # The requested residual is not reached before the solution vanishes; report the zero solution and the χ² it does reach
         x_final = NNLS.solve!(lasso_work, μmax)
-        return (; x = x_final, mu = μmax, chi2 = resnorm_sq(lasso_work) / res²_min)
+        return (; x = x_final, mu = μmax, chi2 = chi2_ratio(resnorm_sq(lasso_work), res²_min))
     end
 
     mu_final = lasso_target_regparam!(lasso_work, res²_target; atol = eps(T) * b²)
-    return (; x = solution(lasso_work), mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+    return (; x = solution(lasso_work), mu = mu_final, chi2 = chi2_ratio(resnorm_sq(lasso_work), res²_min))
 end
 
 # Root of the monotone residual ‖Ax_μ - b‖² = res²_target on [0, μmax], given ‖Ax₀ - b‖² < res²_target < ‖b‖².
@@ -1958,16 +1988,16 @@ end
 @doc raw"""
     lsqnonneg_mdp_lasso(A::AbstractMatrix, b::AbstractVector, δ::Real)
 
-Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
 ```
 
 where ``\mu`` is chosen using Morozov's Discrepancy Principle (MDP)[1,2]:
 
 ```math
-\mu = \operatorname{sup}\; \left\{ \nu \ge 0 : ||AX_{\nu} - b|| \le \delta \right\}.
+\mu = \operatorname{sup}\; \left\{ \nu \ge 0 : ||Ax_{\nu} - b|| \le \delta \right\}.
 ```
 
 This is the ``\ell^1`` counterpart of [`lsqnonneg_mdp`](@ref).
@@ -1980,9 +2010,9 @@ This is the ``\ell^1`` counterpart of [`lsqnonneg_mdp`](@ref).
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
-  - `chi2::Real`: Resulting ratio ``||AX_{\mu} - b||_2^2 / ||AX_0 - b||_2^2`` of squared residual norms
+  - `chi2::Real`: Resulting ratio ``||Ax_{\mu} - b||_2^2 / ||Ax_0 - b||_2^2`` of squared residual norms
 
 # References
 
@@ -2016,11 +2046,11 @@ function lsqnonneg_mdp_lasso!(work::NNLSMDPLassoRegProblem{T}, δ::Real) where {
     if δ² >= b²
         # Every μ ≥ μmax satisfies the discrepancy with x = 0 and residual ‖b‖², so the admissible set is the ray [μmax, ∞) and its supremum is infinite; report μmax, since in general we search only over [0, μmax].
         x_final = NNLS.solve!(lasso_work, μmax)
-        return (; x = x_final, mu = μmax, chi2 = resnorm_sq(lasso_work) / res²_min)
+        return (; x = x_final, mu = μmax, chi2 = chi2_ratio(resnorm_sq(lasso_work), res²_min))
     end
 
     mu_final = lasso_target_regparam!(lasso_work, δ²; atol = eps(T) * b²)
-    return (; x = solution(lasso_work), mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+    return (; x = solution(lasso_work), mu = mu_final, chi2 = chi2_ratio(resnorm_sq(lasso_work), res²_min))
 end
 
 ####
@@ -2047,10 +2077,10 @@ end
 @doc raw"""
     lsqnonneg_lcurve_lasso(A::AbstractMatrix, b::AbstractVector; max_slope = $(LCURVE_SLOPE_MAX_DEFAULT))
 
-Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
 ```
 
 where ``\mu`` is chosen at a corner of the ``\ell^1`` "L-curve"[1] ``\mu \mapsto (\log||Ax_\mu - b||_2^2, 2\log||x_\mu||_1)``, the first positive local maximum of its turning rate ``\omega = d\theta/d\log\mu`` that `max_slope` admits.
@@ -2065,9 +2095,9 @@ As for [`lsqnonneg_lcurve`](@ref), `max_slope` excludes corners in the near-vert
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
-  - `chi2::Real`: Resulting ratio ``||AX_{\mu} - b||_2^2 / ||AX_0 - b||_2^2`` of squared residual norms
+  - `chi2::Real`: Resulting ratio ``||Ax_{\mu} - b||_2^2 / ||Ax_0 - b||_2^2`` of squared residual norms
 
 # References
 
@@ -2095,7 +2125,7 @@ function lsqnonneg_lcurve_lasso!(work::NNLSLCurveLassoRegProblem{T}; max_slope =
     mu_final == 0 && return (; x = NNLS.solve!(lasso_work, zero(T)), mu = zero(T), chi2 = one(T))
 
     x_final = NNLS.solve!(lasso_work, mu_final)
-    return (; x = x_final, mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+    return (; x = x_final, mu = mu_final, chi2 = chi2_ratio(resnorm_sq(lasso_work), res²_min))
 end
 
 # Corner of the ℓ¹ L-curve, found by walking the support segments upward from μ = 0, where `lasso_baseline!` has left the workspace solved.
@@ -2212,20 +2242,20 @@ end
 @doc raw"""
     lsqnonneg_reginska_lasso(A::AbstractMatrix, b::AbstractVector)
 
-Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``X_{\mu}`` of the problem:
+Compute the ``\ell^1``-regularized nonnegative least-squares (NNLS) solution ``x_{\mu}`` of the problem:
 
 ```math
-X_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
+x_{\mu} = \underset{x \ge 0}{\operatorname{argmin}}\; ||Ax - b||_2^2 + \mu ||x||_1
 ```
 
 where ``\mu`` is the smallest positive local minimizer of an ``\ell^1`` analogue of Regińska's minimum-product criterion[1]:
 
 ```math
-\Psi(\nu) = ||AX_{\nu} - b||_2^2 \, ||X_{\nu}||_1.
+\Psi(\nu) = ||Ax_{\nu} - b||_2^2 \, ||x_{\nu}||_1.
 ```
 
 This is the ``\ell^1`` counterpart of [`lsqnonneg_reginska`](@ref).
-Stationarity of ``\Psi`` is equivalent to a log-log tangent slope of ``-1`` for the pair ``(||AX_{\nu} - b||_2^2, ||X_{\nu}||_1)``, so the selected ``\mu`` is the balance point ``||AX_{\mu} - b||_2^2 = \mu ||X_{\mu}||_1`` at which the two terms of the objective contribute equally.
+Stationarity of ``\Psi`` is equivalent to a log-log tangent slope of ``-1`` for the pair ``(||Ax_{\nu} - b||_2^2, ||x_{\nu}||_1)``, so the selected ``\mu`` is the balance point ``||Ax_{\mu} - b||_2^2 = \mu ||x_{\mu}||_1`` at which the two terms of the objective contribute equally.
 
 # Arguments
 
@@ -2234,9 +2264,9 @@ Stationarity of ``\Psi`` is equivalent to a log-log tangent slope of ``-1`` for 
 
 # Outputs
 
-  - `X::AbstractVector`: Regularized NNLS solution
+  - `x::AbstractVector`: Regularized NNLS solution
   - `mu::Real`: Resulting regularization parameter ``\mu``
-  - `chi2::Real`: Resulting ratio ``||AX_{\mu} - b||_2^2 / ||AX_0 - b||_2^2`` of squared residual norms
+  - `chi2::Real`: Resulting ratio ``||Ax_{\mu} - b||_2^2 / ||Ax_0 - b||_2^2`` of squared residual norms
 
 # References
 
@@ -2317,7 +2347,7 @@ function lsqnonneg_reginska_lasso!(work::NNLSReginskaLassoRegProblem{T}; maxiter
         error("Reginska's balance ‖Ax-b‖² = μ‖x‖₁ was not attained at the selected μ = $mu_final.")
     end
 
-    return (; x = x_final, mu = mu_final, chi2 = resnorm_sq(lasso_work) / res²_min)
+    return (; x = x_final, mu = mu_final, chi2 = chi2_ratio(resnorm_sq(lasso_work), res²_min))
 end
 
 # Smallest root in s of the balance polynomial φ(μ + s) = (3q/4)s² + (qμ - ‖x‖₁)s + (res² - μ‖x‖₁), or `NaN` when it has none.

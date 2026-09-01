@@ -684,6 +684,34 @@ function bisection_search(
     end
 end
 
+function projected_search(
+    surr::AbstractSurrogate{1, T},
+    state::DiscreteSurrogateSearcher{1, T};
+    maxeval::Int,
+) where {T}
+    x, u = suggest_point(surr)
+
+    @inbounds while state.numeval[] < maxeval
+        i = clamp(searchsortedlast(state.grid, x; by = first), 1, length(state.grid) - 1)
+
+        Il, Ir = state.grid[i] == x ? (CartesianIndex(max(i - 1, 1)), CartesianIndex(min(i + 1, length(state.grid)))) :
+                 state.grid[i+1] == x ? (CartesianIndex(i), CartesianIndex(min(i + 2, length(state.grid)))) :
+                 (CartesianIndex(i), CartesianIndex(i + 1))
+
+        state.seen[Il] && state.seen[Ir] && break
+
+        I = state.seen[Il] ? Ir :
+            state.seen[Ir] ? Il :
+            abs(first(state.grid[Il]) - first(x)) <= abs(first(state.grid[Ir]) - first(x)) ? Il : Ir
+
+        update!(surr, state, I; maxeval)
+
+        x, u = suggest_point(surr)
+    end
+
+    return x, u
+end
+
 # Update observed evaluations, returning true if converged
 function minimal_bounding_box(
     state::DiscreteSurrogateSearcher{D, T},

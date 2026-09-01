@@ -122,7 +122,7 @@ julia> maps
 Dict{String, Any} with 10 entries:
   "echotimes"     => [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08,…
   "t2times"       => [0.01, 0.0114551, 0.013122, 0.0150315, 0.0172188…
-  "refangleset"   => [50.0, 54.1935, 58.3871, 62.5806, 66.7742, 70.96…
+  "refangleset"   => [90.0, 90.1804, 90.3607, 90.5411, 90.7214, 90.9018…
   "gdn"           => [1.26381 1.27882 … 1.2463 1.25091; 1.29848 1.243…
   "fnr"           => [379.9 437.541 … 446.88 386.396; 485.27 360.591 …
   "alpha"         => [165.461 166.286 … 164.614 164.389; 163.735 164.…
@@ -162,6 +162,7 @@ function T2mapSEcorr!(
     # =========================================================================
     # Initialize output data structures and thread-local buffers
     # =========================================================================
+
     @assert size(image) == (opts.MatrixSize..., opts.nTE)
 
     # Print settings to terminal
@@ -213,6 +214,7 @@ end
 # =========================================================
 # Main loop function
 # =========================================================
+
 function voxelwise_T2_distribution!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T}, signal::AbstractVector{T}, opts::T2mapOptions{T}, I::CartesianIndex) where {T}
     (; decay_data, decay_scale, flip_angle_work, T2_dist_work) = thread_buffer
 
@@ -255,6 +257,7 @@ end
 # =========================================================
 # EPG decay basis set construction
 # =========================================================
+
 struct EPGBasisSetFunctor{
     T,
     ETL,
@@ -366,6 +369,7 @@ end
 # =========================================================
 # Flip angle optimization
 # =========================================================
+
 struct FlipAngleOptimizationWorkspace{T, B, E, S, R, C, P}
     decay_basis::Matrix{T} # decay basis at the current flip angle `α`
     decay_data::Vector{T} # decay curve data
@@ -545,6 +549,9 @@ function seed_downstream_from_node!(work::FlipAngleOptimizationWorkspace, j::Int
     return nothing
 end
 
+# Use dyadic rather than projected grid refinement.
+const USE_DYADIC_REFINEMENT = Ref(false)
+
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
 
     if o.SetFlipAngle === nothing
@@ -553,7 +560,11 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
         advance_warmstart!(work.nnls_search_prob) # cross-voxel NNLS warm starting
         reset!(work.α_searcher) # reuse the searcher's buffers instead of allocating one per voxel
         initialize!(work.α_surrogate, work.α_searcher; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
-        α_opt, _ = bisection_search(work.α_surrogate, work.α_searcher; maxeval = o.nRefAngles)
+        if USE_DYADIC_REFINEMENT[]
+            α_opt, _ = bisection_search(work.α_surrogate, work.α_searcher; maxeval = o.nRefAngles)
+        else
+            α_opt, _ = projected_search(work.α_surrogate, work.α_searcher; maxeval = o.nRefAngles)
+        end
         work.α[] = α_opt[1]
 
         # Refine the surrogate minimizer against true off-grid loss evaluations; `true` means the basis at the final α is already built.
@@ -567,11 +578,12 @@ function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOpti
 end
 
 # Build the T2-stage decay basis at the current flip angle `work.α[]`.
-# Uses the exact cosine-series evaluation when it applies, and the exact EPG rebuild otherwise.
-# Overwriting the basis invalidates the polish problem's solution against it; see `issolved`.
 function final_decay_basis!(work::FlipAngleOptimizationWorkspace)
     α = work.α[]
-    if work.decay_basis_work !== nothing
+    j = work.α_surrogate === nothing ? 0 : searchsortedfirst(work.α_surrogate.grid, SA[α]; by = first)
+    if 0 < j <= length(work.α_surrogate.grid) && work.α_surrogate.grid[j] == SA[α]
+        copyto!(work.decay_basis, @view work.nnls_search_prob.As[:, :, j])
+    elseif work.decay_basis_work !== nothing
         epg_decay_basis!(work.decay_basis, work.decay_basis_work, α)
     else
         epg_decay_basis!(work.decay_basis_set, work.decay_basis, SA[α])
@@ -583,25 +595,6 @@ end
 # =========================================================
 # T2-distribution fitting
 # =========================================================
-abstract type RegularizationMethod end
-struct NoRegularization <: RegularizationMethod end
-struct LCurve <: RegularizationMethod end
-struct LCurveLasso <: RegularizationMethod end
-struct GCV <: RegularizationMethod end
-struct Reginska <: RegularizationMethod end
-struct ReginskaLasso <: RegularizationMethod end
-struct ChiSquared{T} <: RegularizationMethod
-    Chi2Factor::T
-end
-struct ChiSquaredLasso{T} <: RegularizationMethod
-    Chi2Factor::T
-end
-struct MDP{T} <: RegularizationMethod
-    NoiseLevel::T
-end
-struct MDPLasso{T} <: RegularizationMethod
-    NoiseLevel::T
-end
 
 function regularization_method(o::T2mapOptions)
     l1 = o.RegNorm == "l1" # T2mapOptions rejects "gcv" with "l1", the one method with no ℓ¹ counterpart
@@ -717,6 +710,7 @@ end
 # =========================================================
 # Save thread local results to output maps
 # =========================================================
+
 function save_results!(thread_buffer, maps::T2Maps{T}, dist::T2Distributions{T}, T2_dist::AbstractVector{T}, o::T2mapOptions{T}, I::CartesianIndex) where {T}
     (; logT2_times, decay_basis, decay_data, decay_scale, decay_curvefit, residuals, flip_angle_work, T2_dist_work) = thread_buffer
 
@@ -800,6 +794,7 @@ end
 # =========================================================
 # Utility functions
 # =========================================================
+
 function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = global_buffer_maker(o)) where {T}
     decay_basis = zeros(T, o.nTE, o.nT2)
     decay_data = zeros(T, o.nTE)

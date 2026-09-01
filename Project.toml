@@ -6,6 +6,10 @@ authors = ["Jonathan Doucette <jdoucette@physics.ubc.ca>"]
 [workspace]
 projects = ["test", "docs"]
 
+[apps.decaes]
+submodule = "CLI"
+julia_flags = ["--threads=auto"]
+
 [deps]
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"

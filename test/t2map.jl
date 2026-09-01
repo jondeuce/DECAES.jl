@@ -30,7 +30,11 @@ function alpha_polish_setup(::Type{T} = Float64) where {T}
         DECAES.advance_warmstart!(w.nnls_search_prob)
         DECAES.reset!(w.α_searcher)
         DECAES.initialize!(w.α_surrogate, w.α_searcher; mineval = o.nRefAnglesMin, maxeval = o.nRefAngles)
-        α, _ = DECAES.bisection_search(w.α_surrogate, w.α_searcher; maxeval = o.nRefAngles)
+        if DECAES.USE_DYADIC_REFINEMENT[]
+            α, _ = DECAES.bisection_search(w.α_surrogate, w.α_searcher; maxeval = o.nRefAngles)
+        else
+            α, _ = DECAES.projected_search(w.α_surrogate, w.α_searcher; maxeval = o.nRefAngles)
+        end
         return α[1]
     end
     return o, loss_true, make_signal, build, surrogate_minimizer
