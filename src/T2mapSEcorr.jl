@@ -18,8 +18,18 @@
     decaybasis::Union{Nothing, Matrix{T}, Array{T, 5}}
 end
 
-Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldsof(T2Maps, Vector) if getfield(maps, f) isa Array])
+Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Maps) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldsof(T2Maps, Vector) if f !== :is_alpha_provided && getfield(maps, f) !== nothing])
 Base.convert(::Type{Dict{String, Any}}, maps::T2Maps) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
+
+function imagelike_fieldnames(maps::T2Maps)
+    fields = Symbol[:gdn, :ggm, :gva, :fnr, :snr, :alpha]
+    maps.resnorm !== nothing && push!(fields, :resnorm)
+    maps.decaycurve !== nothing && push!(fields, :decaycurve)
+    maps.mu !== nothing && push!(fields, :mu)
+    maps.chi2factor !== nothing && push!(fields, :chi2factor)
+    maps.decaybasis isa Array{<:Any, 5} && push!(fields, :decaybasis)
+    return fields
+end
 
 function T2Maps(opts::T2mapOptions{T}) where {T}
     θ = default_epg_parameters(opts)
@@ -150,7 +160,11 @@ See also:
   - [`EPGdecaycurve`](@ref)
 """
 T2mapSEcorr(image::Array{T, 4}; kwargs...) where {T} = T2mapSEcorr(image, T2mapOptions(image; kwargs...))
-T2mapSEcorr(image::Array{T, 4}, opts::T2mapOptions{T}) where {T} = T2mapSEcorr!(T2Maps(opts), T2Distributions(opts), image, opts)
+
+function T2mapSEcorr(image::Array{T, 4}, opts::T2mapOptions{T}) where {T}
+    maps, dist = T2mapSEcorr!(T2Maps(opts), T2Distributions(opts), image, opts)
+    return convert(Dict{String, Any}, maps), convert(Array{T, 4}, dist)
+end
 
 function T2mapSEcorr!(
     maps::T2Maps{T},
@@ -183,7 +197,7 @@ function T2mapSEcorr!(
     indices = filter(I -> image[I, 1] > opts.Threshold, CartesianIndices(opts.MatrixSize))
     if isempty(indices)
         !opts.Silent && @warn "No voxels found with first-echo signal intensity above threshold $(opts.Threshold).\nConsider lowering the threshold or checking the input data."
-        return convert(Dict{String, Any}, maps), convert(Array{T, 4}, dist)
+        return maps, dist
     end
     ntasks = opts.Threaded ? Threads.nthreads() : 1
     indices_blocks = split_indices(; length = length(indices), minchunksize = default_blocksize())
@@ -199,7 +213,7 @@ function T2mapSEcorr!(
         end
     end
 
-    return convert(Dict{String, Any}, maps), convert(Array{T, 4}, dist)
+    return maps, dist
 end
 
 # Reset every cross-voxel warm-start chain, namely the flip-search per-gridpoint active sets, at the start of each voxel block.
@@ -346,6 +360,22 @@ function epg_grid_model(o::T2mapOptions{T}, θ::EPGParameterization{T}) where {T
     @views for (i, α) in enumerate(αs)
         A = As[:, :, i] # bound once so that `mul!` sees `A' === A` and takes the symmetric rank-k path, making the Gram exactly symmetric
         ∇epg_decay_basis!(basis_set, ∇As[:, :, :, i], A, restructure(θ, (; α)))
+        mul!(Gs[:, :, i], A', A)
+    end
+    return (; As, ∇As, Gs)
+end
+
+# Use the same exact cosine-series representation as the off-grid evaluations.
+function epg_grid_model(o::T2mapOptions{T}, θ::EPGConstantFlipAngleOptions{T}, decay_basis_work::EPGCosineSeriesBasis{T} = EPGCosineSeriesBasis(θ, T2_component_times(o))) where {T}
+    αs = flip_angles(o)
+    As, ∇As, Gs = zeros(T, o.nTE, o.nT2, length(αs)), zeros(T, o.nTE, o.nT2, 1, length(αs)), zeros(T, o.nT2, o.nT2, length(αs))
+    ∂²Acol = zeros(T, o.nTE)
+    @views for (i, α) in enumerate(αs)
+        A = As[:, :, i] # Bind the shared operand for the symmetric rank-k update.
+        cosine_features!(decay_basis_work, α)
+        for j in 1:o.nT2
+            epg_decay_basis_∂α_col!(A[:, j], ∇As[:, j, 1, i], ∂²Acol, decay_basis_work, α, j)
+        end
         mul!(Gs[:, :, i], A', A)
     end
     return (; As, ∇As, Gs)
@@ -822,7 +852,7 @@ end
 function global_buffer_maker(o::T2mapOptions{T}) where {T}
     θ = default_epg_parameters(o)
     decay_basis_work = o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ? EPGCosineSeriesBasis(θ, T2_component_times(o)) : nothing
-    grid_model = o.SetFlipAngle === nothing ? epg_grid_model(o, θ) : nothing
+    grid_model = o.SetFlipAngle === nothing ? (decay_basis_work === nothing ? epg_grid_model(o, θ) : epg_grid_model(o, θ, decay_basis_work)) : nothing
     spectrum_interp = grid_model === nothing || !(regularization_method(o) isa GCV) ? nothing : GriddedSpectrumInterpolator(grid_model.As, grid_model.∇As, flip_angles(o))
     return (; decay_basis_work, grid_model, spectrum_interp)
 end

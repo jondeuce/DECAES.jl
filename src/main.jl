@@ -38,12 +38,12 @@ add_arg_table!(CLI_SETTINGS,
     "--T2map",
     Dict(
         :action => :store_true,
-        :help => "call T2mapSEcorr to compute T2 distributions from 4D multi-spin echo input images. T2 distributions and T2 maps produced by T2mapSEcorr are saved as MAT files with extensions .t2dist.mat and .t2maps.mat",
+        :help => "call T2mapSEcorr to compute T2 distributions from 4D multi-spin echo input images. Outputs use the suffixes .t2dist and .t2maps; see --OutputFormat",
     ),
     "--T2part",
     Dict(
         :action => :store_true,
-        :help => "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi-spin echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Output T2 parts are saved as a MAT file with extension .t2parts.mat",
+        :help => "call T2partSEcorr to analyze 4D T2 distributions to produce parameter maps. If --T2map is also passed, input 4D arrays are interpreted as multi-spin echo images and T2 distributions are first computed by T2mapSEcorr. If only --T2part is passed, input 4D arrays are interpreted as T2 distributions and only T2partSEcorr is called. Outputs use the suffix .t2parts; see --OutputFormat",
     ),
     ["--quiet", "-q"],
     Dict(
@@ -213,6 +213,19 @@ add_arg_group!(CLI_SETTINGS,
 )
 
 add_arg_table!(CLI_SETTINGS,
+    "--OutputFormat",
+    Dict(
+        :arg_type => String,
+        :default => "mat",
+        :help => "format of image outputs. One of \"mat\" or \"nii\". NIfTI outputs are gzipped and inherit the header of a NIfTI input image; non-image data remain in a MAT file. (default: \"mat\")",
+        :group => :save_opts,
+    ),
+    "--NoSaveT2Dist",
+    Dict(
+        :action => :store_true,
+        :help => "skip saving the 4D T2 distribution computed by --T2map, which is large for typical image sizes",
+        :group => :save_opts,
+    ),
     "--SaveDecayCurve",
     Dict(
         :action => :store_true,
@@ -328,22 +341,14 @@ function run_main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
     @info "Starting DECAES v$(VERSION) using Julia v$(Base.VERSION) with $(Threads.nthreads()) threads"
 
     # Load image(s)
-    image = @showtime(
-        "Loading input file: $(file_info[:inputfile])",
-        load_image(file_info[:inputfile]),
-    )
+    image = @showtime("Loading input file: $(file_info[:inputfile])", load_image(file_info[:inputfile]))
+    output_header = !opts[:dry] && opts[:OutputFormat] == "nii" ? nifti_output_header(file_info[:inputfile]) : nothing
 
     # Apply mask
     if file_info[:maskfile] !== nothing
-        @showtime(
-            "Applying mask from file: $(file_info[:maskfile])",
-            try_apply_maskfile!(image, file_info[:maskfile]),
-        )
+        @showtime("Applying mask from file: $(file_info[:maskfile])", try_apply_maskfile!(image, file_info[:maskfile]))
     elseif opts[:bet]
-        @showtime(
-            "Making and applying BET mask with args: $(join(opts[:betargs], " "))",
-            try_apply_bet!(image, opts[:betpath], opts[:betargs]),
-        )
+        @showtime("Making and applying BET mask with args: $(join(opts[:betargs], " "))", try_apply_bet!(image, opts[:betpath], opts[:betargs]))
     end
 
     # Compute T2 distribution from input 4D multi-echo image
@@ -354,33 +359,20 @@ function run_main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
 
         # Load B1 map
         if file_info[:B1mapfile] !== nothing
-            @showtime(
-                "Loading B1 map from file: $(file_info[:B1mapfile])",
-                try_load_B1mapfile!(t2map_maps, file_info[:B1mapfile]),
-            )
+            @showtime("Loading B1 map from file: $(file_info[:B1mapfile])", try_load_B1mapfile!(t2map_maps, file_info[:B1mapfile]))
         end
 
-        maps, dist = @showtime(
-            "Running T2mapSEcorr on file: $(file_info[:inputfile])",
-            T2mapSEcorr!(t2map_maps, t2map_dist, image, t2map_opts),
-        )
+        @showtime("Running T2mapSEcorr on file: $(file_info[:inputfile])", T2mapSEcorr!(t2map_maps, t2map_dist, image, t2map_opts))
+        maps, dist = convert(Dict{String, Any}, t2map_maps), parent(t2map_dist)
 
-        # Save T2-distribution to .mat file
-        savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2dist.mat")
-        if !opts[:dry]
-            @showtime(
-                "Saving T2 distribution to file: $savefile",
-                MAT.matwrite(savefile, Dict{String, Any}("dist" => dist)),
-            )
+        # Save T2-distribution
+        if !opts[:dry] && !opts[:NoSaveT2Dist]
+            save_outputs(file_info, opts, output_header, ".t2dist", "T2 distribution", "dist", dist)
         end
 
-        # Save T2-maps to .mat file
-        savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2maps.mat")
+        # Save T2-maps
         if !opts[:dry]
-            @showtime(
-                "Saving T2 parameter maps to file: $savefile",
-                MAT.matwrite(savefile, maps),
-            )
+            save_outputs(file_info, opts, output_header, ".t2maps", "T2 parameter maps", maps, imagelike_fieldnames(t2map_maps))
         end
     else
         # Input image is the T2 distribution
@@ -389,18 +381,15 @@ function run_main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
 
     # Analyze T2 distribution to produce parameter maps
     if opts[:T2part]
-        parts = @showtime(
-            "Running T2partSEcorr",
-            T2partSEcorr(dist, t2part_options(dist, opts)),
-        )
+        t2part_opts = t2part_options(dist, opts)
+        t2part_parts = T2Parts(t2part_opts)
 
-        # Save T2-parts to .mat file
-        savefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * ".t2parts.mat")
+        @showtime("Running T2partSEcorr", T2partSEcorr!(t2part_parts, dist, t2part_opts))
+        parts = convert(Dict{String, Any}, t2part_parts)
+
+        # Save T2-parts
         if !opts[:dry]
-            @showtime(
-                "Saving T2 parts maps to file: $savefile",
-                MAT.matwrite(savefile, parts),
-            )
+            save_outputs(file_info, opts, output_header, ".t2parts", "T2 parts maps", parts, imagelike_fieldnames(t2part_parts))
         end
     end
 
@@ -445,6 +434,9 @@ function verify_cli_args!(opts)
     # Verify argument interdependencies which can't be enforced by ArgParse
     if !(opts[:T2map] || opts[:T2part])
         error("At least one of --T2map or --T2part must be passed")
+    end
+    if opts[:OutputFormat] ∉ ("mat", "nii")
+        error("--OutputFormat must be one of \"mat\" or \"nii\", but --OutputFormat=$(repr(opts[:OutputFormat])) was passed")
     end
     return opts
 end
@@ -555,6 +547,70 @@ function get_file_infos(opts::Dict{Symbol, Any})
     end
 
     return file_info
+end
+
+# Save either all outputs as a MAT file, or selected image outputs as NIfTI files and the rest as a MAT file.
+function save_outputs(file_info, opts, header, suffix, description, maps::Dict{String, Any}, nifti_fields)
+    basefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * suffix)
+    if opts[:OutputFormat] == "mat"
+        @showtime("Saving $description to file: $basefile.mat", MAT.matwrite("$basefile.mat", maps))
+    else
+        nifti_names = string.(nifti_fields)
+        nifti_maps = Dict(name => maps[name] for name in nifti_names)
+        metadata = Dict(name => data for (name, data) in maps if name ∉ nifti_names)
+        @showtime("Saving $description to files: $basefile.<name>.nii.gz", save_nifti_outputs(basefile, nifti_maps, header))
+        isempty(metadata) || @showtime("Saving metadata to file: $basefile.meta.mat", MAT.matwrite("$basefile.meta.mat", metadata))
+    end
+    return nothing
+end
+
+# Save a single output array, named `name` when saved as a MAT file.
+function save_outputs(file_info, opts, header, suffix, description, name::String, data::AbstractArray)
+    basefile = joinpath(file_info[:outputfolder], file_info[:choppedinputfile] * suffix)
+    if opts[:OutputFormat] == "mat"
+        @showtime("Saving $description to file: $basefile.mat", MAT.matwrite("$basefile.mat", Dict{String, Any}(name => data)))
+    else
+        @showtime("Saving $description to file: $basefile.nii.gz", save_nifti("$basefile.nii.gz", data, header))
+    end
+    return nothing
+end
+
+function save_nifti_outputs(basefile, maps, header)
+    for name in sort!(collect(keys(maps)))
+        save_nifti("$basefile.$name.nii.gz", maps[name], header)
+    end
+    return nothing
+end
+
+# Outputs inherit the input header, and therefore its voxel size and orientation, when their spatial dimensions match the input image.
+function save_nifti(savefile, data, header)
+    inherit = header !== nothing && ndims(data) >= 3 && ntuple(i -> size(data, i), 3) == ntuple(i -> Int(header.dim[i+1]), 3)
+    vol = inherit ? NIfTI.NIVolume(deepcopy(header), data) : NIfTI.NIVolume(data)
+    reset_nifti_output_header!(vol.header)
+    return NIfTI.niwrite(savefile, vol)
+end
+
+function nifti_output_header(inputfile)
+    maybe_get_suffix(inputfile) ∈ (".nii", ".nii.gz") || return nothing
+    io = NIfTI.niopen(inputfile, "r")
+    try
+        return first(NIfTI.read_header(io))
+    finally
+        close(io)
+    end
+end
+
+function reset_nifti_output_header!(header)
+    # Preserve spatial geometry and reset metadata specific to the input values or nonspatial dimensions.
+    qfac, Δx, Δy, Δz = header.pixdim[1], header.pixdim[2], header.pixdim[3], header.pixdim[4]
+    header.pixdim = (ifelse(iszero(qfac), oneunit(qfac), qfac), Δx, Δy, Δz, oneunit(qfac), zero(qfac), zero(qfac), zero(qfac))
+    header.xyzt_units &= 0x07
+    header.scl_slope, header.scl_inter = 1, 0 # outputs are saved unscaled, having been scaled at load time
+    header.cal_min, header.cal_max = 0, 0
+    header.intent_p1, header.intent_p2, header.intent_p3, header.intent_code = 0, 0, 0, 0
+    header.intent_name = ntuple(_ -> 0x00, length(header.intent_name))
+    header.slice_start, header.slice_end, header.slice_code, header.slice_duration, header.toffset = 0, 0, 0, 0, 0
+    return header
 end
 
 function load_image(filename, ::Val{N}) where {N}

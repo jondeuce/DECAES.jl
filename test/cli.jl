@@ -262,7 +262,8 @@ function run_cli_tests()
                 maps_B1 = DECAES.T2Maps(opts_B1)
                 DECAES.load_B1map!(maps_B1, DECAES.load_image(B1mapfilename, Val(3)))
                 t2map_ref, t2dist_ref = DECAES.redirect_to_devnull() do
-                    return DECAES.T2mapSEcorr!(maps_B1, DECAES.T2Distributions(opts_B1), image, opts_B1)
+                    maps, dist = DECAES.T2mapSEcorr!(maps_B1, DECAES.T2Distributions(opts_B1), image, opts_B1)
+                    return convert(Dict{String, Any}, maps), convert(Array{eltype(image), 4}, dist)
                 end
                 t2part_ref = DECAES.redirect_to_devnull() do
                     return T2partSEcorr(t2dist_ref; jl_t2part_kwargs...)
@@ -302,6 +303,95 @@ end
 
 @testset "Command line interface" begin
     run_cli_tests()
+end
+
+# Nonspatial and value-dependent input metadata must be reset.
+function test_output_header(header)
+    @test header.pixdim[1] == 1 && header.pixdim[5] == 1 && all(iszero, header.pixdim[6:8])
+    @test header.xyzt_units == 0x02
+    @test (header.scl_slope, header.scl_inter) == (1, 0)
+    @test (header.cal_min, header.cal_max) == (0, 0)
+    @test all(iszero, (header.intent_p1, header.intent_p2, header.intent_p3, header.intent_code, header.intent_name...))
+    @test all(iszero, (header.slice_start, header.slice_end, header.slice_code, header.slice_duration, header.toffset))
+end
+
+# NIfTI outputs must match the MAT outputs and preserve spatial metadata.
+@testset "Output formats" begin
+    paramdict = image_params!(deepcopy(default_paramdict))
+    paramdict[:SaveResidualNorm] = true
+    paramdict[:SaveDecayCurve] = true
+    paramdict[:SaveRegParam] = true
+    paramdict[:SaveNNLSBasis] = true
+    image = construct_test_image(paramdict)
+
+    voxel_size = (1.5f0, 2.5f0, 3.5f0)
+    orientation = Float32[1.5 0 0 10; 0 2.5 0 20; 0 0 3.5 30]
+    map_names = ("gdn", "ggm", "gva", "fnr", "snr", "alpha", "resnorm", "decaycurve", "mu", "chi2factor", "decaybasis")
+    part_names = ("sfr", "sgm", "mfr", "mgm")
+    metadata_names = ("echotimes", "t2times", "refangleset", "decaybasisset")
+
+    mktempdir() do path
+        inputfile = joinpath(path, "input.nii.gz")
+        DECAES.NIfTI.niwrite(inputfile, DECAES.NIfTI.NIVolume(image; voxel_size, orientation, time_step = 1200.0f0, cal_min = 12.0f0, cal_max = 4321.0f0, intent_p1 = 1.0f0, intent_p2 = 2.0f0, intent_p3 = 3.0f0, intent_code = Int16(2), intent_name = "input", slice_start = Int16(1), slice_end = Int16(47), slice_duration = 33.0f0, toffset = 7.0f0))
+        input_affine = DECAES.NIfTI.getaffine(DECAES.NIfTI.niread(inputfile))
+        matpath, niipath = mktempdir(path), mktempdir(path)
+        matargs = construct_args(paramdict; argstype = :cli, inputfilename = inputfile, outputpath = matpath)
+        niiargs = construct_args(paramdict; argstype = :cli, inputfilename = inputfile, outputpath = niipath)
+
+        DECAES.redirect_to_devnull() do
+            main(matargs)
+            return main([niiargs; "--OutputFormat"; "nii"; "--NoSaveT2Dist"])
+        end
+
+        @test !isfile(joinpath(niipath, "input.t2dist.nii.gz"))
+        for (suffix, names) in ((".t2maps", map_names), (".t2parts", part_names))
+            maps = DECAES.MAT.matread(joinpath(matpath, "input$suffix.mat"))
+            for name in names
+                vol = DECAES.NIfTI.niread(joinpath(niipath, "input$suffix.$name.nii.gz"))
+                arr = maps[name]
+                @test size(vol) == size(arr)
+                @test vol.raw ≈ arr
+                @test vol.header.pixdim[2:4] == voxel_size
+                @test DECAES.NIfTI.getaffine(vol) == input_affine
+                test_output_header(vol.header)
+            end
+        end
+        @test !isfile(joinpath(niipath, "input.t2parts.meta.mat")) # the T2 parts maps are all image shaped, leaving no metadata to save
+
+        metadata = DECAES.MAT.matread(joinpath(niipath, "input.t2maps.meta.mat"))
+        maps = DECAES.MAT.matread(joinpath(matpath, "input.t2maps.mat"))
+        @test Set(keys(metadata)) == Set(metadata_names)
+        for name in metadata_names
+            @test metadata[name] ≈ maps[name]
+            @test !isfile(joinpath(niipath, "input.t2maps.$name.nii.gz"))
+        end
+
+        distpath = mktempdir(path)
+        distargs = construct_args(paramdict; argstype = :cli, inputfilename = inputfile, outputpath = distpath)
+        DECAES.redirect_to_devnull() do
+            return main([distargs; "--OutputFormat"; "nii"])
+        end
+        dist = DECAES.NIfTI.niread(joinpath(distpath, "input.t2dist.nii.gz"))
+        dist_ref = DECAES.MAT.matread(joinpath(matpath, "input.t2dist.mat"))["dist"]
+        @test size(dist) == (paramdict[:MatrixSize]..., paramdict[:nT2])
+        @test dist.raw ≈ dist_ref
+        @test dist.header.pixdim[2:4] == voxel_size
+        test_output_header(dist.header)
+        @test DECAES.NIfTI.getaffine(dist) == input_affine
+
+        defaultfile = joinpath(path, "default.nii.gz")
+        DECAES.save_nifti(defaultfile, zeros(2, 2, 1, 3), nothing)
+        default = DECAES.NIfTI.niread(defaultfile)
+        @test default.header.pixdim[2:4] == (1, 1, 1)
+        test_output_header(default.header)
+
+        jlargs, _ = construct_args(paramdict; argstype = :jl)
+        fixed_maps = DECAES.T2Maps(T2mapOptions(image; jlargs..., SetFlipAngle = 180.0))
+        @test :decaybasis ∉ DECAES.imagelike_fieldnames(fixed_maps)
+        @test convert(Dict{String, Any}, fixed_maps)["refangleset"] == 180.0
+    end
+
+    @test_throws Exception DECAES.verify_cli_args!(Dict{Symbol, Any}(:T2map => true, :T2part => false, :OutputFormat => "hdf5"))
 end
 
 nothing

@@ -36,7 +36,8 @@ Supported input formats are:
 3. Philips [PAR/REC](https://www.nitrc.org/plugins/mwiki/index.php/dcm2nii:MainPage#Philips_PAR.2FREC_Images): `.par` and `.rec` (or `.PAR` and `.REC`); see [ParXRec.jl](https://github.com/kamesy/ParXRec.jl)
 4. Philips XML/REC: `.xml` and `.rec` (or `.XML` and `.REC`); see [ParXRec.jl](https://github.com/kamesy/ParXRec.jl)
 
-All output files are saved as `.mat` files in format `v7.3`.
+Outputs are saved as MATLAB files in format `v7.3` by default.
+Pass `--OutputFormat nii` to save image outputs as NIfTI files instead.
 
 !!! note
     Convert DICOM data to NIfTI using [`dcm2niix`](https://github.com/rordenlab/dcm2niix).
@@ -76,7 +77,21 @@ For an input named `image.nii`, DECAES may produce:
 4. `image.log`: console output
 5. `image.settings.txt`: copy of an input [settings file](@ref settingsfiles)
 
+If `--NoSaveT2Dist` is passed, the large $T_2$ distribution file is not saved;
+it is not needed if one is only interested in derived image maps.
+
 If the `--dry` flag is passed, none of the above files will be produced.
+
+### [NIfTI outputs](@id nifti)
+
+Passing `--OutputFormat nii` saves the $T_2$ distribution and derived maps as gzipped NIfTI files:
+
+1. `image.t2dist.nii.gz`: $T_2$ distributino
+2. `image.t2maps.meta.mat`: non-image metadata such as echo times, $T_2$ times, etc.
+1. `image.t2maps.<name>.nii.gz`: image shaped outputs from [`T2mapSEcorr`](@ref)
+2. `image.t2parts.<name>.nii.gz`: image shaed outputs from [`T2partSEcorr`](@ref)
+
+NIfTI output files inherit the header of a NIfTI input image, preserving its voxel size and orientation.
 
 ## Examples
 

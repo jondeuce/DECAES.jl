@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added [Regińska's minimum-product criterion](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_reginska) as the `reginska` regularization method
 - Added ℓ¹ regularization for the L-curve, Regińska, chi-squared, and Morozov discrepancy methods via `--RegNorm l1`
 - Added an experimental Julia v1.12 app entry point, installable via `Pkg.Apps`
+- Added `--OutputFormat nii` for saving image outputs as NIfTI files, and `--NoSaveT2Dist` for skipping the T2 distribution output
 
 ### Changed
 - Improved the accuracy and robustness of the [L-curve](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_lcurve) and [GCV](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_gcv) regularization methods

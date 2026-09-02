@@ -1,3 +1,25 @@
+# Internal convenience container for holding T2 parts outputs
+@with_kw_noshow struct T2Parts{T}
+    sfr::Array{T, 3}
+    sgm::Array{T, 3}
+    mfr::Array{T, 3}
+    mgm::Array{T, 3}
+end
+
+Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Parts) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldsof(T2Parts, Vector) if getfield(maps, f) !== nothing])
+Base.convert(::Type{Dict{String, Any}}, maps::T2Parts) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
+
+imagelike_fieldnames(parts::T2Parts) = fieldsof(typeof(parts), Vector{Symbol})
+
+function T2Parts(opts::T2partOptions{T}) where {T}
+    return T2Parts(;
+        sfr = tfill(T(NaN), opts.MatrixSize...),
+        sgm = tfill(T(NaN), opts.MatrixSize...),
+        mfr = tfill(T(NaN), opts.MatrixSize...),
+        mgm = tfill(T(NaN), opts.MatrixSize...),
+    )
+end
+
 """
     T2partSEcorr(T2distributions::Array{T,4}; <keyword arguments>)
     T2partSEcorr(T2distributions::Array{T,4}, opts::T2partOptions{T})
@@ -9,7 +31,7 @@ Analyzes T2 distributions produced by [`T2mapSEcorr`](@ref) to produce data maps
   - `T2distributions`: 4D array with data as `(row, column, slice, T2 amplitude)`
   - A series of optional keyword argument settings which will be used to construct a [`T2partOptions`](@ref) struct internally, or a [`T2partOptions`](@ref) struct directly
 
-# Ouputs
+# Outputs
 
   - `maps`: a dictionary containing the following 3D data maps as fields:
 
@@ -40,13 +62,16 @@ See also:
 T2partSEcorr(T2distributions::Array{T, 4}; kwargs...) where {T} = T2partSEcorr(T2distributions, T2partOptions(T2distributions; kwargs...))
 
 function T2partSEcorr(T2distributions::Array{T, 4}, opts::T2partOptions{T}) where {T}
+    maps = T2Parts(opts)
+    T2partSEcorr!(maps, T2distributions, opts)
+    return convert(Dict{String, Any}, maps)
+end
+
+function T2partSEcorr!(maps::T2Parts{T}, T2distributions::Array{T, 4}, opts::T2partOptions{T}) where {T}
     @assert size(T2distributions) == (opts.MatrixSize..., opts.nT2)
 
     # Print settings to terminal
     !opts.Silent && @info show_string(opts)
-
-    # Initial output
-    maps = T2Parts(opts)
 
     # For each worker in the worker pool, allocate a separate thread-local buffer, then run the work function `work!`
     function with_thread_buffer(work!)
@@ -67,26 +92,7 @@ function T2partSEcorr(T2distributions::Array{T, 4}, opts::T2partOptions{T}) wher
         end
     end
 
-    return convert(Dict{String, Any}, maps)
-end
-
-@with_kw_noshow struct T2Parts{T}
-    sfr::Array{T, 3}
-    sgm::Array{T, 3}
-    mfr::Array{T, 3}
-    mgm::Array{T, 3}
-end
-
-Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Parts) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldsof(T2Parts, Vector) if getfield(maps, f) !== nothing])
-Base.convert(::Type{Dict{String, Any}}, maps::T2Parts) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
-
-function T2Parts(opts::T2partOptions{T}) where {T}
-    return T2Parts(;
-        sfr = tfill(T(NaN), opts.MatrixSize...),
-        sgm = tfill(T(NaN), opts.MatrixSize...),
-        mfr = tfill(T(NaN), opts.MatrixSize...),
-        mgm = tfill(T(NaN), opts.MatrixSize...),
-    )
+    return maps
 end
 
 # =========================================================

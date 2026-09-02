@@ -307,6 +307,9 @@ end
     DECAES.load_B1map!(maps₂, maps₁["alpha"])
     maps₂, dist₂ = DECAES.T2mapSEcorr!(maps₂, DECAES.T2Distributions(o), copy(image), o)
 
+    @test maps₂ isa DECAES.T2Maps
+    @test dist₂ isa DECAES.T2Distributions
+    maps₂, dist₂ = convert(Dict{String, Any}, maps₂), convert(Array{eltype(image), 4}, dist₂)
     @test maps₁["alpha"] == maps₂["alpha"]
     @test isapprox(dist₁, dist₂; rtol = 1e-6, atol = 1e-14)
     for k in keys(maps₁)
