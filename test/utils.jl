@@ -270,5 +270,5 @@ end
 
     # Type stable and non-allocating for the tuple sizes used above
     @test (@inferred DECAES.sorttuple((3.0, 1.0, 2.0))) === (1.0, 2.0, 3.0)
-    @test @allocated(DECAES.sorttuple((3.0, 1.0, 2.0))) == 0
+    @test allocated_bytes(DECAES.sorttuple, (3.0, 1.0, 2.0)) == 0
 end

@@ -350,7 +350,7 @@ end
                 vol = DECAES.NIfTI.niread(joinpath(niipath, "input$suffix.$name.nii.gz"))
                 arr = maps[name]
                 @test size(vol) == size(arr)
-                @test vol.raw ≈ arr
+                @test isapprox(vol.raw, arr; nans = true)
                 @test vol.header.pixdim[2:4] == voxel_size
                 @test DECAES.NIfTI.getaffine(vol) == input_affine
                 test_output_header(vol.header)

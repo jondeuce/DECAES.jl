@@ -19,7 +19,7 @@ using DECAES:
     NNLSProblem, NNLSTikhonovRegProblem, NNLSTikhonovRegProblemCache,
     lcurve_corner
 
-is_ci() = lowercase(get(ENV, "CI", "false")) == "true"
+include("helpers.jl")
 
 # Test files to run, in order. With no arguments the whole suite runs, otherwise names are matched as substrings of the file name:
 #   julia --project=test test/runtests.jl

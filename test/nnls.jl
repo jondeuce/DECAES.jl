@@ -951,8 +951,7 @@ function lsqnonneg_lcurve_tests(m, n)
     A, b = rand_NNLS_data(m, n)
     work = DECAES.lsqnonneg_lcurve_work(A, b)
 
-    #TODO: # Test allocations
-    # @test @allocated(DECAES.lsqnonneg_lcurve!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+    @test allocated_bytes(DECAES.lsqnonneg_lcurve!, work) == 0
 
     (; x, mu, chi2) = @inferred DECAES.lsqnonneg_lcurve!(work)
     @test all(>=(0), x)
@@ -1857,9 +1856,8 @@ function test_lsqnonneg_gcv(m, n)
 
     #TODO: Test that different GCV minimization methods are consistent when m >= n
 
-    #TODO: # Test allocations
-    # @test @allocated(DECAES.gcv!(work, logμ)) == 0
-    # @test @allocated(DECAES.lsqnonneg_gcv!(work)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+    @test allocated_bytes(DECAES.gcv!, work, logμ) == 0
+    @test allocated_bytes(DECAES.lsqnonneg_gcv!, work) == 0
 
     # Test inference
     @inferred DECAES.gcv!(work, logμ)
@@ -1963,8 +1961,7 @@ function lsqnonneg_mdp_tests(m, n)
         @test chi2 ≈ res² / res²_min rtol = 2e-3 atol = 1e-12 # should also hold when res²_min = 0, i.e. when chi2 = Inf
     end
 
-    #TODO: # Test allocations
-    # @test @allocated(DECAES.lsqnonneg_mdp!(work, res_target)) == 0 # caches should be initialized to be sufficiently large that normally they don't need to grow
+    @test allocated_bytes(DECAES.lsqnonneg_mdp!, work, res_target) == 0
 
     # Test inference
     @inferred DECAES.lsqnonneg_mdp!(work, res_target)
