@@ -150,11 +150,13 @@ end
             deflation_work = DECAES.SVDValsWorkspace(zeros(ℓ, k))
             DECAES.deflated_eigvals!(γ², spectrum_work, deflation_work, A, Q)
             τ = √DECAES.deflation_tolerance²(k, sum(abs2, A))
+            σtol = 5 * (τ + eps() * √maximum(γ²ref; init = 0.0))
 
             @test issorted(γ²; rev = true)
-            @test maximum(abs, .√γ² .- .√γ²ref) <= 5 * (τ + eps() * √maximum(γ²ref; init = 0.0))
+            @test maximum(abs, .√γ² .- .√γ²ref) <= σtol
             for μ in exp10.(range(-6, 3; length = 12)) .* max(norm(A), eps())
-                @test dof(γ², μ, m, n) ≈ dof(γ²ref, μ, m, n) rtol = 1e-12
+                𝒟, 𝒟ref = dof(γ², μ, m, n), dof(γ²ref, μ, m, n)
+                @test abs(𝒟 - 𝒟ref) <= k * σtol / μ + 2k * eps() * max(𝒟, 𝒟ref) # each term f(σ) = μ²/(σ² + μ²) satisfies |f′(σ)| < 1/μ
             end
             name == "full rank" && @test γ² == γ²ref
         end
