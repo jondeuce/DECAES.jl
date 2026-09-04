@@ -22,6 +22,7 @@ T2partSEcorr
 
 ```@docs
 main
+load_image
 ```
 
 ## [NNLS analysis](@id nnls-analysis)
@@ -46,4 +47,6 @@ lcurve_corner
 
 ```@docs
 EPGdecaycurve
+EPGdecaycurve!
+EPGdecaycurve_work
 ```

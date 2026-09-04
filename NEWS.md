@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - Removed the deprecated `--legacy` pipeline and its MATLAB comparison tests
+- Removed the `Dierckx`, `NLopt`, `TupleTools`, and `UnsafeArrays` dependencies
 
 ## [0.6.0] - Apr 17, 2024
 

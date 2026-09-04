@@ -29,7 +29,7 @@ See also:
     MatrixSize::NTuple{3, Int}
     @assert all(MatrixSize .>= 1) "MatrixSize must be a tuple of 3 positive integers, but MatrixSize = $MatrixSize."
 
-    "Number of echoes in input signal. This argument is has no default, but is inferred automatically as `size(image, 4)` when calling `T2mapSEcorr(image; kwargs...)`."
+    "Number of echoes in input signal. This argument has no default, but is inferred automatically as `size(image, 4)` when calling `T2mapSEcorr(image; kwargs...)`."
     nTE::Int
     @assert nTE >= 4 "At least four echoes are required for T2 mapping, but nTE = $nTE."
 
@@ -43,7 +43,7 @@ See also:
 
     "Tuple of min and max T2 values (Units: time, must match `TE`). This argument has no default."
     T2Range::NTuple{2, T}
-    @assert 0.0 < T2Range[1] < T2Range[2] "T2Range must a sorted 2-tuple of positive values, but T2Range = $T2Range."
+    @assert 0.0 < T2Range[1] < T2Range[2] "T2Range must be a sorted 2-tuple of positive values, but T2Range = $T2Range."
 
     "Assumed value of T1 (Units: time, must match `TE`)."
     T1::T = 1.0
@@ -67,11 +67,11 @@ See also:
 
     "Regularization routine to use. One of \"gcv\", \"lcurve\", \"reginska\", \"chi2\", \"mdp\", or \"none\", representing the Generalized Cross-Validation method, the L-Curve method, Regińska's minimum-product criterion, `Chi2Factor`-based regularization, the Morozov discrepancy principle, or no regularization, respectively."
     Reg::String
-    @assert Reg ∈ ("gcv", "lcurve", "reginska", "chi2", "mdp", "none")
+    @assert Reg ∈ ("gcv", "lcurve", "reginska", "chi2", "mdp", "none") "Reg must be one of \"gcv\", \"lcurve\", \"reginska\", \"chi2\", \"mdp\", or \"none\", but Reg = $(repr(Reg))."
 
     "Regularization penalty norm. One of \"l2\" or \"l1\", penalizing ``\\mu^2 ||x||_2^2`` or ``\\mu ||x||_1``, respectively. Ignored when `Reg == \"none\"`."
     RegNorm::String = "l2"
-    @assert RegNorm ∈ ("l2", "l1")
+    @assert RegNorm ∈ ("l2", "l1") "RegNorm must be one of \"l2\" or \"l1\", but RegNorm = $(repr(RegNorm))."
     @assert !(Reg == "gcv" && RegNorm == "l1") "GCV is not implemented for the l1 penalty norm."
 
     "Constraint on ``\\chi^2`` used for regularization when `Reg == \"chi2\"`."
@@ -149,29 +149,31 @@ See also:
     "Perform T2-parts using multiple threads."
     Threaded::Bool = Threads.nthreads() > 1
 
-    "Size of first 3 dimensions of input 4D T2 distribution. This argument is has no default, but is inferred automatically as `size(t2dist)[1:3]` when calling `T2partSEcorr(t2dist; kwargs...)`."
+    "Size of first 3 dimensions of input 4D T2 distribution. This argument has no default, but is inferred automatically as `size(t2dist)[1:3]` when calling `T2partSEcorr(t2dist; kwargs...)`."
     MatrixSize::NTuple{3, Int}
-    @assert all(MatrixSize .>= 1)
+    @assert all(MatrixSize .>= 1) "MatrixSize must be a tuple of 3 positive integers, but MatrixSize = $MatrixSize."
 
     "Number of T2 times to use. This argument has no default."
     nT2::Int
-    @assert nT2 >= 2
+    @assert nT2 >= 2 "At least two T2 components are required, but nT2 = $nT2."
 
     "Tuple of min and max T2 values (Units: time, must match the T2 distribution). This argument has no default."
     T2Range::NTuple{2, T}
-    @assert 0.0 < T2Range[1] < T2Range[2]
+    @assert 0.0 < T2Range[1] < T2Range[2] "T2Range must a sorted 2-tuple of positive values, but T2Range = $T2Range."
 
     "Tuple of min and max T2 values of the short peak window (Units: time, must match `T2Range`). This argument has no default."
     SPWin::NTuple{2, T}
-    @assert SPWin[1] < SPWin[2]
+    @assert SPWin[1] < SPWin[2] "SPWin must be a sorted 2-tuple, but SPWin = $SPWin."
+    @assert SPWin[1] <= T2Range[2] && T2Range[1] <= SPWin[2] "SPWin must overlap T2Range, but SPWin = $SPWin and T2Range = $T2Range."
 
     "Tuple of min and max T2 values of the middle peak window (Units: time, must match `T2Range`). This argument has no default."
     MPWin::NTuple{2, T}
-    @assert MPWin[1] < MPWin[2]
+    @assert MPWin[1] < MPWin[2] "MPWin must be a sorted 2-tuple, but MPWin = $MPWin."
+    @assert MPWin[1] <= T2Range[2] && T2Range[1] <= MPWin[2] "MPWin must overlap T2Range, but MPWin = $MPWin and T2Range = $T2Range."
 
     "Apply sigmoidal weighting to the upper limit of the short peak window in order to smooth the hard small peak window cutoff time. `Sigmoid` is the delta-T2 parameter, which is the distance on either side of the `SPWin` upper limit where the sigmoid curve reaches 10% and 90% (Units: time, must match `T2Range`)."
     Sigmoid::Union{T, Nothing} = nothing
-    @assert Sigmoid === nothing || Sigmoid > 0
+    @assert Sigmoid === nothing || Sigmoid > 0 "Sigmoid must be positive, but Sigmoid = $Sigmoid."
 
     "Suppress printing to the console."
     Silent::Bool = false

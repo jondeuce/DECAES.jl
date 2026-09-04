@@ -150,6 +150,18 @@ abstract type AbstractEPGWorkspace{T, ETL} end
 @inline echotrainlength(work::AbstractEPGWorkspace{T}) where {T} = work.ETL
 @inline decaycurve(work::AbstractEPGWorkspace) = work.dc
 
+"""
+    EPGdecaycurve_work(θ::EPGParameterization)
+    EPGdecaycurve_work(T::Type, ETL::Int)
+    EPGdecaycurve_work(T::Type, ::Val{ETL})
+
+Allocate a reusable workspace for [`EPGdecaycurve!`](@ref) with element type `T` and echo train length `ETL`.
+Passing `ETL` as a `Val` selects the workspace specialized for a statically known echo train length.
+
+See also:
+
+  - [`EPGdecaycurve!`](@ref)
+"""
 @inline EPGdecaycurve_work(θ::EPGParameterization{T, ETL}) where {T, ETL} = default_cache(θ)
 @inline EPGdecaycurve_work(::Type{T}, ETL::Int) where {T} = EPGWork_ReIm_DualVector_Split_Dynamic(T, ETL) # default for dynamic `ETL`
 @inline EPGdecaycurve_work(::Type{T}, ::Val{ETL}) where {T, ETL} = EPGWork_ReIm_DualMVector_Split(T, Val(ETL)) # default for static `ETL`
@@ -205,6 +217,19 @@ The four-argument method omits `β`, fixing the refocusing control angle at 180 
 @inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real, β::Real) = EPGdecaycurve(EPGOptions((; ETL, α = deg2rad(α), TE, T2, T1, β = deg2rad(β)))) # the arguments are degrees; the parameterization stores radians
 @inline EPGdecaycurve(ETL, α::Real, TE::Real, T2::Real, T1::Real) = EPGdecaycurve(EPGConstantFlipAngleOptions((; ETL, α = deg2rad(α), TE, T2, T1))) # the arguments are degrees; the parameterization stores radians
 @inline EPGdecaycurve(θ::EPGParameterization{T}) where {T} = EPGdecaycurve!(EPGdecaycurve_work(θ), θ)
+
+"""
+    EPGdecaycurve!(work::AbstractEPGWorkspace, θ::EPGParameterization)
+    EPGdecaycurve!(decay_curve::AbstractVector, work::AbstractEPGWorkspace, θ::EPGParameterization)
+
+In-place form of [`EPGdecaycurve`](@ref), reusing the workspace `work` allocated by [`EPGdecaycurve_work`](@ref).
+The two-argument method writes into and returns the decay curve held by `work`; the three-argument method writes into `decay_curve`.
+
+See also:
+
+  - [`EPGdecaycurve`](@ref)
+  - [`EPGdecaycurve_work`](@ref)
+"""
 @inline EPGdecaycurve!(work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}) where {T} = EPGdecaycurve!(decaycurve(work), work, θ)
 @inline EPGdecaycurve!(dc::AbstractVector{T}, work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}) where {T} = epg_decay_curve!(dc, work, θ)
 
@@ -1767,45 +1792,41 @@ function epg_decay_basis!(decay_basis::Matrix{T}, decay_basis_work::EPGCosineSer
     ETL, nT2 = size(decay_basis)
     cosine_features!(decay_basis_work, α)
 
-    # Evaluate two columns per pass, reusing each cosine feature.
-    colstride = 4 * sum(b -> min(4b, ETL) + 1, 1:cld(ETL, 4))
+    # Evaluate four columns per pass, reusing each cosine feature. The 4-row blocks are read as whole `SVector`s, so each harmonic is one broadcast-FMA per column; a trailing group repeats the last column.
+    V = SVector{4, T}
+    blocks = reinterpret(V, coeffs)
+    cs = sum(b -> min(4b, ETL) + 1, 1:cld(ETL, 4)) # coefficient blocks per basis column
     s = sin(α / 2)
     p = 0
-    @inbounds for j in 1:2:nT2
-        j2 = min(j + 1, nT2)
-        o1, o2, Δ = (j - 1) * ETL, (j2 - 1) * ETL, (j2 - j) * colstride
+    @inbounds for j in 1:4:nT2
+        j1, j2, j3, j4 = j, min(j + 1, nT2), min(j + 2, nT2), min(j + 3, nT2)
+        Δ2, Δ3, Δ4 = (j2 - j) * cs, (j3 - j) * cs, (j4 - j) * cs
+        o1, o2, o3, o4 = (j1 - 1) * ETL, (j2 - 1) * ETL, (j3 - 1) * ETL, (j4 - 1) * ETL
 
         for b in 1:cld(ETL, 4)
             i0 = 4 * (b - 1)
             L = min(i0 + 4, ETL) + 1
-            a1 = a2 = a3 = a4 = e1 = e2 = e3 = e4 = zero(T)
+            v1 = v2 = v3 = v4 = zero(V)
 
-            @simd ivdep for k in 1:L
+            for k in 1:L
                 cₖ = c[k]
-                q = p + 4 * (k - 1)
-                a1 = muladd(coeffs[q+1], cₖ, a1)
-                a2 = muladd(coeffs[q+2], cₖ, a2)
-                a3 = muladd(coeffs[q+3], cₖ, a3)
-                a4 = muladd(coeffs[q+4], cₖ, a4)
-                e1 = muladd(coeffs[q+Δ+1], cₖ, e1)
-                e2 = muladd(coeffs[q+Δ+2], cₖ, e2)
-                e3 = muladd(coeffs[q+Δ+3], cₖ, e3)
-                e4 = muladd(coeffs[q+Δ+4], cₖ, e4)
+                q = p + k
+                v1 = muladd.(blocks[q], cₖ, v1)
+                v2 = muladd.(blocks[q+Δ2], cₖ, v2)
+                v3 = muladd.(blocks[q+Δ3], cₖ, v3)
+                v4 = muladd.(blocks[q+Δ4], cₖ, v4)
             end
 
-            p += 4L
-            if i0 + 4 <= ETL
-                decay_basis[o1+i0+1], decay_basis[o1+i0+2], decay_basis[o1+i0+3], decay_basis[o1+i0+4] = abs(s * a1), abs(s * a2), abs(s * a3), abs(s * a4)
-                decay_basis[o2+i0+1], decay_basis[o2+i0+2], decay_basis[o2+i0+3], decay_basis[o2+i0+4] = abs(s * e1), abs(s * e2), abs(s * e3), abs(s * e4)
-            else
-                nr = ETL - i0
-                nr >= 1 && (decay_basis[o1+i0+1] = abs(s * a1); decay_basis[o2+i0+1] = abs(s * e1))
-                nr >= 2 && (decay_basis[o1+i0+2] = abs(s * a2); decay_basis[o2+i0+2] = abs(s * e2))
-                nr >= 3 && (decay_basis[o1+i0+3] = abs(s * a3); decay_basis[o2+i0+3] = abs(s * e3))
+            p += L
+            for r in 1:min(4, ETL - i0)
+                decay_basis[o1+i0+r] = abs(s * v1[r])
+                decay_basis[o2+i0+r] = abs(s * v2[r])
+                decay_basis[o3+i0+r] = abs(s * v3[r])
+                decay_basis[o4+i0+r] = abs(s * v4[r])
             end
         end
 
-        p += Δ
+        p += Δ4
     end
 
     return decay_basis
@@ -1822,44 +1843,33 @@ function epg_decay_basis_∂α_col!(Acol::AbstractVector{T}, dAcol::AbstractVect
     nblk = cld(ETL, 4)
     s, ds = sin(α / 2), cos(α / 2) / 2
     dds = -s / 4
-    p = 4 * (j - 1) * sum(b -> min(4b, ETL) + 1, 1:nblk)
+    V = SVector{4, T}
+    blocks = reinterpret(V, coeffs)
+    p = (j - 1) * sum(b -> min(4b, ETL) + 1, 1:nblk)
 
     @inbounds for b in 1:nblk
         i0 = 4 * (b - 1)
         L = min(i0 + 4, ETL) + 1
 
-        a1 = a2 = a3 = a4 = zero(T)
-        d1 = d2 = d3 = d4 = zero(T)
-        e1 = e2 = e3 = e4 = zero(T)
-        @simd ivdep for k in 1:L
+        av = dv = ev = zero(V)
+        for k in 1:L
             cₖ, sₖ, nₖ = c[k], sn[k], cn[k]
-            q = p + 4 * (k - 1)
-            a1 = muladd(coeffs[q+1], cₖ, a1)
-            a2 = muladd(coeffs[q+2], cₖ, a2)
-            a3 = muladd(coeffs[q+3], cₖ, a3)
-            a4 = muladd(coeffs[q+4], cₖ, a4)
-            d1 = muladd(coeffs[q+1], sₖ, d1)
-            d2 = muladd(coeffs[q+2], sₖ, d2)
-            d3 = muladd(coeffs[q+3], sₖ, d3)
-            d4 = muladd(coeffs[q+4], sₖ, d4)
-            e1 = muladd(coeffs[q+1], nₖ, e1)
-            e2 = muladd(coeffs[q+2], nₖ, e2)
-            e3 = muladd(coeffs[q+3], nₖ, e3)
-            e4 = muladd(coeffs[q+4], nₖ, e4)
+            gₖ = blocks[p+k]
+            av = muladd.(gₖ, cₖ, av)
+            dv = muladd.(gₖ, sₖ, dv)
+            ev = muladd.(gₖ, nₖ, ev)
         end
 
-        p += 4L
-        for (r, a, d, e) in ((1, a1, d1, e1), (2, a2, d2, e2), (3, a3, d3, e3), (4, a4, d4, e4))
+        p += L
+        for (r, a, a′, a″) in ((1, av[1], -dv[1], -ev[1]), (2, av[2], -dv[2], -ev[2]), (3, av[3], -dv[3], -ev[3]), (4, av[4], -dv[4], -ev[4]))
             i = i0 + r
             i <= ETL || break
-            a′ = -d
-            a″ = -e
-            dv = muladd(ds, a, s * a′)
-            ddv = muladd(dds, a, muladd(2 * ds, a′, s * a″))
+            d = muladd(ds, a, s * a′)
+            dd = muladd(dds, a, muladd(2 * ds, a′, s * a″))
             neg = a < 0
             Acol[i] = abs(s * a)
-            dAcol[i] = ifelse(neg, -dv, dv)
-            ddAcol[i] = ifelse(neg, -ddv, ddv)
+            dAcol[i] = ifelse(neg, -d, d)
+            ddAcol[i] = ifelse(neg, -dd, dd)
         end
     end
 

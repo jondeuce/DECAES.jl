@@ -243,3 +243,32 @@ end
         end
     end
 end
+
+@testset "sorttuple" begin
+    @test DECAES.sorttuple(()) === ()
+    @test DECAES.sorttuple((1.0,)) === (1.0,)
+    @test DECAES.sorttuple((3, 1, 2)) === (1, 2, 3)
+
+    # Agrees with `sort` on random tuples, and is stable, since equal keys keep their input order
+    @testset "n = $n" for n in 0:5
+        for _ in 1:50
+            t = Tuple(rand(1:4, n))
+            @test DECAES.sorttuple(t) === Tuple(sort(collect(t)))
+            p = Tuple((v, i) for (i, v) in enumerate(t))
+            @test DECAES.sorttuple(p; by = first) === Tuple(sort(collect(p); by = first))
+        end
+    end
+
+    # NaNs sort last under `lt_nan`, whichever position they enter in
+    @testset "NaN ordering" for perm in [(1, 2, 3), (1, 3, 2), (2, 1, 3), (2, 3, 1), (3, 1, 2), (3, 2, 1)]
+        t = ((2.0, :b), (NaN, :c), (1.0, :a))[collect(perm)] |> Tuple
+        s = DECAES.sorttuple(t; by = first, lt = DECAES.lt_nan)
+        @test s[1] === (1.0, :a)
+        @test s[2] === (2.0, :b)
+        @test isnan(s[3][1]) && s[3][2] === :c
+    end
+
+    # Type stable and non-allocating for the tuple sizes used above
+    @test (@inferred DECAES.sorttuple((3.0, 1.0, 2.0))) === (1.0, 2.0, 3.0)
+    @test @allocated(DECAES.sorttuple((3.0, 1.0, 2.0))) == 0
+end

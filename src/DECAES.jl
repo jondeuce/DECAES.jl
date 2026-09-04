@@ -9,27 +9,22 @@ using LinearAlgebra.BLAS: @blasfunc, BlasInt, libblastrampoline
 using LinearAlgebra.LAPACK: chklapackerror
 using Logging: Logging, ConsoleLogger, with_logger
 using Random: Random
-using Statistics: Statistics, mean, std
+using Statistics: Statistics, std
 
 # External libraries
 using ArgParse: ArgParse, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
-using Dierckx: Dierckx
 using DocStringExtensions: DocStringExtensions, @doc, FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using ForwardDiff: ForwardDiff, DiffResults, Dual
 using LoggingExtras: LoggingExtras, FileLogger, LevelOverrideLogger, TeeLogger, TransformerLogger
 using MAT: MAT
 using MuladdMacro: MuladdMacro, @muladd
 using NIfTI: NIfTI
-using NLopt: NLopt
 using ParXRec: ParXRec
 using Parameters: Parameters, @with_kw, @with_kw_noshow
 using PrecompileTools: PrecompileTools, @compile_workload, @setup_workload
 using ProgressMeter: ProgressMeter, Progress, BarGlyphs
-using Scratch: Scratch, @get_scratch!, get_scratch!
 using SpecialFunctions: SpecialFunctions, erfc, erfinv
 using StaticArrays: StaticArrays, MVector, SA, SArray, SMatrix, SVector
-using TupleTools: TupleTools
-using UnsafeArrays: UnsafeArrays, uview
 
 include("NNLS.jl")
 using .NNLS: NNLS

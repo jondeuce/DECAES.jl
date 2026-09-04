@@ -13,6 +13,11 @@ logrange(a::Real, b::Real, len::Int) = (r = exp.(range(log(a), log(b); length = 
 
 @inline lt_nan(x, y) = ifelse(isnan(x), typemax(typeof(x)), x) < ifelse(isnan(y), typemax(typeof(y)), y) # <(x, y), treating NaN as Inf
 
+@inline sorttuple(t::Tuple; by = identity, lt = isless) = sorttuple_insert(first(t), sorttuple(Base.tail(t); by, lt), by, lt) # Recursive insertion sort
+@inline sorttuple(t::Tuple{}; by = identity, lt = isless) = t
+@inline sorttuple_insert(x, t::Tuple, by, lt) = lt(by(first(t)), by(x)) ? (first(t), sorttuple_insert(x, Base.tail(t), by, lt)...) : (x, t...) # `x` precedes the first element it is not strictly greater than; equal keys match input order
+@inline sorttuple_insert(x, ::Tuple{}, by, lt) = (x,)
+
 @inline basisvector(::Type{SVector{D, T}}, i::Int) where {D, T} = SVector{D, T}(ntuple(d -> T(d == i), D))
 
 function meshgrid(::Type{T}, iters...) where {T}

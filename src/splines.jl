@@ -85,6 +85,8 @@ end
     return x
 end
 
+@inline incanonical(t) = !isnan(t) && -one(t) <= t <= one(t)
+
 function minimize(spl::CubicHermiteInterpolator{T}) where {T}
     (; u0, u1, m0, m1, dom, coeffs) = spl
     xend, uend = u0 < u1 ? (dom[1], u0) : (dom[2], u1)
@@ -113,10 +115,10 @@ function signedroots(spl::CubicHermiteInterpolator{T}, atol::T = zero(T)) where 
     (; dom, coeffs) = spl
     (t1, t2, t3), (s1, s2, s3) = signed_roots_real_cubic(coeffs)
     xlo, xhi = dom[1] + atol, dom[2] - atol
-    x1, s1 = !isnan(t1) ? (x = todomain(t1, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s1) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
-    x2, s2 = !isnan(t2) ? (x = todomain(t2, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s2) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
-    x3, s3 = !isnan(t3) ? (x = todomain(t3, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s3) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
-    (x1, s1), (x2, s2), (x3, s3) = TupleTools.sort(((x1, s1), (x2, s2), (x3, s3)); by = first, lt = lt_nan) # sort, treating NaN's as Inf
+    x1, s1 = incanonical(t1) ? (x = todomain(t1, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s1) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
+    x2, s2 = incanonical(t2) ? (x = todomain(t2, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s2) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
+    x3, s3 = incanonical(t3) ? (x = todomain(t3, dom, Val(:nearest)); xlo <= x <= xhi ? (x, s3) : (T(NaN), T(NaN))) : (T(NaN), T(NaN))
+    (x1, s1), (x2, s2), (x3, s3) = sorttuple(((x1, s1), (x2, s2), (x3, s3)); by = first, lt = lt_nan) # sort, treating NaN's as Inf
     return (x1, x2, x3), (s1, s2, s3)
 end
 roots(spl::CubicHermiteInterpolator) = signedroots(spl)[1]
@@ -268,7 +270,7 @@ function signed_roots_real_cubic(coeffs::NTuple{4, T}) where {T <: AbstractFloat
             return (zero(T), T(NaN), T(NaN)), (strictsign(coeffs[4]), T(NaN), T(NaN))
         else
             # Note: c₃ != 0, and therefore x1, x2 are both real or both NaN
-            x1, x2, x3 = TupleTools.sort((zero(T), x1, x2))
+            x1, x2, x3 = sorttuple((zero(T), x1, x2))
             s1, s2, s3 = x1 == x2 ? (zero(T), zero(T), one(T)) : x2 == x3 ? (one(T), zero(T), zero(T)) : (one(T), -one(T), one(T))
             coeffs[4] < 0 && ((s1, s2, s3) = (-s1, -s2, -s3))
             return (x1, x2, x3), (s1, s2, s3)
@@ -290,7 +292,7 @@ function signed_roots_real_cubic(coeffs::NTuple{4, T}) where {T <: AbstractFloat
         x1 = muladd(tmpsqrtQ, cos(thirdθ), -a) / 3
         x2 = muladd(tmpsqrtQ, cos(thirdθ + twothirdsπ), -a) / 3
         x3 = muladd(tmpsqrtQ, cos(thirdθ - twothirdsπ), -a) / 3
-        x1, x2, x3 = TupleTools.sort((x1, x2, x3))
+        x1, x2, x3 = sorttuple((x1, x2, x3))
         s1, s2, s3 = x1 == x2 ? (zero(T), zero(T), one(T)) : x2 == x3 ? (one(T), zero(T), zero(T)) : (one(T), -one(T), one(T))
         coeffs[4] < 0 && ((s1, s2, s3) = (-s1, -s2, -s3))
         return (x1, x2, x3), (s1, s2, s3)
@@ -306,103 +308,149 @@ signed_roots_real_cubic(coeffs::Tuple) = (@assert length(coeffs) == 4; return si
 roots_real_cubic(coeffs::Tuple) = signed_roots_real_cubic(coeffs)[1]
 
 ####
-#### Spline utils
+#### Interpolating cubic splines
 ####
 
-function make_spline(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1))
-    @assert length(X) == length(Y) && length(X) > 1
-    return Dierckx.Spline1D(X, Y; k = deg_spline, bc = "extrapolate")
+# Reusable C² cubic spline represented by Hermite segments. Boundary conditions are `:notaknot`, `:natural`, or `:zeroslope`, specified as a `Symbol` or as a tuple `(left, right)` thereof.
+const BoundaryConditions = Union{Symbol, NTuple{2, Symbol}}
+
+@inline function boundary_conditions(bc::BoundaryConditions)
+    bcl, bcr = bc isa Symbol ? (bc, bc) : bc
+    @assert bcl ∈ (:notaknot, :natural, :zeroslope) "boundary condition must be one of :notaknot, :natural, or :zeroslope, got :$bcl"
+    @assert bcr ∈ (:notaknot, :natural, :zeroslope) "boundary condition must be one of :notaknot, :natural, or :zeroslope, got :$bcr"
+    return (bcl, bcr)
 end
 
-function build_polynomials(spl::Dierckx.Spline1D, knots = Dierckx.get_knots(spl))
-    k = spl.k
-    t = knots[1:end-1]
-    coeffs = zeros(k + 1, length(t))
-    @inbounds coeffs[1, :] .= spl(t)
-    @inbounds for m in 1:k
-        coeffs[m+1, :] .= Dierckx.derivative(spl, t, m) ./ factorial(m)
-    end
-    return [Poly(@views coeffs[:, j]) for j in 1:size(coeffs, 2)]
+struct CubicSpline{T <: AbstractFloat}
+    x::Vector{T}  # knots, sorted ascending
+    u::Vector{T}  # values at the knots
+    m::Vector{T}  # slopes at the knots; also the right-hand side during the solve
+    dl::Vector{T} # subdiagonal
+    d::Vector{T}  # diagonal
+    du::Vector{T} # superdiagonal
+    npts::Base.RefValue{Int}
+end
+CubicSpline{T}(maxpts::Int) where {T <: AbstractFloat} = CubicSpline{T}(ntuple(_ -> zeros(T, maxpts), 6)..., Ref(0))
+
+@inline Base.length(spl::CubicSpline) = spl.npts[]
+@inline nsegments(spl::CubicSpline) = max(length(spl) - 1, 0)
+
+# The `i`th segment as a cubic Hermite interpolant, optionally shifted so that its roots solve `spl(x) = value`.
+@inline function segment(spl::CubicSpline{T}, i::Int, value::T = zero(T)) where {T}
+    (; x, u, m) = spl
+    @inbounds return CubicHermiteInterpolator(x[i], x[i+1], u[i] - value, u[i+1] - value, m[i], m[i+1])
 end
 
-function build_polynomial!(coeffs, spl::Dierckx.Spline1D, t)
-    @assert length(coeffs) == spl.k + 1
-    mfact = 1
-    @inbounds coeffs[1] = spl(t)
-    @inbounds for m in 1:spl.k
-        mfact *= m
-        coeffs[m+1] = Dierckx.derivative(spl, t, m) / mfact
+# Interpolate `(xs, us)` into `spl`.
+function interpolate!(spl::CubicSpline{T}, xs::AbstractVector, us::AbstractVector, bc::BoundaryConditions = :notaknot) where {T}
+    n = length(xs)
+    bcl, bcr = boundary_conditions(bc)
+    @assert length(us) == n "xs and us must have the same length, got $(length(xs)) and $(length(us))"
+    @assert 1 <= n <= length(spl.x) "spline holds at most $(length(spl.x)) knots, got $n"
+    @assert all(i -> isfinite(T(xs[i])), 1:n) && (n == 1 || all(i -> T(xs[i]) < T(xs[i+1]), 1:n-1)) "spline knots must be finite and strictly increasing"
+
+    (; x, u, m, dl, d, du) = spl
+    spl.npts[] = n
+    @inbounds for i in 1:n
+        x[i], u[i] = xs[i], us[i]
     end
-    return coeffs
+
+    # Interval widths and secant slopes
+    h(i) = @inbounds x[i+1] - x[i]
+    δ(i) = @inbounds (u[i+1] - u[i]) / h(i)
+
+    # Not-a-knot requires two intervals
+    n < 3 && (bcl === :notaknot) && (bcl = :natural)
+    n < 3 && (bcr === :notaknot) && (bcr = :natural)
+
+    if n == 1
+        @inbounds m[1] = zero(T)
+        return spl
+    elseif n == 3 && bcl === :notaknot && bcr === :notaknot
+        # Quadratic through three knots
+        @inbounds c₂ = (δ(2) - δ(1)) / (x[3] - x[1])
+        @inbounds m[1], m[2], m[3] = δ(1) - c₂ * h(1), δ(1) + c₂ * h(1), δ(1) + c₂ * (h(1) + 2 * h(2))
+        return spl
+    end
+
+    @inbounds for i in 2:n-1
+        dl[i], d[i], du[i] = h(i), 2 * (h(i - 1) + h(i)), h(i - 1)
+        m[i] = 3 * (h(i) * δ(i - 1) + h(i - 1) * δ(i))
+    end
+
+    @inbounds if bcl === :zeroslope
+        d[1], du[1], m[1] = one(T), zero(T), zero(T)
+    elseif bcl === :natural
+        d[1], du[1], m[1] = T(2), one(T), 3 * δ(1)
+    else # :notaknot
+        h₁, h₂ = h(1), h(2)
+        d[1], du[1] = h₂, h₁ + h₂
+        m[1] = ((h₁ + 2 * (h₁ + h₂)) * h₂ * δ(1) + h₁^2 * δ(2)) / (h₁ + h₂)
+    end
+
+    @inbounds if bcr === :zeroslope
+        dl[n], d[n], m[n] = zero(T), one(T), zero(T)
+    elseif bcr === :natural
+        dl[n], d[n], m[n] = one(T), T(2), 3 * δ(n - 1)
+    else # :notaknot
+        hₙ, hₙ₋₁ = h(n - 1), h(n - 2)
+        dl[n], d[n] = hₙ + hₙ₋₁, hₙ₋₁
+        m[n] = ((hₙ + 2 * (hₙ + hₙ₋₁)) * hₙ₋₁ * δ(n - 1) + hₙ^2 * δ(n - 2)) / (hₙ + hₙ₋₁)
+    end
+
+    # Thomas algorithm, overwriting `du` with the swept superdiagonal and `m` with the solution
+    @inbounds du[1] /= d[1]
+    @inbounds m[1] /= d[1]
+    @inbounds for i in 2:n
+        p = d[i] - dl[i] * du[i-1]
+        du[i] /= p
+        m[i] = (m[i] - dl[i] * m[i-1]) / p
+    end
+    @inbounds for i in n-1:-1:1
+        m[i] -= du[i] * m[i+1]
+    end
+
+    return spl
 end
 
-# Fit a spline to data `(X, Y)` and minimize `spl(x)`
-function spline_opt(X::AbstractVector, Y::AbstractVector; deg_spline = min(3, length(X) - 1))
-    @assert length(X) == length(Y) "X and Y must have the same length"
-    @assert length(X) > 1 "X and Y must have at least 2 elements"
-    @assert 0 < deg_spline <= 3 "Degree of spline must be 1, 2, or 3"
-    if deg_spline == 1
-        # Linear spline achievies minimum at one of the nodes
-        y, i = findmin(Y)
-        return @inbounds (; x = X[i], y)
+# Index of the segment containing `x`, clamping to the end segments outside the domain
+@inline function findsegment(spl::CubicSpline, x)
+    i = searchsortedlast(@views(spl.x[1:length(spl)]), x)
+    return clamp(i, 1, nsegments(spl))
+end
+
+@inline function (spl::CubicSpline{T})(x) where {T}
+    length(spl) == 1 && return @inbounds spl.u[1]
+    return segment(spl, findsegment(spl, x))(x)
+end
+
+# Minimizer of the spline over its domain and the value there
+function minimize(spl::CubicSpline{T}) where {T}
+    length(spl) == 1 && return @inbounds (spl.x[1], spl.u[1])
+    x, u = minimize(segment(spl, 1))
+    for i in 2:nsegments(spl)
+        xᵢ, uᵢ = minimize(segment(spl, i))
+        uᵢ < u && ((x, u) = (xᵢ, uᵢ))
     end
-    spl = make_spline(X, Y; deg_spline)
-    knots = Dierckx.get_knots(spl)
-    polys = build_polynomials(spl, knots)
-    x, y = @inbounds knots[1], polys[1](0) # initial lefthand point
-    atol = 100 * eps(eltype(knots)) # tolerance for real roots
-    @inbounds for (i, p) in enumerate(polys)
-        x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
-        _x, _y = x₁, p(x₁ - x₀) # check right endpoint
-        (_y < y) && (x = _x; y = _y)
-        for rᵢ in extrema(p) # extrema(p) returns the zeros of p'
-            isnan(rᵢ) && break # real roots only
-            xᵢ = x₀ + rᵢ
-            if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
-                _x, _y = clamp(xᵢ, x₀, x₁), p(rᵢ)
-                (_y < y) && (x = _x; y = _y)
-            end
+    return (x, u)
+end
+
+# Leftmost solution of `spl(x) = value` over the domain, or NaN if there is none
+function spline_root(spl::CubicSpline{T}, value::T = zero(T)) where {T}
+    for i in 1:nsegments(spl)
+        seg = segment(spl, i, value)
+        for r in roots(seg)
+            isnan(r) && break # real roots only, sorted with NaN last
+            return r
         end
     end
-    return (; x, y)
+    return T(NaN)
 end
 
-# Fit a spline to data `(X, Y)` and solve `spl(x) = value`
-function spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; deg_spline = min(3, length(X) - 1))
-    x = eltype(X)(NaN)
-    if deg_spline == 1
-        # Linear spline has at most one root in each section
-        @inbounds for i in 1:length(X)-1
-            x₀, y₀, x₁, y₁ = X[i], Y[i], X[i+1], Y[i+1]
-            if y₀ <= value <= y₁ || y₁ <= value <= y₀
-                x = y₀ == y₁ ? x₀ :
-                    y₀ ≈ value ? x₀ :
-                    y₁ ≈ value ? x₁ :
-                    clamp(x₀ + (x₁ - x₀) * ((value - y₀) / (y₁ - y₀)), x₀, x₁)
-                break
-            end
-        end
-    else
-        spl = make_spline(X, Y; deg_spline)
-        knots = Dierckx.get_knots(spl)
-        polys = build_polynomials(spl)
-        atol = 100 * eps(eltype(knots)) # tolerance for real roots
-        @inbounds for (i, p) in enumerate(polys)
-            # Solve `p(rᵢ) = value` via `p(rᵢ) - value = 0`
-            x₀, x₁ = knots[i], knots[i+1] # spline section endpoints
-            for rᵢ in roots(sub!(p, value))
-                isnan(rᵢ) && break # real roots only
-                xᵢ = x₀ + rᵢ
-                if x₀ - atol <= xᵢ <= x₁ + atol # filter roots within range
-                    xᵢ = clamp(xᵢ, x₀, x₁)
-                    x = isnan(x) ? xᵢ : min(x, xᵢ) # find the leftmost root
-                end
-            end
-            !isnan(x) && break # found a root
-        end
-    end
-    return x
-end
+# Fit a spline to the data `(X, Y)` and minimize it, or solve `spl(x) = value`
+spline_opt(X::AbstractVector, Y::AbstractVector; bc::BoundaryConditions = :notaknot) = ((x, y) = minimize(cubic_spline(X, Y; bc)); return (; x, y))
+spline_root(X::AbstractVector, Y::AbstractVector, value::Number = 0; bc::BoundaryConditions = :notaknot) = (spl = cubic_spline(X, Y; bc); return spline_root(spl, eltype(spl.x)(value)))
+cubic_spline(X::AbstractVector, Y::AbstractVector; bc::BoundaryConditions = :notaknot) = interpolate!(CubicSpline{floattype((zero(eltype(X)), zero(eltype(Y))))}(length(X)), X, Y, bc)
 
 ####
 #### Surrogate functions over discrete grids
@@ -419,9 +467,11 @@ struct CubicSplineSurrogate{T, F} <: AbstractSurrogate{1, T}
     u::Vector{T}
     idx::Vector{Int}
     npts::Base.RefValue{Int}
+    spline::CubicSpline{T}
+    bc::NTuple{2, Symbol}
 end
 
-function CubicSplineSurrogate(f, grid::Vector{SVector{1, T}}) where {T}
+function CubicSplineSurrogate(f, grid::Vector{SVector{1, T}}; bc::BoundaryConditions = :notaknot) where {T}
     return CubicSplineSurrogate(
         f,
         grid,
@@ -429,6 +479,8 @@ function CubicSplineSurrogate(f, grid::Vector{SVector{1, T}}) where {T}
         fill(T(NaN), length(grid)),
         zeros(Int, length(grid)),
         Ref(0),
+        CubicSpline{T}(length(grid)),
+        boundary_conditions(bc),
     )
 end
 
@@ -452,7 +504,7 @@ function suggest_point(surr::CubicSplineSurrogate{T}) where {T}
     idx = @views surr.idx[1:npts]
     ps = @views reinterpret(T, surr.grid)[idx]
     us = @views surr.u[idx]
-    p, u = spline_opt(ps, us)
+    p, u = minimize(interpolate!(surr.spline, ps, us, surr.bc))
     return SVector{1, T}(p), T(u)
 end
 
@@ -777,7 +829,7 @@ end
 function sorted_corners(state::DiscreteSurrogateSearcher{D, T}, box::BoundingBox{D}, x::SVector{D, T}) where {D, T}
     dist²(I) = @inbounds sum(abs2.(state.grid[I] - x))
     cs = corners(box)
-    return typeof(cs)(TupleTools.sort(Tuple(cs); by = dist²))
+    return typeof(cs)(sorttuple(Tuple(cs); by = dist²))
 end
 
 function contains(state::DiscreteSurrogateSearcher{D, T}, box::BoundingBox{D}, x::SVector{D, T}) where {D, T}
@@ -980,9 +1032,9 @@ function loss_gram!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D
     return true
 end
 
-function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1, T}) where {T}
+function CubicSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1, T}; bc::BoundaryConditions = :notaknot) where {T}
     f = Base.Fix1(loss!, prob)
-    return CubicSplineSurrogate(f, prob.αs)
+    return CubicSplineSurrogate(f, prob.αs; bc)
 end
 
 function CubicHermiteSplineSurrogate(prob::NNLSDiscreteSurrogateSearch{1, T}) where {T}

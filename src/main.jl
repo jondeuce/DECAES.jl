@@ -519,7 +519,7 @@ function get_file_infos(opts::Dict{Symbol, Any})
     elseif length(mask) == length(inputfiles)
         String.(mask) # one mask passed for each input file
     else
-        error("Number of mask files passed ($(length(mask))) does not equal the number of input image files passed ($(length(inputfiles))")
+        error("Number of mask files passed ($(length(mask))) does not equal the number of input image files passed ($(length(inputfiles)))")
     end
 
     # Get B1 map files
@@ -530,7 +530,7 @@ function get_file_infos(opts::Dict{Symbol, Any})
         @assert opts[:SetFlipAngle] === nothing "Cannot set a fixed flip angle using --SetFlipAngle when passing B1 maps using --B1map"
         String.(B1map) # one B1map passed for each input file
     else
-        error("Number of B1 map files passed ($(length(B1map))) does not equal the number of input image files passed ($(length(inputfiles))")
+        error("Number of B1 map files passed ($(length(B1map))) does not equal the number of input image files passed ($(length(inputfiles)))")
     end
 
     # Create file_info dictionaries
@@ -613,6 +613,17 @@ function reset_nifti_output_header!(header)
     return header
 end
 
+"""
+    load_image(filename; ndims::Int = 4)
+
+Load an image from `filename` as an `ndims`-dimensional `Array{Float64}`.
+Supported file types are `.mat`, `.nii`, `.nii.gz`, `.par`, `.xml`, and `.rec`.
+
+NIfTI values are scaled as `scl_slope * x + scl_inter`, unless `scl_slope == 0`, in which case the raw values are returned.
+For MAT files, an array of the requested dimensionality must be present; if several are found, the first in sorted order is used and a warning is issued.
+An array with fewer than `ndims` dimensions is reshaped with additional trailing singleton dimensions;
+an array with more than `ndims` dimensions is truncated to the first volume along its trailing dimensions.
+"""
 function load_image(filename, ::Val{N}) where {N}
     if maybe_get_suffix(filename) == ".mat"
         # Load first `N`-dimensional array which is found, or throw an error if none are found
@@ -648,8 +659,7 @@ function load_image(filename, ::Val{N}) where {N}
     # Ensure `data` has exactly N dimensions, dropping or selecting trailing dimensions as needed
     data = ensure_ndims(filename, data, Val(N))
 
-    # Currently, the pipeline is ~twice as fast on Float64 arrays than Float32 arrays (unclear why).
-    # However, the MATLAB toolbox converts images to double as well, so here we simply do the same
+    # Use a consistent floating-point type throughout the pipeline
     sz = ntuple(i -> size(data, i), N)
     image = copyto!(Array{Float64, N}(undef, sz), data)
 

@@ -101,25 +101,60 @@ function test_quadratic_roots()
 end
 
 function test_cubic_splines()
-    @testset "npts = $npts, deg_spline = $deg_spline" for npts in 2:5, deg_spline in 1:min(npts - 1, 3)
-        X = range(-0.5, 2.0; length = npts)
-        Y = randn(npts)
-
-        spl = DECAES.make_spline(X, Y; deg_spline)
-        (; x, y) = DECAES.spline_opt(X, Y; deg_spline)
-        ŷ = minimum(spl, range(X[1], X[end]; length = 100))
-        @test X[1] <= x <= X[end]
-        @test spl(x) ≈ y
-        @test ŷ >= y - 1e-12
-
-        x̄ = DECAES.spline_root(X, Y, y - 1; deg_spline)
-        @test isnan(x̄)
-
-        ȳ = (minimum(Y) + maximum(Y)) / 2
-        x̄ = DECAES.spline_root(X, Y, ȳ; deg_spline)
-        @test X[1] <= x̄ <= X[end]
-        @test spl(x̄) ≈ ȳ
+    # Not-a-knot should reproduce cubic data exactly
+    @testset "not-a-knot on cubic data, npts = $npts" for npts in 4:8
+        c = ntuple(_ -> randn(), 4)
+        x = sort(randn(npts))
+        y = evalpoly.(x, Ref(c))
+        spl = DECAES.cubic_spline(x, y)
+        @test all(isapprox(spl(t), evalpoly(t, c); rtol = 1e-14, atol = 1e-14) for t in range(x[1], x[end]; length = 64))
     end
+
+    @testset "bc = $bc, npts = $npts" for bc in (:notaknot, :natural, :zeroslope, (:notaknot, :zeroslope), (:zeroslope, :notaknot), (:natural, :zeroslope), (:notaknot, :natural)), npts in 2:8
+        x = collect(range(-0.5, 2.0; length = npts))
+        npts > 2 && (x[2:end-1] .+= (0.4 * step(range(-0.5, 2.0; length = npts))) .* (rand(npts - 2) .- 0.5)) # unequal spacing
+        y = randn(npts)
+        spl = DECAES.cubic_spline(x, y; bc)
+
+        # Interpolation is exact at the knots
+        @test all(spl(x[i]) ≈ y[i] for i in 1:npts)
+
+        # Second derivatives agree from either side of each interior knot, and the end conditions hold
+        h(i) = x[i+1] - x[i]
+        δ(i) = (y[i+1] - y[i]) / h(i)
+        curvature_right(i) = 2 * (3 * δ(i) - 2 * spl.m[i] - spl.m[i+1]) / h(i)
+        curvature_left(i) = 2 * (spl.m[i-1] + 2 * spl.m[i] - 3 * δ(i - 1)) / h(i - 1)
+        scale = maximum(abs, y) / minimum(h(i) for i in 1:npts-1)^2
+        for i in 2:npts-1
+            @test curvature_left(i) ≈ curvature_right(i) rtol = 1e-8 atol = 1e-8 * scale
+        end
+        bcl, bcr = DECAES.boundary_conditions(bc)
+        npts < 3 && ((bcl, bcr) = (bcl === :notaknot ? :natural : bcl, bcr === :notaknot ? :natural : bcr)) # not-a-knot needs two intervals on its side
+        bcl === :natural && @test abs(curvature_right(1)) <= 1e-8 * scale
+        bcr === :natural && @test abs(curvature_left(npts)) <= 1e-8 * scale
+        bcl === :zeroslope && @test spl.m[1] == 0
+        bcr === :zeroslope && @test spl.m[npts] == 0
+
+        # The minimizer is not larger than a brute-force search
+        opt = DECAES.spline_opt(x, y; bc)
+        x̄, ȳ = opt.x, opt.y
+        xs = range(x[1], x[end]; length = 4096)
+        @test x[1] <= x̄ <= x[end]
+        @test spl(x̄) ≈ ȳ
+        @test ȳ <= minimum(spl, xs) + 1e-14
+
+        # A value below the minimum has no root; a value inside the range produces the leftmost root
+        @test isnan(DECAES.spline_root(x, y, ȳ - 1; bc))
+        v = (minimum(y) + maximum(y)) / 2
+        x̂ = DECAES.spline_root(x, y, v; bc)
+        @test x[1] <= x̂ <= x[end]
+        @test spl(x̂) ≈ v
+        @test all(!isapprox(spl(t), v; rtol = 1e-14, atol = 1e-14) for t in range(x[1], x̂; length = 64)[1:end-1] if t < x̂ - 1e-8)
+    end
+
+    @test_throws AssertionError DECAES.cubic_spline([0.0, 0.0], [1.0, 2.0])
+    @test_throws AssertionError DECAES.cubic_spline([1.0, 0.0], [1.0, 2.0])
+    @test_throws AssertionError DECAES.cubic_spline([0.0, Inf], [1.0, 2.0])
 end
 
 function test_cubic_spline_surrogate()
@@ -414,7 +449,7 @@ end
         @testset "quadratic" test_quadratic_roots()
     end
     @testset "cubic" begin
-        @testset "utils" test_cubic_splines()
+        @testset "interpolation" test_cubic_splines()
     end
     @testset "surrogate splines" begin
         @testset "cubic" test_cubic_spline_surrogate()

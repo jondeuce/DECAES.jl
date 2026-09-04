@@ -532,6 +532,35 @@ end
     return nothing
 end
 
+# Apply reflection t to columns col1:col2 of C, two per pass so each sweep of the reflector serves both.
+@inline function apply_householder_to_cols!(C::AbstractMatrix{T}, col1::Int, col2::Int, work::NNLSWorkspace{T}, t::Int) where {T}
+    (; H, htau, hpos, hm1) = work
+    @inbounds begin
+        ip, m1, tau = hpos[t], hm1[t], htau[t]
+        col = col1
+        while col + 1 <= col2
+            s1, s2 = C[ip, col], C[ip, col+1]
+            @simd for i in ip+1:m1
+                hᵢ = H[i, t]
+                s1 = s1 + C[i, col] * hᵢ
+                s2 = s2 + C[i, col+1] * hᵢ
+            end
+            s1 *= -tau
+            s2 *= -tau
+            C[ip, col] = C[ip, col] + s1
+            C[ip, col+1] = C[ip, col+1] + s2
+            @simd ivdep for i in ip+1:m1
+                hᵢ = H[i, t]
+                C[i, col] = C[i, col] + s1 * hᵢ
+                C[i, col+1] = C[i, col+1] + s2 * hᵢ
+            end
+            col += 2
+        end
+        col <= col2 && apply_householder_to_col!(C, col, work, t)
+    end
+    return nothing
+end
+
 # Compute the dual, i.e. the negative gradient, for the active-set columns j = nsetp+1:n:
 #   w[j] = A0[1:mdata, idx[j]]' * r,   r = b0 - A0[:, idx[1:nsetp]] * x₊,
 # where x₊ = zz[1:nsetp] is the current passive-set solution and A0 is the caller's pristine matrix, indexed by original column.
@@ -869,9 +898,7 @@ function unsafe_nnls!(
             tau == -2 && break # transforms full; continue with what we have
             tau < 0 && continue # numerically dependent; skip
             if hlen[] > hl0 # keep the still-staged seeds reduced against the new reflection
-                for t2 in t+1:nwarm
-                    apply_householder_to_col!(H, sbase + t2, work, hlen[])
-                end
+                apply_householder_to_cols!(H, sbase + t + 1, sbase + nwarm, work, hlen[])
             end
             nsetp += 1
             idx[nsetp], idx[jmax] = idx[jmax], idx[nsetp]
@@ -1173,9 +1200,7 @@ function unsafe_nnls!(
             tau == -2 && break # transforms full; continue with what we have
             tau < 0 && continue # numerically dependent; skip
             if hlen[] > hl0 # keep the still-staged seeds reduced against the new reflection
-                for t2 in t+1:nwarm
-                    apply_householder_to_col!(H, sbase + t2, work, hlen[])
-                end
+                apply_householder_to_cols!(H, sbase + t + 1, sbase + nwarm, work, hlen[])
             end
             if diag[idx[jmax]] == 0
                 m += 1
@@ -1460,6 +1485,7 @@ struct NNLSGram{T}
     w::Vector{T}             # dual A'r (length n)
     dinv::Vector{T}          # reciprocals of the Cholesky diagonal, so the O(p²) column updates multiply instead of divide
     y::Vector{T}             # scratch for the triangular solve in `inv_quadratic_form` (length n)
+    jfree::Vector{Int}       # inactive columns, gathered so that the dual is computed four columns at a time
 end
 
 function NNLSGram(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
@@ -1469,6 +1495,7 @@ function NNLSGram(A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
         zeros(T, n, n), zeros(T, n, n),
         zeros(T, n), Ref(zero(T)),
         zeros(T, n), zeros(T, m), zeros(T, n), zeros(T, n), zeros(T, n),
+        zeros(Int, n),
     )
 end
 
@@ -1476,14 +1503,30 @@ end
 function load!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}) where {T}
     (; c) = gp
     m, n = size(A)
-    cmax = zero(T)
-    @inbounds for j in 1:n
+    j = 1
+    @inbounds while j + 3 <= n
+        s1 = s2 = s3 = s4 = zero(T)
+        @simd for i in 1:m
+            bᵢ = b[i]
+            s1 = muladd(A[i, j], bᵢ, s1)
+            s2 = muladd(A[i, j+1], bᵢ, s2)
+            s3 = muladd(A[i, j+2], bᵢ, s3)
+            s4 = muladd(A[i, j+3], bᵢ, s4)
+        end
+        c[j], c[j+1], c[j+2], c[j+3] = s1, s2, s3, s4
+        j += 4
+    end
+    @inbounds while j <= n
         s = zero(T)
         @simd for i in 1:m
             s = muladd(A[i, j], b[i], s)
         end
         c[j] = s
-        cmax = max(cmax, abs(s))
+        j += 1
+    end
+    cmax = zero(T)
+    @inbounds for j in 1:n
+        cmax = max(cmax, abs(c[j]))
     end
     gp.cscale[] = cmax
     return gp
@@ -1499,10 +1542,8 @@ function set_active!(gp::NNLSGram{T}, A::AbstractMatrix{T}, idx0::AbstractVector
         P[t] = j
         inP[j] = true
     end
-    @inbounds for t in 1:np0, s in 1:t
-        g = coldot(A, P[s], P[t], m)
-        GP[s, t] = g
-        GP[t, s] = g
+    @inbounds for t in 1:np0
+        gram_column!(GP, A, P, P[t], t, t, m)
     end
     gp.np[] = np0
     return gp
@@ -1515,11 +1556,7 @@ end
     @inbounds begin
         P[p] = j
         inP[j] = true
-        for s in 1:p
-            g = coldot(A, P[s], j, m)
-            GP[s, p] = g
-            GP[p, s] = g
-        end
+        gram_column!(GP, A, P, j, p, p, m)
     end
     np[] = p
     return gp
@@ -1545,12 +1582,46 @@ end
     return gp
 end
 
-@inline function coldot(A::AbstractMatrix{T}, ji::Int, jj::Int, m::Int) where {T}
+@inline function coldot(A::AbstractMatrix{T}, j1::Int, j2::Int, m::Int) where {T}
     s = zero(T)
     @inbounds @simd for i in 1:m
-        s = muladd(A[i, ji], A[i, jj], s)
+        s = muladd(A[i, j1], A[i, j2], s)
     end
     return s
+end
+
+# Dot products of four columns against one shared column: four independent FMA chains, one load of A[:, j] shared by all four.
+@inline function coldot4(A::AbstractMatrix{T}, j::Int, P::AbstractVector{Int}, s0::Int, m::Int) where {T}
+    j1, j2, j3, j4 = P[s0], P[s0+1], P[s0+2], P[s0+3]
+    g1 = g2 = g3 = g4 = zero(T)
+    @inbounds @simd for i in 1:m
+        aᵢ = A[i, j]
+        g1 = muladd(aᵢ, A[i, j1], g1)
+        g2 = muladd(aᵢ, A[i, j2], g2)
+        g3 = muladd(aᵢ, A[i, j3], g3)
+        g4 = muladd(aᵢ, A[i, j4], g4)
+    end
+    return g1, g2, g3, g4
+end
+
+# Gram column p of the active set against P[1:np], four rows at a time.
+@inline function gram_column!(GP::Matrix{T}, A::AbstractMatrix{T}, P::AbstractVector{Int}, j::Int, p::Int, np::Int, m::Int) where {T}
+    s = 1
+    @inbounds while s + 3 <= np
+        g = coldot4(A, j, P, s, m)
+        for t in 1:4
+            GP[s+t-1, p] = g[t]
+            GP[p, s+t-1] = g[t]
+        end
+        s += 4
+    end
+    @inbounds while s <= np
+        g = coldot(A, P[s], j, m)
+        GP[s, p] = g
+        GP[p, s] = g
+        s += 1
+    end
+    return GP
 end
 
 # ||x(μ)||² from the Gram path's active-set solution, valid immediately after a successful `solve!`, which leaves xp[1:np] holding the coefficients on P[1:np]
@@ -1600,7 +1671,7 @@ end
 # Returns the squared data residual ||Ax - b||², excluding the μ²||x||² penalty so as to match `resnorm_sq`, or NaN on failure, on which the caller falls back to the QR-based solver.
 # On success the active set is left at the solution, warm-starting the next μ.
 function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ::T) where {T}
-    (; P, inP, np, GP, L, c, xp, r, w, dinv) = gp
+    (; P, inP, np, GP, L, c, xp, r, w, dinv, jfree) = gp
     m, n = size(A)
     μ² = μ * μ
 
@@ -1693,7 +1764,20 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
         lvalid = p
 
         # xp = (GP + μ²I) \ c_P via forward/back substitution
-        for i in 1:p
+        i = 1
+        while i + 1 <= p
+            s1, s2 = c[P[i]], c[P[i+1]]
+            @simd for k in 1:i-1
+                xₖ = xp[k]
+                s1 = s1 - L[k, i] * xₖ
+                s2 = s2 - L[k, i+1] * xₖ
+            end
+            s1 = s1 * dinv[i]
+            xp[i] = s1
+            xp[i+1] = (s2 - L[i, i+1] * s1) * dinv[i+1]
+            i += 2
+        end
+        if i <= p
             s = c[P[i]]
             @simd for k in 1:i-1
                 s = s - L[k, i] * xp[k]
@@ -1701,14 +1785,19 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
             xp[i] = s * dinv[i]
         end
 
-        # Column-oriented back substitution for contiguous access to L
-        for i in p:-1:1
+        # Column-oriented back substitution for contiguous access to L, two columns per pass so each sweep of `xp` serves both
+        i = p
+        while i >= 2
             xi = xp[i] * dinv[i]
             xp[i] = xi
-            @simd for k in 1:i-1
-                xp[k] = xp[k] - L[k, i] * xi
+            xi1 = (xp[i-1] - L[i-1, i] * xi) * dinv[i-1]
+            xp[i-1] = xi1
+            @simd for k in 1:i-2
+                xp[k] = xp[k] - L[k, i] * xi - L[k, i-1] * xi1
             end
+            i -= 2
         end
+        i == 1 && (xp[1] = xp[1] * dinv[1])
 
         # Feasibility: drop the most negative coefficient, if any
         imv, xmin = 0, zero(T)
@@ -1752,16 +1841,43 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
             res² = muladd(r[i], r[i], res²)
         end
 
-        # Compute inactive duals and track the worst KKT violation.
-        wmax, jmax = wtol, 0
+        # Compute inactive duals and track the worst KKT violation. Four columns per pass: four independent FMA chains, one load of `r` shared by all four.
+        nfree = 0
         for jj in 1:n
-            inP[jj] && continue
+            if !inP[jj]
+                nfree += 1
+                jfree[nfree] = jj
+            end
+        end
+
+        jj = 1
+        while jj + 3 <= nfree
+            j1, j2, j3, j4 = jfree[jj], jfree[jj+1], jfree[jj+2], jfree[jj+3]
+            s1 = s2 = s3 = s4 = zero(T)
+            @simd for i in 1:m
+                rᵢ = r[i]
+                s1 = muladd(A[i, j1], rᵢ, s1)
+                s2 = muladd(A[i, j2], rᵢ, s2)
+                s3 = muladd(A[i, j3], rᵢ, s3)
+                s4 = muladd(A[i, j4], rᵢ, s4)
+            end
+            w[j1], w[j2], w[j3], w[j4] = s1, s2, s3, s4
+            jj += 4
+        end
+        while jj <= nfree
+            j1 = jfree[jj]
             s = zero(T)
             @simd for i in 1:m
-                s = muladd(A[i, jj], r[i], s)
+                s = muladd(A[i, j1], r[i], s)
             end
-            w[jj] = s
-            s > wmax && ((wmax, jmax) = (s, jj))
+            w[j1] = s
+            jj += 1
+        end
+
+        wmax, jmax = wtol, 0
+        for t in 1:nfree
+            j1 = jfree[t]
+            w[j1] > wmax && ((wmax, jmax) = (w[j1], j1))
         end
 
         if jmax > 0
@@ -2007,7 +2123,20 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
         lvalid = p
 
         # xp = GP \ c_P via forward/back substitution
-        for i in 1:p
+        i = 1
+        while i + 1 <= p
+            s1, s2 = c[P[i]], c[P[i+1]]
+            @simd for k in 1:i-1
+                xₖ = xp[k]
+                s1 = s1 - L[k, i] * xₖ
+                s2 = s2 - L[k, i+1] * xₖ
+            end
+            s1 = s1 * dinv[i]
+            xp[i] = s1
+            xp[i+1] = (s2 - L[i, i+1] * s1) * dinv[i+1]
+            i += 2
+        end
+        if i <= p
             s = c[P[i]]
             @simd for k in 1:i-1
                 s = s - L[k, i] * xp[k]
@@ -2015,14 +2144,19 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
             xp[i] = s * dinv[i]
         end
 
-        # Column-oriented back substitution for contiguous access to L
-        for i in p:-1:1
+        # Column-oriented back substitution for contiguous access to L, two columns per pass so each sweep of `xp` serves both
+        i = p
+        while i >= 2
             xi = xp[i] * dinv[i]
             xp[i] = xi
-            @simd for k in 1:i-1
-                xp[k] = xp[k] - L[k, i] * xi
+            xi1 = (xp[i-1] - L[i-1, i] * xi) * dinv[i-1]
+            xp[i-1] = xi1
+            @simd for k in 1:i-2
+                xp[k] = xp[k] - L[k, i] * xi - L[k, i-1] * xi1
             end
+            i -= 2
         end
+        i == 1 && (xp[1] = xp[1] * dinv[1])
 
         # Feasibility
         imv, xmin = 0, zero(T)
@@ -2065,12 +2199,21 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
         feasible = true
         jentered = 0
 
-        # KKT dual w = c − G[:, P]x_P at n·p flops on contiguous Gram columns, two active columns per pass so each load of w feeds both
+        # KKT dual w = c − G[:, P]x_P at n·p flops on contiguous Gram columns, four active columns per pass so each load of w feeds all four
         @simd ivdep for j in 1:n
             w[j] = c[j]
         end
 
         t = 1
+        while t + 3 <= p
+            x1, x2, x3, x4 = xp[t], xp[t+1], xp[t+2], xp[t+3]
+            j1, j2, j3, j4 = P[t], P[t+1], P[t+2], P[t+3]
+            @simd ivdep for j in 1:n
+                w[j] = w[j] - x1 * G[j, j1] - x2 * G[j, j2] - x3 * G[j, j3] - x4 * G[j, j4]
+            end
+            t += 4
+        end
+
         while t + 1 <= p
             x1, x2 = xp[t], xp[t+1]
             j1, j2 = P[t], P[t+1]

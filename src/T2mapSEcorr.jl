@@ -208,7 +208,7 @@ function T2mapSEcorr!(
             reset_voxel_chains!(thread_buffer)
             GC.@preserve thread_buffer maps dist image @inbounds for j in inds
                 I = indices[j]
-                voxelwise_T2_distribution!(thread_buffer, maps, dist, uview(image, I, :), opts, I)
+                voxelwise_T2_distribution!(thread_buffer, maps, dist, view(image, I, :), opts, I)
             end
         end
     end
@@ -307,7 +307,7 @@ epg_decay_basis!(f::EPGBasisSetFunctor{T}, decay_basis::AbstractMatrix{T}, x::SV
 function epg_decay_basis!(decay_basis::AbstractMatrix{T}, decay_curve_work::AbstractEPGWorkspace{T}, θ::EPGParameterization{T}, T2_times::AbstractVector) where {T}
     # Compute the NNLS basis over T2 space
     @inbounds for j in 1:length(T2_times)
-        decay_curve = uview(decay_basis, :, j)
+        decay_curve = view(decay_basis, :, j)
         θj = restructure(θ, (; T2 = T2_times[j])) # remake options with T2 of basis `j`
         EPGdecaycurve!(decay_curve, decay_curve_work, θj)
     end
@@ -331,8 +331,8 @@ end
 function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T}, θ::EPGParameterization{T}, T2_times::AbstractVector) where {T}
     # Compute the NNLS basis over T2 space
     @inbounds for j in 1:length(T2_times)
-        decay_curve = uview(decay_basis, :, j)
-        ∇decay_curve = uview(∇decay_basis, :, j, :)
+        decay_curve = view(decay_basis, :, j)
+        ∇decay_curve = view(∇decay_basis, :, j, :)
         θj = restructure(θ, (; T2 = T2_times[j])) # remake options with T2 of basis `j`
         decay_curve_jac!(∇decay_curve, decay_curve, θj)
     end

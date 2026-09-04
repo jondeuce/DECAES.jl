@@ -488,25 +488,23 @@ function lcurve_geometry(ξ²::T, η²::T, q::T, μ::T) where {T}
 end
 
 function gradient_temps(work::NNLSTikhonovRegProblem{T}) where {T}
-    GC.@preserve work begin
-        (; nnls_work) = work.nnls_prob
-        B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
-        tmp = uview(work.buffers.tmp, 1:NNLS.ncomponents(nnls_work))
-        NNLS.positive_solution!(nnls_work, tmp)
+    (; nnls_work) = work.nnls_prob
+    B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
+    tmp = view(work.buffers.tmp, 1:NNLS.ncomponents(nnls_work))
+    NNLS.positive_solution!(nnls_work, tmp)
 
-        μ = regparam(work)
-        NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
-        xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ‖U'\x‖^2
+    μ = regparam(work)
+    NNLS.solve_triangular_system!(tmp, B, Val(true)) # tmp = U'\x
+    xᵀB⁻¹x = sum(abs2, tmp) # x'B\x = x'(U'U)\x = ‖U'\x‖^2
 
-        return (; μ, xᵀB⁻¹x)
-    end
+    return (; μ, xᵀB⁻¹x)
 end
 
 function hessian_temps(work::NNLSTikhonovRegProblem{T}) where {T}
     GC.@preserve work begin
         (; nnls_work) = work.nnls_prob
         B = cholesky!(NNLS.NormalEquation(), nnls_work) # B = A'A + μ²I = U'U
-        tmp = uview(work.buffers.tmp, 1:NNLS.ncomponents(nnls_work))
+        tmp = view(work.buffers.tmp, 1:NNLS.ncomponents(nnls_work))
         NNLS.positive_solution!(nnls_work, tmp)
 
         μ = regparam(work)
@@ -771,7 +769,7 @@ function lsqnonneg_chi2!(work::NNLSChi2RegProblem{T}, chi2_target::T; method::Sy
 
     elseif method === :brent_gram
         # The same root problem and tolerance as `:brent`, but evaluated on the Gram fast path, warm-chained across μ, with only the residual norm reaching the root finder.
-        # Where χ²(μ) is flat this pins μ only to within the root-tolerance band, whereas `:brent` reproduces the reference implementation's evaluation path exactly.
+        # Where χ²(μ) is flat this pins μ only to within the root-tolerance band, whereas `:brent` evaluates the full QR solve at each μ and pins it exactly.
         nnls_gram_setup!(work) # seed the Gram fast path from the unregularized active set
         function f_brent_gram(logμ)
             res², _ = nnls_gram_losses!(work, exp(logμ))
@@ -1631,25 +1629,7 @@ function lsqnonneg_gcv!(work::NNLSGCVRegProblem{T}; method = :brent, rtol = 0.0,
     end
     𝒢_and_∇𝒢(logμ) = gcv_and_dgcv_dlogμ!(work, logμ)
 
-    if method === :nlopt
-        # alg = :LN_COBYLA # local, gradient-free, linear approximation of objective
-        alg = :LN_BOBYQA # local, gradient-free, quadratic approximation of objective
-        # alg = :GN_AGS # global, gradient-free, hilbert curve based dimension reduction
-        # alg = :LN_NELDERMEAD # local, gradient-free, simplex method
-        # alg = :LN_SBPLX # local, gradient-free, subspace searching simplex method
-        # alg = :LD_CCSAQ # local, first-order (rough ranking: [:LD_MMA, :LD_SLSQP, :LD_LBFGS, :LD_CCSAQ, :LD_AUGLAG])
-        opt               = NLopt.Opt(alg, 1)
-        opt.lower_bounds  = Float64(logμ₋)
-        opt.upper_bounds  = Float64(logμ₊)
-        opt.xtol_abs      = Float64(atol)
-        opt.xtol_rel      = Float64(rtol)
-        opt.ftol_abs      = 0.0
-        opt.ftol_rel      = 0.0
-        opt.min_objective = (logμ, ∇logμ) -> @inbounds Float64(𝒢(T(logμ[1])))
-        minf, minx, ret   = NLopt.optimize(opt, Float64[logμ₀])
-        logmu_final       = @inbounds T(minx[1])
-        𝒢_final           = T(minf)
-    elseif method === :brent
+    if method === :brent
         # Gradient-free golden-section/parabolic search over the full bounds. Convergence needs the bracket width to reach `atol`, not merely a good point, so a warm start cannot speed it up without narrowing the bounds a priori.
         logmu_final, 𝒢_final = brent_minimize(𝒢, logμ₋, logμ₊; xrtol = T(rtol), xatol = T(atol), maxiters)
     elseif method === :brent_newton

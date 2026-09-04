@@ -391,6 +391,14 @@ end
         @test convert(Dict{String, Any}, fixed_maps)["refangleset"] == 180.0
     end
 
+    @testset "peak windows must overlap T2Range" begin
+        opts = (; MatrixSize = (2, 2, 1), nT2 = 20, T2Range = (10e-3, 2.0), Silent = true)
+        @test T2partOptions(; opts..., SPWin = (10e-3, 25e-3), MPWin = (25e-3, 200e-3)) isa T2partOptions
+        @test T2partOptions(; opts..., SPWin = (1e-5, 10e-3), MPWin = (2.0, 5.0)) isa T2partOptions # touching either endpoint of T2Range is enough
+        @test_throws AssertionError T2partOptions(; opts..., SPWin = (5.0, 10.0), MPWin = (25e-3, 200e-3))
+        @test_throws AssertionError T2partOptions(; opts..., SPWin = (10e-3, 25e-3), MPWin = (1e-5, 5e-3))
+    end
+
     @test_throws Exception DECAES.verify_cli_args!(Dict{Symbol, Any}(:T2map => true, :T2part => false, :OutputFormat => "hdf5"))
 end
 

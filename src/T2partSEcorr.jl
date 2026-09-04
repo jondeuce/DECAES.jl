@@ -6,7 +6,7 @@
     mgm::Array{T, 3}
 end
 
-Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Parts) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldsof(T2Parts, Vector) if getfield(maps, f) !== nothing])
+Base.convert(::Type{Dict{Symbol, Any}}, maps::T2Parts) = Dict{Symbol, Any}(Any[f => getfield(maps, f) for f in fieldsof(T2Parts, Vector)])
 Base.convert(::Type{Dict{String, Any}}, maps::T2Parts) = Dict{String, Any}(Any[string(k) => v for (k, v) in convert(Dict{Symbol, Any}, maps)])
 
 imagelike_fieldnames(parts::T2Parts) = fieldsof(typeof(parts), Vector{Symbol})
@@ -99,7 +99,7 @@ end
 # Save thread local results to output maps
 # =========================================================
 function voxelwise_T2_parts!(thread_buffer, maps, T2distributions, o::T2partOptions{T}, I) where {T}
-    (; dist, T2_times, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights) = thread_buffer
+    (; dist, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights) = thread_buffer
 
     # Return if distribution contains NaN entries
     @inbounds for j in 1:o.nT2
@@ -155,7 +155,7 @@ function thread_buffer_maker(o::T2partOptions{T}) where {T}
     logT2_times_sp = logT2_times[sp_range]
     logT2_times_mp = logT2_times[mp_range]
     weights        = sigmoid_weights(o)
-    return (; dist, T2_times, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights)
+    return (; dist, sp_range, mp_range, logT2_times_sp, logT2_times_mp, weights)
 end
 
 function sigmoid_weights(o::T2partOptions{T}) where {T}

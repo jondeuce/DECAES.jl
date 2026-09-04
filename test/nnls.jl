@@ -1854,7 +1854,6 @@ function test_lsqnonneg_gcv(m, n)
     # GCV minimization methods shouldn't fail for any m, n
     @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :brent).mu)
     @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :brent_newton).mu)
-    @test isfinite(DECAES.lsqnonneg_gcv!(work; method = :nlopt).mu)
 
     #TODO: Test that different GCV minimization methods are consistent when m >= n
 
