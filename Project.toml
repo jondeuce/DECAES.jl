@@ -1,6 +1,6 @@
 name = "DECAES"
 uuid = "d84fb938-a666-558e-89d9-d531edc6724f"
-version = "0.6.1"
+version = "0.7.0"
 authors = ["Jonathan Doucette <jdoucette@physics.ubc.ca>"]
 
 [workspace]

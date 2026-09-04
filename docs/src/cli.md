@@ -9,7 +9,7 @@ After [installing DECAES](@ref installation), use one of these equivalent comman
 **1. Recommended: `decaes` launcher**
 
 ```bash
-$ decaes <COMMAND LINE ARGS>
+decaes <COMMAND LINE ARGS>
 ```
 
 !!! note
@@ -18,7 +18,7 @@ $ decaes <COMMAND LINE ARGS>
 **2. Julia `-e` flag**
 
 ```bash
-$ julia --project=@decaes --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS>
+julia --project=@decaes --threads=auto -e 'using DECAES; main()' -- <COMMAND LINE ARGS>
 ```
 
 !!! note

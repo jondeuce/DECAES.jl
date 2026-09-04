@@ -28,7 +28,7 @@ Each component $x_{\mu,j}$ is the nonnegative amplitude associated with decay ti
 Install DECAES using Julia v1.9 or later:
 
 ```bash
-$ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
+julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
 ```
 
 This installs DECAES in the named project `@decaes` and builds the command-line launcher `~/.julia/bin/decaes`.
@@ -38,7 +38,7 @@ This installs DECAES in the named project `@decaes` and builds the command-line 
 Update DECAES with:
 
 ```bash
-$ julia --project=@decaes -e 'import Pkg; Pkg.update("DECAES"); Pkg.build("DECAES")'
+julia --project=@decaes -e 'import Pkg; Pkg.update("DECAES"); Pkg.build("DECAES")'
 ```
 
 ## Myelin water imaging

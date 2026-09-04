@@ -28,7 +28,7 @@ If you use DECAES in your research, please [cite our work](./CITATION.bib):
 Install Julia v1.9 or later using the official [`juliaup`](https://github.com/JuliaLang/juliaup) installer, then run:
 
 ```bash
-$ julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
+julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'
 ```
 
 This will do two things:
@@ -60,26 +60,22 @@ Find package documentation at the above link, which includes:
 
 ## Benchmarks
 
-Due to performance optimizations enabled by Julia, DECAES is *fast*.
-As an illustration, here is a comparison between DECAES and [UBC MWF MATLAB toolbox](https://github.com/ubcmri/ubcmwf) T2-distribution computation times for two multi-spin echo (MSE) datasets:
+DECAES is highly optimized and *fast*.
+The table below shows example processing times for DECAES v0.7.0 on two multi-spin echo (MSE) datasets:
 
 <center>
 
-| Dataset     | Matrix Size     | CPU                          | Cores | Threads | MATLAB     | **DECAES** |
-| :---:       | :---:           | :---:                        | :---: | :---:   | :---:      | :---:      |
-| 56-echo MSE | 240 x 240 x 113 | Intel Xeon E5-2640           | 12    | 24      | 1h:25m:01s | **1m:07s** |
-| 48-echo MSE | 240 x 240 x 48  | Intel Xeon E5-2640           | 12    | 24      | 59m:40s    | **40s**    |
-| 56-echo MSE | 240 x 240 x 113 | AMD Ryzen 9 3950X            | 16    | 32      | 22m:33s    | **15.6s**  |
-| 48-echo MSE | 240 x 240 x 48  | AMD Ryzen 9 3950X            | 16    | 32      | 17m:56s    | **9.3s**   |
-| 56-echo MSE | 240 x 240 x 113 | AMD Ryzen Threadripper 3970X | 32    | 64      | --         | **7.7s**   |
-| 48-echo MSE | 240 x 240 x 48  | AMD Ryzen Threadripper 3970X | 32    | 64      | --         | **4.3s**   |
-<!-- | 48-echo MSE | 240 x 240 x 48  | Intel i5 4200U          | 2     | 4       | 4h:35m:18s | **6m:42s** | -->
-<!-- | 56-echo MSE | 240 x 240 x 113 | Intel i7-3770K          | 4     | 8       | --         | **5m:39s** | -->
-<!-- | 48-echo MSE | 240 x 240 x 48  | Intel i7-3770K          | 4     | 8       | --         | **3m:07s** | -->
-<!-- | 56-echo MSE | 240 x 240 x 113 | Intel i9-12900K         | 12    | 24      | --         | **15.4s**  | -->
-<!-- | 48-echo MSE | 240 x 240 x 48  | Intel i9-12900K         | 12    | 24      | --         | **9.2s**   | -->
+| Dataset     | Matrix Size     | CPU                          | Threads | `chi2`   | `reginska` | `lcurve` | `gcv`     |
+| :---:       | :---:           | :---:                        | :---:   | :---:    | :---:      | :---:    | :---:     |
+| 48-echo MSE | 240 x 240 x 48  | AMD Ryzen 9 3950X            | 32      | **2.9s** | **3.2s**   | **4.6s** | **6.2s**  |
+| 56-echo MSE | 240 x 240 x 113 | AMD Ryzen 9 3950X            | 32      | **4.8s** | **5.3s**   | **7.2s** | **10.2s** |
+| 48-echo MSE | 240 x 240 x 48  | AMD Ryzen Threadripper 3970X | 64      | **1.4s** | **1.6s**   | **2.2s** | **3.1s**  |
+| 56-echo MSE | 240 x 240 x 113 | AMD Ryzen Threadripper 3970X | 64      | **2.3s** | **2.6s**   | **3.5s** | **5.1s**  |
 
 </center>
+
+Each timing is the fastest of three runs using the indicated `--Reg` method, `--nT2 40`, and otherwise default settings.
+Timings include $T_2$ distribution and derived-metric computation but exclude I/O.
 
 ## DECAES Tutorial 2022
 

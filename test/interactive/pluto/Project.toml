@@ -11,7 +11,7 @@ DECAES = {path = "../../.."}
 
 [compat]
 CairoMakie = "0.15"
-DECAES = "0.6.1"
+DECAES = "0.7"
 LaTeXStrings = "1"
 Pluto = "1"
 PlutoSliderServer = "1.9"

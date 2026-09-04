@@ -2,4 +2,4 @@
 DECAES = "d84fb938-a666-558e-89d9-d531edc6724f"
 
 [compat]
-DECAES = "0.6"
+DECAES = "0.7"

@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - Sep 3, 2026
+
 ### Added
 - Added [Regińska's minimum-product criterion](https://jondeuce.github.io/DECAES.jl/dev/ref/#DECAES.lsqnonneg_reginska) as the `reginska` regularization method
 - Added ℓ¹ regularization for the L-curve, Regińska, chi-squared, and Morozov discrepancy methods via `--RegNorm l1`
