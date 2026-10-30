@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Support for Julia versions below v1.10 is dropped
+
 ## [0.7.0] - Sep 3, 2026
 
 ### Added

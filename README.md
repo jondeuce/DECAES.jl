@@ -25,7 +25,7 @@ If you use DECAES in your research, please [cite our work](./CITATION.bib):
 
 ## Installation
 
-Install Julia v1.9 or later using the official [`juliaup`](https://github.com/JuliaLang/juliaup) installer, then run:
+Install Julia v1.10 or later using the official [`juliaup`](https://github.com/JuliaLang/juliaup) installer, then run:
 
 ```bash
 julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'

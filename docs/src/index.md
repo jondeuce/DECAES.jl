@@ -25,7 +25,7 @@ Each component $x_{\mu,j}$ is the nonnegative amplitude associated with decay ti
 
 ## [Installation](@id installation)
 
-Install DECAES using Julia v1.9 or later:
+Install DECAES using Julia v1.10 or later:
 
 ```bash
 julia --project=@decaes -e 'import Pkg; Pkg.add("DECAES"); Pkg.build("DECAES")'

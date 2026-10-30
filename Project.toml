@@ -49,7 +49,7 @@ Scratch = "1"
 SpecialFunctions = "0.10, 1, 2"
 StaticArrays = "0.12, 1"
 Statistics = "1"
-julia = "1.9"
+julia = "1.10"
 
 [apps.decaes]
 julia_flags = ["--threads=auto"]
