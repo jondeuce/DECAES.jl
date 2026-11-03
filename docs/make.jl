@@ -24,6 +24,7 @@ makedocs(;
 
 deploydocs(;
     repo = "github.com/jondeuce/DECAES.jl.git",
+    versions = ["stable" => "v^", "v#.#", "dev" => "dev"],
     push_preview = true,
     deploy_config = Documenter.GitHubActions(),
 )
