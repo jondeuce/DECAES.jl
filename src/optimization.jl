@@ -74,7 +74,7 @@ function brent_root(f, x₀::T, x₁::T, fx₀::T = f(x₀), fx₁::T = f(x₁);
     # Assert bracketing
     fx₀ == 0 && return (x₀, fx₀, (x₀, x₀))
     fx₁ == 0 && return (x₁, fx₁, (x₁, x₁))
-    @assert fx₀ * fx₁ < 0 "Root must be bracketed, but f(x = $x₀) = $fx₀ and f(x = $x₁) = $fx₁"
+    fx₀ * fx₁ < 0 || throw(ArgumentError("Root must be bracketed, but f(x = $x₀) = $fx₀ and f(x = $x₁) = $fx₁"))
 
     # Initialize Brent state
     a, b, fa, fb = x₀, x₁, fx₀, fx₁
@@ -135,7 +135,7 @@ function newton_bisect_root(f_∂f, x0::T, x1::T, x2::T, y1::T = f_∂f(x1)[1], 
     # Check initial points
     y1 == 0 && return (x1, y1, (x1, x1))
     y2 == 0 && return (x2, y2, (x2, x2))
-    @assert y1 * y2 < 0 "Root must be bracketed, but f(x = $x1) = $y1 and f(x = $x2) = $y2"
+    y1 * y2 < 0 || throw(ArgumentError("Root must be bracketed, but f(x = $x1) = $y1 and f(x = $x2) = $y2"))
     (y1 > 0) && ((x1, x2, y1, y2) = (x2, x1, y2, y1))
 
     # Initialize the estimate for the root
@@ -195,9 +195,9 @@ function bracket_root_monotonic(f, a::T, δ::T; dilate = 1, mono = +1, maxiters:
     # The function is assumed to be increasing (decreasing) when `mono` is positive (negative).
     # Begin at point `a` and step by `δ` until the function changes sign.
     # The step size is multiplied by `dilate` after each step.
-    @assert δ > 0 "Initial step size must be positive"
-    @assert dilate >= 1 "Dilation factor must be at least 1"
-    @assert mono != 0 "Monotonicity must be non-zero"
+    δ > 0 || throw(DomainError(δ, "Initial step size must be positive"))
+    dilate >= 1 || throw(DomainError(dilate, "Dilation factor must be at least 1"))
+    mono != 0 || throw(DomainError(mono, "Monotonicity must be non-zero"))
     fa = f(a)
     !isfinite(fa) && return (a, a, T(NaN), T(NaN))
     fa == 0 && return (a, a, fa, fa)
@@ -223,8 +223,8 @@ end
 function bracket_minimum(f, a::T, δ::T; dilate = 1, maxiters::Int = 100) where {T <: AbstractFloat}
     # Find bracketing interval for a local minimum of `f`. Begin at point `a`, step by `δ` in whichever of the two directions descends, and continue until `f` turns back up.
     # The step size is multiplied by `dilate` after each step. A NaN interval is returned if `f` descends for `maxiters` steps without turning.
-    @assert δ > 0 "Initial step size must be positive"
-    @assert dilate >= 1 "Dilation factor must be at least 1"
+    δ > 0 || throw(DomainError(δ, "Initial step size must be positive"))
+    dilate >= 1 || throw(DomainError(dilate, "Dilation factor must be at least 1"))
     y₋, y₀, y₊ = f(a - δ), f(a), f(a + δ)
     y₀ <= y₋ && y₀ <= y₊ && return (a - δ, a + δ)
     sgn_δ, y₂ = y₋ < y₊ ? (-one(T), y₋) : (one(T), y₊)
@@ -341,7 +341,7 @@ Optim.jl is licensed under the MIT License:
 
 # Note: the stopping rule |x - xₘ| + (x₂ - x₁)/2 ≤ 2τ, with xₘ the bracket midpoint and τ = xatol + xrtol·|x|, bounds the returned bracket by 4τ and no better, since |x - xₘ| can reach (x₂ - x₁)/2.
 function brent_minimize(f, x₁::T, x₂::T; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
-    @assert x₁ < x₂ "x₁ must be less than x₂"
+    x₁ < x₂ || throw(ArgumentError("x₁ must be less than x₂, but x₁ = $x₁ and x₂ = $x₂"))
 
     φ = T(Base.MathConstants.φ) # φ ≈ 1.618034
     α = 2 - T(φ) # α ≈ 0.381966
@@ -442,7 +442,7 @@ end
 # between `a` and `b` and the function value at `x0` must be less than the value at both `a` and `b`.
 # The abscissa of the minimum and the minimum function value are returned.
 function brent_newton_minimize(f_∂f, a::T, b::T, x0::T, f0::T = f_∂f(x0)[1], df0::T = f_∂f(x0)[2]; xrtol::T = √eps(T), xatol::T = √eps(T), maxiters::Int = 100) where {T <: AbstractFloat}
-    @assert a < x0 < b "x0 must lie between a and b"
+    a < x0 < b || throw(ArgumentError("x0 must lie between a and b, but a = $a, x0 = $x0, and b = $b"))
     tol = xatol + xrtol * max(abs(a), abs(b))
 
     x_older = x_old = x_new = x0

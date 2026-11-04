@@ -18,7 +18,7 @@ end
 
 # ╔═╡ 64ae8c40-b077-4ea1-b94d-e337b61e32dd
 begin
-    import Pkg
+    using Pkg: Pkg
     Pkg.activate(@__DIR__)
     using CairoMakie, DECAES, PlutoUI
 end
@@ -69,19 +69,19 @@ end
 
 # ╔═╡ 445f1bd7-29c2-4775-be92-7625015689f6
 begin
-    opts = DECAES.T2mapOptions(; MatrixSize=(1, 1, 1), nTE=local_nTE, TE=TE_ms / 1000, nT2=80, T2Range=(TE_ms / 1000, 2.0), Reg=reg, Chi2Factor=reg == "chi2" ? 1.02 : nothing, SaveRegParam=true, Threaded=false, Silent=true)
+    opts = DECAES.T2mapOptions(; MatrixSize = (1, 1, 1), nTE = local_nTE, TE = TE_ms / 1000, nT2 = 80, T2Range = (TE_ms / 1000, 2.0), Reg = reg, Chi2Factor = reg == "chi2" ? 1.02 : nothing, SaveRegParam = true, Threaded = false, Silent = true)
     maps, distribution = DECAES.T2mapSEcorr(reshape(decay, 1, 1, 1, :), opts)
-    t2 = exp.(range(log(opts.T2Range[1]), log(opts.T2Range[2]); length=opts.nT2))
+    t2 = exp.(range(log(opts.T2Range[1]), log(opts.T2Range[2]); length = opts.nT2))
     spectrum = vec(distribution)
 end
 
 # ╔═╡ ac43348e-f081-4274-ab67-7e6d20f81c59
 begin
-    fig = Figure(size=(900, 360))
-    ax1 = Axis(fig[1, 1], xlabel="Echo time (ms)", ylabel="Normalized signal", title="Echo train")
-    scatterlines!(ax1, TE_ms .* (1:local_nTE), decay, color=:black)
-    ax2 = Axis(fig[1, 2], xlabel="T₂ (ms)", ylabel="Amplitude", xscale=log10, title="T₂ distribution")
-    lines!(ax2, 1000 .* t2, spectrum, linewidth=3)
+    fig = Figure(; size = (900, 360))
+    ax1 = Axis(fig[1, 1]; xlabel = "Echo time (ms)", ylabel = "Normalized signal", title = "Echo train")
+    scatterlines!(ax1, TE_ms .* (1:local_nTE), decay; color = :black)
+    ax2 = Axis(fig[1, 2]; xlabel = "T₂ (ms)", ylabel = "Amplitude", xscale = log10, title = "T₂ distribution")
+    lines!(ax2, 1000 .* t2, spectrum; linewidth = 3)
     fig
 end
 

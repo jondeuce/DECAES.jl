@@ -376,8 +376,8 @@ function _gram!(
     n₁  = length(nodes)
     n₂  = length(d_nodes)
     A11 = A
-    A12 = uview(A, 1:n₁, n₁+1:n₁+n₂)
-    A22 = uview(A, n₁+1:n₁+n₂, n₁+1:n₁+n₂)
+    A12 = uview(A, 1:n₁, (n₁+1):(n₁+n₂))
+    A22 = uview(A, (n₁+1):(n₁+n₂), (n₁+1):(n₁+n₂))
 
     @inbounds for j in 1:n₁
         # Top-left block (n₁ × n₁)
@@ -394,7 +394,7 @@ function _gram!(
         end
 
         # Bottom-right block (n₂ × n₂)
-        for i in 1:j-1
+        for i in 1:(j-1)
             A22[i, j] = _∂²rk_∂ηⁱ∂ξʲ_ûᵢ_v̂ⱼ(kernel, d_nodes[j], d_nodes[i], d_dirs[j], d_dirs[i])
         end
         A22[j, j] = ε²
@@ -507,7 +507,7 @@ end
 function Base.insert!(C::ElasticCholesky{T}, j::Int, B::AbstractMatrix{T}) where {T}
     (; A, colperms, ncols) = C
     @inbounds colperms[ncols[]+1] = j
-    rows = uview(colperms, 1:ncols[]+1)
+    rows = uview(colperms, 1:(ncols[]+1))
     @inbounds for i in rows
         A[i, j] = B[i, j]
     end
@@ -559,7 +559,7 @@ function LinearAlgebra.cholesky!(
         # Fill `A` with new column
         colperms[ncols[]+1] = j
         if fill_parent
-            rows = uview(colperms, 1:ncols[]+1)
+            rows = uview(colperms, 1:(ncols[]+1))
             copyto!(uview(A, rows, j), v)
         end
 
@@ -587,7 +587,7 @@ function LinearAlgebra.cholesky!(C::ElasticCholesky{T}, j::Int) where {T}
     @assert ncols[] + 1 <= maxcols
 
     @inbounds colperms[ncols[]+1] = j
-    rows = uview(colperms, 1:ncols[]+1)
+    rows = uview(colperms, 1:(ncols[]+1))
     v = uview(A, rows, j)
     cholesky!(C, j, v, Val(false))
 
@@ -697,7 +697,7 @@ end
 @inline _get_mu(spl::ElasticNormalSpline)              = (J = _get_filled_columns(spl); return uview(spl._mu, J))
 @inline _get_rhs(spl::ElasticNormalSpline)             = (J = _get_filled_columns(spl); return uview(spl._rhs, J))
 @inline _get_gram(spl::ElasticNormalSpline)            = (J = _get_filled_columns(spl); A = uview(spl._gram, J, J); return Hermitian(A, :U))
-@inline _get_filled_columns(spl::ElasticNormalSpline)  = uview(spl._filled_columns, 1:spl._num_nodes[]+spl._num_d_nodes[])
+@inline _get_filled_columns(spl::ElasticNormalSpline)  = uview(spl._filled_columns, 1:(spl._num_nodes[]+spl._num_d_nodes[]))
 @inline _get_insertion_order(spl::ElasticNormalSpline) = uview(_get_chol(spl).colperms, 1:_get_chol(spl).ncols[])
 
 function insertat!(x::AbstractVector, i, v, len = length(x))
@@ -1125,7 +1125,7 @@ function _construct!(
     _get_values(spl) .= view(_get_rhs(spl), 1:n₁) .= values
 
     # Nodes scaled down by `scale` -> directional derivative scaled up by `scale`; allocate new array to avoid aliasing
-    _get_d_values(spl) .= view(_get_rhs(spl), n₁+1:n₁+n₂) .= _get_scale(spl) .* d_values
+    _get_d_values(spl) .= view(_get_rhs(spl), (n₁+1):(n₁+n₂)) .= _get_scale(spl) .* d_values
 
     # Compute spline coefficients and construct spline
     ldiv!(_get_mu(spl), _get_chol(spl), _get_rhs(spl))

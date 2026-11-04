@@ -497,12 +497,12 @@ function apply_transforms!(c::AbstractVector{T}, work::NNLSWorkspace{T}) where {
         if op > 0 # Householder reflection: u[ip] = 1 implicit, scaled tail in H[ip+1:m1, op]
             ip, m1, tau = hpos[op], hm1[op], htau[op]
             sm = c[ip]
-            @simd for i in ip+1:m1
+            @simd for i in (ip+1):m1
                 sm = sm + c[i] * H[i, op]
             end
             sm *= -tau
             c[ip] = c[ip] + sm
-            @simd ivdep for i in ip+1:m1
+            @simd ivdep for i in (ip+1):m1
                 c[i] = c[i] + sm * H[i, op]
             end
         else # Givens rotation acting on rows (i-1, i)
@@ -520,12 +520,12 @@ end
     @inbounds begin
         ip, m1, tau = hpos[t], hm1[t], htau[t]
         sm = C[ip, col]
-        @simd for i in ip+1:m1
+        @simd for i in (ip+1):m1
             sm = sm + C[i, col] * H[i, t]
         end
         sm *= -tau
         C[ip, col] = C[ip, col] + sm
-        @simd ivdep for i in ip+1:m1
+        @simd ivdep for i in (ip+1):m1
             C[i, col] = C[i, col] + sm * H[i, t]
         end
     end
@@ -540,7 +540,7 @@ end
         col = col1
         while col + 1 <= col2
             s1, s2 = C[ip, col], C[ip, col+1]
-            @simd for i in ip+1:m1
+            @simd for i in (ip+1):m1
                 hᵢ = H[i, t]
                 s1 = s1 + C[i, col] * hᵢ
                 s2 = s2 + C[i, col+1] * hᵢ
@@ -549,7 +549,7 @@ end
             s2 *= -tau
             C[ip, col] = C[ip, col] + s1
             C[ip, col+1] = C[ip, col+1] + s2
-            @simd ivdep for i in ip+1:m1
+            @simd ivdep for i in (ip+1):m1
                 hᵢ = H[i, t]
                 C[i, col] = C[i, col] + s1 * hᵢ
                 C[i, col+1] = C[i, col+1] + s2 * hᵢ
@@ -610,7 +610,7 @@ function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int
     @inbounds alpha = c[ip]
     xnorm = alpha * alpha
     bdotc = zero(T)
-    @inbounds @simd for i in ip+1:m1
+    @inbounds @simd for i in (ip+1):m1
         ci = c[i]
         xnorm = xnorm + ci * ci
         bdotc = bdotc + b[i] * ci
@@ -642,7 +642,7 @@ function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int
             return -2 * one(T)
         end
         inv_alpha = inv(alpha)
-        @simd ivdep for i in ip+1:m1
+        @simd ivdep for i in (ip+1):m1
             ui = c[i] * inv_alpha
             H[i, t] = ui
             b[i] = b[i] + sm * ui
@@ -656,12 +656,12 @@ function try_enter_column!(work::NNLSWorkspace{T}, c::AbstractVector{T}, ip::Int
     end
 
     # Write the new U column at position ip: reduced head, -beta on the diagonal or the reduced value itself in the trivial single-row case, then zeros below. The Householder tail lives in the H panel, not in A.
-    @inbounds @simd ivdep for i in 1:ip-1
+    @inbounds @simd ivdep for i in 1:(ip-1)
         A[i, ip] = c[i]
     end
     @inbounds A[ip, ip] = ip < m1 ? A1 : c[ip]
     M = size(A, 1)
-    @inbounds @simd ivdep for i in ip+1:M
+    @inbounds @simd ivdep for i in (ip+1):M
         A[i, ip] = zero(T)
     end
 
@@ -725,7 +725,7 @@ function solve_triangular_system!(
         #   x = z[1:n] (i.e. RHS b is overwritten)
         @inbounds for j in n:-1:1
             zi = -z[j] / A[j, j]
-            @simd ivdep for i in 1:j-1
+            @simd ivdep for i in 1:(j-1)
                 z[i] = z[i] + A[i, j] * zi
             end
             z[j] = -zi
@@ -737,7 +737,7 @@ function solve_triangular_system!(
         #   x = z[1:n] (i.e. RHS b is overwritten)
         @inbounds for j in 1:n
             z1 = z[j]
-            @simd for l in 1:j-1
+            @simd for l in 1:(j-1)
                 z1 = z1 - A[l, j] * z[l]
             end
             z1 /= A[j, j]
@@ -770,16 +770,16 @@ function downdate!(work::NNLSWorkspace{T}, imv::Int, nsetp::Int, mA::Int) where 
     (; A, b, idx, gc, gs, gi, transforms) = work
     @inbounds begin
         if imv != nsetp
-            for i in imv+1:nsetp
+            for i in (imv+1):nsetp
                 cc, ss, rr = orthogonal_rotmat(A[i-1, i], A[i, i])
                 A[i-1, i] = rr
                 A[i, i] = zero(T)
 
                 # Apply procedure G2 (CC,SS,A(J-1,L),A(J,L)) to the remaining set P columns (set Z columns are unaffected)
-                @simd for j in 1:i-1
+                @simd for j in 1:(i-1)
                     A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
                 end
-                @simd for j in i+1:nsetp
+                @simd for j in (i+1):nsetp
                     A[i-1, j], A[i, j] = orthogonal_rotmatvec(cc, ss, A[i-1, j], A[i, j])
                 end
 
@@ -792,7 +792,7 @@ function downdate!(work::NNLSWorkspace{T}, imv::Int, nsetp::Int, mA::Int) where 
             end
 
             # Swap the U columns (set Z columns hold no data)
-            for j in imv:nsetp-1
+            for j in imv:(nsetp-1)
                 @simd for i in 1:mA
                     A[i, j+1], A[i, j] = A[i, j], A[i, j+1]
                 end
@@ -1097,7 +1097,7 @@ function unsafe_nnls!(
         zz[i] = x[idx[i]]
     end
     if nsetp < m
-        @inbounds @simd ivdep for i in nsetp+1:m
+        @inbounds @simd ivdep for i in (nsetp+1):m
             zz[i] = b[i]
         end
     else
@@ -1176,7 +1176,7 @@ function unsafe_nnls!(
             @simd ivdep for i in 1:m0
                 H[i, sbase+t] = A0[i, jorig]
             end
-            @simd ivdep for i in m0+1:M # padded rows participate in the panel reduction; clear stale data
+            @simd ivdep for i in (m0+1):M # padded rows participate in the panel reduction; clear stale data
                 H[i, sbase+t] = zero(T)
             end
             rj = diag[jorig]
@@ -1258,7 +1258,7 @@ function unsafe_nnls!(
         elseif iszero(λ) && nsetp >= m0
             # The passive set spans the data rows and the padding is zero, so the dual vanishes identically.
             # In the transformed formulation the free rows are all exactly-zero padded rows; enforce the same exact zero here rather than computing residual roundoff noise.
-            @simd ivdep for j in nsetp+1:n
+            @simd ivdep for j in (nsetp+1):n
                 w[j] = zero(T)
             end
         else
@@ -1422,7 +1422,7 @@ function unsafe_nnls!(
         zz[i] = x[idx[i]]
     end
     if nsetp < M
-        @inbounds @simd ivdep for i in nsetp+1:M
+        @inbounds @simd ivdep for i in (nsetp+1):M
             zz[i] = b[i]
         end
     else
@@ -1640,7 +1640,7 @@ end
     s = zero(T)
     @inbounds for i in 1:np[]
         t = xp[i]
-        @simd for k in 1:i-1
+        @simd for k in 1:(i-1)
             t = t - L[k, i] * y[k]
         end
         yi = t * dinv[i]
@@ -1699,15 +1699,15 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
         while jcol <= p
             if jcol + 1 <= p
                 # Two columns at a time: each pass over L[:, k] feeds both accumulators, halving the loads of the O(p³) update
-                @simd ivdep for k in 1:jcol-1
+                @simd ivdep for k in 1:(jcol-1)
                     L[k, jcol] = GP[k, jcol]
                     L[k, jcol+1] = GP[k, jcol+1]
                 end
 
-                for k in 1:jcol-1
+                for k in 1:(jcol-1)
                     a = L[k, jcol]
                     b2 = L[k, jcol+1]
-                    @simd for k2 in 1:k-1
+                    @simd for k2 in 1:(k-1)
                         lk = L[k2, k]
                         a = a - lk * L[k2, jcol]
                         b2 = b2 - lk * L[k2, jcol+1]
@@ -1718,7 +1718,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
                 end
 
                 s = GP[jcol, jcol] + μ²
-                @simd for k in 1:jcol-1
+                @simd for k in 1:(jcol-1)
                     s = s - L[k, jcol] * L[k, jcol]
                 end
 
@@ -1727,7 +1727,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
                 L[jcol, jcol] = Ljj
                 dinv[jcol] = inv(Ljj)
                 s2 = GP[jcol, jcol+1]
-                @simd for k2 in 1:jcol-1
+                @simd for k2 in 1:(jcol-1)
                     s2 = s2 - L[k2, jcol] * L[k2, jcol+1]
                 end
 
@@ -1742,16 +1742,16 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
                 dinv[jcol+1] = inv(L[jcol+1, jcol+1])
                 jcol += 2
             else
-                for k in 1:jcol-1
+                for k in 1:(jcol-1)
                     s2 = GP[k, jcol]
-                    @simd for k2 in 1:k-1
+                    @simd for k2 in 1:(k-1)
                         s2 = s2 - L[k2, k] * L[k2, jcol]
                     end
                     L[k, jcol] = s2 * dinv[k]
                 end
 
                 s = GP[jcol, jcol] + μ²
-                @simd for k in 1:jcol-1
+                @simd for k in 1:(jcol-1)
                     s = s - L[k, jcol] * L[k, jcol]
                 end
 
@@ -1767,7 +1767,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
         i = 1
         while i + 1 <= p
             s1, s2 = c[P[i]], c[P[i+1]]
-            @simd for k in 1:i-1
+            @simd for k in 1:(i-1)
                 xₖ = xp[k]
                 s1 = s1 - L[k, i] * xₖ
                 s2 = s2 - L[k, i+1] * xₖ
@@ -1779,7 +1779,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
         end
         if i <= p
             s = c[P[i]]
-            @simd for k in 1:i-1
+            @simd for k in 1:(i-1)
                 s = s - L[k, i] * xp[k]
             end
             xp[i] = s * dinv[i]
@@ -1792,7 +1792,7 @@ function solve!(gp::NNLSGram{T}, A::AbstractMatrix{T}, b::AbstractVector{T}, μ:
             xp[i] = xi
             xi1 = (xp[i-1] - L[i-1, i] * xi) * dinv[i-1]
             xp[i-1] = xi1
-            @simd for k in 1:i-2
+            @simd for k in 1:(i-2)
                 xp[k] = xp[k] - L[k, i] * xi - L[k, i-1] * xi1
             end
             i -= 2
@@ -2056,15 +2056,15 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
         jcol = lvalid + 1
         while jcol <= p
             if jcol + 1 <= p
-                @simd ivdep for k in 1:jcol-1
+                @simd ivdep for k in 1:(jcol-1)
                     L[k, jcol] = GP[k, jcol]
                     L[k, jcol+1] = GP[k, jcol+1]
                 end
 
-                for k in 1:jcol-1
+                for k in 1:(jcol-1)
                     a1 = L[k, jcol]
                     a2 = L[k, jcol+1]
-                    @simd for k2 in 1:k-1
+                    @simd for k2 in 1:(k-1)
                         lk = L[k2, k]
                         a1 = a1 - lk * L[k2, jcol]
                         a2 = a2 - lk * L[k2, jcol+1]
@@ -2075,7 +2075,7 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
                 end
 
                 s = GP[jcol, jcol]
-                @simd for k in 1:jcol-1
+                @simd for k in 1:(jcol-1)
                     s = s - L[k, jcol] * L[k, jcol]
                 end
 
@@ -2084,7 +2084,7 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
                 L[jcol, jcol] = Ljj
                 dinv[jcol] = inv(Ljj)
                 s2 = GP[jcol, jcol+1]
-                @simd for k2 in 1:jcol-1
+                @simd for k2 in 1:(jcol-1)
                     s2 = s2 - L[k2, jcol] * L[k2, jcol+1]
                 end
 
@@ -2100,16 +2100,16 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
                 dinv[jcol+1] = inv(Ljj)
                 jcol += 2
             else
-                for k in 1:jcol-1
+                for k in 1:(jcol-1)
                     s2 = GP[k, jcol]
-                    @simd for k2 in 1:k-1
+                    @simd for k2 in 1:(k-1)
                         s2 = s2 - L[k2, k] * L[k2, jcol]
                     end
                     L[k, jcol] = s2 * dinv[k]
                 end
 
                 s = GP[jcol, jcol]
-                @simd for k in 1:jcol-1
+                @simd for k in 1:(jcol-1)
                     s = s - L[k, jcol] * L[k, jcol]
                 end
 
@@ -2126,7 +2126,7 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
         i = 1
         while i + 1 <= p
             s1, s2 = c[P[i]], c[P[i+1]]
-            @simd for k in 1:i-1
+            @simd for k in 1:(i-1)
                 xₖ = xp[k]
                 s1 = s1 - L[k, i] * xₖ
                 s2 = s2 - L[k, i+1] * xₖ
@@ -2138,7 +2138,7 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
         end
         if i <= p
             s = c[P[i]]
-            @simd for k in 1:i-1
+            @simd for k in 1:(i-1)
                 s = s - L[k, i] * xp[k]
             end
             xp[i] = s * dinv[i]
@@ -2151,7 +2151,7 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
             xp[i] = xi
             xi1 = (xp[i-1] - L[i-1, i] * xi) * dinv[i-1]
             xp[i-1] = xi1
-            @simd for k in 1:i-2
+            @simd for k in 1:(i-2)
                 xp[k] = xp[k] - L[k, i] * xi - L[k, i-1] * xi1
             end
             i -= 2
@@ -2247,7 +2247,7 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
             d = G[jmax, jmax]
             for i in 1:p
                 s = G[P[i], jmax]
-                @simd for k in 1:i-1
+                @simd for k in 1:(i-1)
                     s = s - L[k, i] * u[k]
                 end
                 s *= dinv[i]
@@ -2434,9 +2434,9 @@ function passive_solve!(work::NNLSLassoWorkspace{T}, λ::T) where {T}
         # ρ/‖A_{P[k]}‖ is the sine of the angle between the new column and the span of its predecessors, so the rank tolerance is invariant to column rescaling and interpretable as an angle
         if ρ <= eps(T)^(3//4) * cnrm[P[k]]
             # A_{P[k]} lies in the span of its predecessors; leave the coefficients c of A_{P[k]} = A_{P[1:k-1]} c in z[1:k-1] for `resolve_dependency!`
-            for i in k-1:-1:1
+            for i in (k-1):-1:1
                 cᵢ = QR[i, k]
-                for t in i+1:k-1
+                for t in (i+1):(k-1)
                     cᵢ -= QR[i, t] * z[t]
                 end
                 z[i] = cᵢ / Rdiag[i]
@@ -2492,7 +2492,7 @@ function passive_solve!(work::NNLSLassoWorkspace{T}, λ::T) where {T}
     # Compute z = R⁻ᵀ𝟙 by forward substitution, then z = R⁻¹(Qᵀb - λz) by back substitution
     @inbounds for i in 1:p
         s = one(T)
-        @simd for k in 1:i-1
+        @simd for k in 1:(i-1)
             s -= QR[k, i] * z[k]
         end
         z[i] = s / Rdiag[i]
@@ -2500,7 +2500,7 @@ function passive_solve!(work::NNLSLassoWorkspace{T}, λ::T) where {T}
 
     @inbounds for i in p:-1:1
         s = f[i] - λ * z[i]
-        for k in i+1:p
+        for k in (i+1):p
             s -= QR[i, k] * z[k]
         end
         z[i] = s / Rdiag[i]
@@ -2515,7 +2515,7 @@ function resolve_dependency!(work::NNLSLassoWorkspace{T}, k::Int, λ::T) where {
     (; x, P, z) = work
 
     Σc = zero(T)
-    @inbounds @simd for i in 1:k-1
+    @inbounds @simd for i in 1:(k-1)
         Σc += z[i]
     end
 
@@ -2525,13 +2525,13 @@ function resolve_dependency!(work::NNLSLassoWorkspace{T}, k::Int, λ::T) where {
     end
 
     α, imin = T(Inf), 0
-    @inbounds for i in 1:k-1
+    @inbounds for i in 1:(k-1)
         z[i] <= 0 && continue
         t = x[P[i]] / z[i]
         t < α && ((α, imin) = (t, i))
     end
 
-    @inbounds for i in 1:k-1
+    @inbounds for i in 1:(k-1)
         x[P[i]] -= α * z[i]
     end
     @inbounds x[P[k]] += α
@@ -2587,7 +2587,7 @@ end
 # Feasibility and stationarity on the active set hold by construction of `feasible_solve!`, leaving the inactive duals as the sole condition the loop must reach; exhausting `maxiters` means they were not reached.
 function solve!(work::NNLSLassoWorkspace{T}, μ::Real; maxiters::Int = 3 * work.n + 10) where {T}
     (; n, w, inP) = work
-    @assert μ >= 0 "μ must be nonnegative, but μ = $μ." # a negative μ rewards mass rather than penalizing it, and makes the problem unbounded whenever A has a nonnegative null direction
+    μ >= 0 || throw(DomainError(μ, "μ must be nonnegative")) # a negative μ rewards mass rather than penalizing it, and makes the problem unbounded whenever A has a nonnegative null direction
     λ = T(μ) / 2
     wtol = eps(T)^(3//4) * work.cscale[]
 
@@ -2620,7 +2620,7 @@ function regparam_direction!(work::NNLSLassoWorkspace{T}) where {T}
     q = zero(T)
     @inbounds for i in 1:p
         s = one(T)
-        @simd for k in 1:i-1
+        @simd for k in 1:(i-1)
             s -= QR[k, i] * z[k]
         end
         z[i] = s / Rdiag[i]
@@ -2629,7 +2629,7 @@ function regparam_direction!(work::NNLSLassoWorkspace{T}) where {T}
 
     @inbounds for i in p:-1:1
         s = z[i]
-        for k in i+1:p
+        for k in (i+1):p
             s -= QR[i, k] * z[k]
         end
         z[i] = s / Rdiag[i]

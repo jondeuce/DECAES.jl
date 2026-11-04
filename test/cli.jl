@@ -259,10 +259,11 @@ function run_cli_tests()
                 append!(cli_t2map_args, ["--B1map", B1mapfilename])
 
                 opts_B1 = DECAES.T2mapOptions(image; jl_t2map_kwargs...)
-                maps_B1 = DECAES.T2Maps(opts_B1)
+                global_buffer_B1 = DECAES.global_buffer_maker(opts_B1)
+                maps_B1 = DECAES.T2Maps(opts_B1, global_buffer_B1)
                 DECAES.load_B1map!(maps_B1, DECAES.load_image(B1mapfilename, Val(3)))
                 t2map_ref, t2dist_ref = DECAES.redirect_to_devnull() do
-                    maps, dist = DECAES.T2mapSEcorr!(maps_B1, DECAES.T2Distributions(opts_B1), image, opts_B1)
+                    maps, dist = DECAES.T2mapSEcorr!(maps_B1, DECAES.T2Distributions(opts_B1), image, opts_B1, global_buffer_B1)
                     return convert(Dict{String, Any}, maps), convert(Array{eltype(image), 4}, dist)
                 end
                 t2part_ref = DECAES.redirect_to_devnull() do

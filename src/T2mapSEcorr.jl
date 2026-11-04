@@ -31,10 +31,11 @@ function imagelike_fieldnames(maps::T2Maps)
     return fields
 end
 
-function T2Maps(opts::T2mapOptions{T}) where {T}
+function T2Maps(opts::T2mapOptions{T}, global_buffer = global_buffer_maker(opts)) where {T}
     θ = default_epg_parameters(opts)
     T2_times = T2_component_times(opts)
-    decay_basis_set = opts.SetFlipAngle === nothing ? epg_grid_model(opts, θ).As : epg_decay_basis(restructure(θ, (; α = deg2rad(opts.SetFlipAngle))), T2_times)
+    decay_basis_set = opts.SetFlipAngle === nothing ? global_buffer.grid_model.As : epg_decay_basis(restructure(θ, (; α = deg2rad(opts.SetFlipAngle))), T2_times)
+
     return T2Maps(;
         # Misc. processing parameters
         echotimes     = convert(Array{T}, opts.TE .* (1:opts.nTE)),
@@ -126,7 +127,7 @@ Records parameter maps and T2 distributions for further partitioning.
 ```julia-repl
 julia> image = DECAES.mock_image(; MatrixSize = (100, 100, 1), nTE = 48); # mock image with size 100x100x1x48
 
-julia> maps, dist = T2mapSEcorr(image; TE = 10e-3, nT2 = 40, T2Range = (10e-3, 2.0), Reg = "lcurve", Silent = true); # compute the T2-maps and T2-distribution
+julia> maps, dist = T2mapSEcorr(image; TE = 10e-3, nT2 = 40, T2Range = (10e-3, 2.0), Reg = \"lcurve\", Silent = true); # compute the T2-maps and T2-distribution
 
 julia> maps
 Dict{String, Any} with 10 entries:
@@ -162,7 +163,8 @@ See also:
 T2mapSEcorr(image::Array{T, 4}; kwargs...) where {T} = T2mapSEcorr(image, T2mapOptions(image; kwargs...))
 
 function T2mapSEcorr(image::Array{T, 4}, opts::T2mapOptions{T}) where {T}
-    maps, dist = T2mapSEcorr!(T2Maps(opts), T2Distributions(opts), image, opts)
+    global_buffer = global_buffer_maker(opts)
+    maps, dist = T2mapSEcorr!(T2Maps(opts, global_buffer), T2Distributions(opts), image, opts, global_buffer)
     return convert(Dict{String, Any}, maps), convert(Array{T, 4}, dist)
 end
 
@@ -171,6 +173,7 @@ function T2mapSEcorr!(
     dist::T2Distributions{T},
     image::Array{T, 4},
     opts::T2mapOptions{T},
+    global_buffer = global_buffer_maker(opts),
 ) where {T}
 
     # =========================================================================
@@ -187,7 +190,6 @@ function T2mapSEcorr!(
     # =========================================================================
 
     # For each worker in the worker pool, allocate a separate thread-local buffer, then run the work function `work!`.
-    global_buffer = global_buffer_maker(opts)
     function with_thread_buffer(work!)
         thread_buffer = thread_buffer_maker(opts, global_buffer)
         return work!(thread_buffer)
@@ -530,11 +532,11 @@ end
 
 function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T, x, r, idx) where {T}
     (; decay_basis_set, α_polish_work) = work
-    (; Acol, ∂Acol) = α_polish_work
-    θα, ∇col = restructure(decay_basis_set.θ, (; α)), reshape(∂Acol, :, 1) # the Jacobian writes a matrix, which `∂Acol` supplies without a second buffer
+    (; Acol) = α_polish_work
+    θα = restructure(decay_basis_set.θ, (; α))
     g = zero(T)
     @inbounds for j in idx
-        decay_basis_set.epg_jac_functor!(∇col, Acol, restructure(θα, (; T2 = decay_basis_set.T2_times[j])))
+        ∂Acol = decay_basis_set.epg_jac_functor!(Acol, restructure(θα, (; T2 = decay_basis_set.T2_times[j]))) # ∂Acol aliases the functor's own ETL × 1 Jacobian buffer
         g = muladd(x[j], dot(∂Acol, r), g)
     end
     #TODO Supply ∂²A here so general β also gets a Newton candidate. Nested AD over the EPG recurrence would work but a hand-written α-derivative would be far cheaper.
@@ -584,7 +586,7 @@ const USE_DYADIC_REFINEMENT = Ref(false)
 
 function optimize_flip_angle!(work::FlipAngleOptimizationWorkspace, o::T2mapOptions)
 
-    if o.SetFlipAngle === nothing
+    if work.α_surrogate !== nothing
         # Find optimal flip angle
         empty!(work.α_surrogate)
         advance_warmstart!(work.nnls_search_prob) # cross-voxel NNLS warm starting
@@ -848,7 +850,6 @@ function thread_buffer_maker(o::T2mapOptions{T}, global_buffer = global_buffer_m
     )
 end
 
-# Read-only data shared by all workers: `grid_model` requires a flip-angle grid; `spectrum_interp` additionally requires GCV.
 function global_buffer_maker(o::T2mapOptions{T}) where {T}
     θ = default_epg_parameters(o)
     decay_basis_work = o.SetFlipAngle === nothing && θ isa EPGConstantFlipAngleOptions ? EPGCosineSeriesBasis(θ, T2_component_times(o)) : nothing

@@ -18,7 +18,7 @@ end
 
 # ╔═╡ 6f460dbd-1fe9-4d4d-bd24-1dd24a465e75
 begin
-    import Pkg
+    using Pkg: Pkg
     Pkg.activate(@__DIR__)
     using CairoMakie, DECAES, LaTeXStrings, LinearAlgebra, PlutoUI
 end
@@ -53,7 +53,7 @@ md"""
 # ╔═╡ d8b0c8b9-2382-42b4-949f-e97e91fa5804
 begin
     TE = 0.010
-    t2 = exp.(range(log(TE), log(2.0); length=60))
+    t2 = exp.(range(log(TE), log(2.0); length = 60))
     if data_source == "NIfTI voxel"
         isempty(image_path) && error("Enter a NIfTI image path.")
         image = DECAES.load_image(image_path)
@@ -103,18 +103,18 @@ end;
 
 # ╔═╡ f9fc152b-926f-451b-8bd6-65e58bc9a4b7
 begin
-    μs = exp.(range(log(1e-5), log(2.0); length=121))
+    μs = exp.(range(log(1e-5), log(2.0); length = 121))
     path = [copy(penalty == "l2" ? DECAES.lsqnonneg_tikh(A, b, μ) : DECAES.lsqnonneg_lasso(A, b, μ)) for μ in μs]
     residual² = [sum(abs2, A * x - b) for x in path]
     seminorm = penalty == "l2" ? [norm(x) for x in path] : [sum(x) for x in path]
     logR = log.(residual²)
     logN = 2log.(seminorm)
     Δt = log(μs[2] / μs[1])
-    dX = (logR[3:end] .- logR[1:end-2]) ./ (2Δt)
-    dY = (logN[3:end] .- logN[1:end-2]) ./ (2Δt)
-    ddX = (logR[3:end] .- 2logR[2:end-1] .+ logR[1:end-2]) ./ Δt^2
-    ddY = (logN[3:end] .- 2logN[2:end-1] .+ logN[1:end-2]) ./ Δt^2
-    curvature = (dX .* ddY .- dY .* ddX) ./ (dX.^2 .+ dY.^2).^(3 / 2)
+    dX = (logR[3:end] .- logR[1:(end-2)]) ./ (2Δt)
+    dY = (logN[3:end] .- logN[1:(end-2)]) ./ (2Δt)
+    ddX = (logR[3:end] .- 2logR[2:(end-1)] .+ logR[1:(end-2)]) ./ Δt^2
+    ddY = (logN[3:end] .- 2logN[2:(end-1)] .+ logN[1:(end-2)]) ./ Δt^2
+    curvature = (dX .* ddY .- dY .* ddX) ./ (dX .^ 2 .+ dY .^ 2) .^ (3 / 2)
     gcv = penalty == "l2" ? [residual²[i] / DECAES.gcv_dof(A, μs[i])^2 for i in eachindex(μs)] : fill(NaN, length(μs))
     reginska_balance = penalty == "l2" ? log.(residual²) .- 2log.(μs) .- 2log.(seminorm) : log.(residual²) .- log.(μs) .- log.(seminorm)
 end;
@@ -134,34 +134,34 @@ begin
     else
         gcv, minimum(gcv)
     end
-    diagnostic_μs = method == "lcurve" ? μs[2:end-1] : μs
+    diagnostic_μs = method == "lcurve" ? μs[2:(end-1)] : μs
     diagnostic_label = method == "lcurve" ? L"\kappa(t)" : method == "chi2" ? L"R(\mu)/R(0)-\chi^2_{\mathrm{target}}" : method == "mdp" ? L"\Vert Ax(\mu)-b\Vert_2-\delta" : method == "reginska" ? (penalty == "l2" ? L"\log\!\left(R/(\mu^2\Vert x\Vert_2^2)\right)" : L"\log\!\left(R/(\mu\Vert x\Vert_1)\right)") : L"\mathcal{G}(\mu)"
 end
 
 # ╔═╡ d66d4f7c-daa0-4f7c-951f-aefb15578226
 begin
-    fig = Figure(size=(1050, 720))
+    fig = Figure(; size = (1050, 720))
     penalty_name = penalty == "l2" ? "ℓ² Tikhonov penalty" : "ℓ¹ lasso penalty"
-    Label(fig[0, :], "$(method) selection with $penalty_name", fontsize=22)
-    ax1 = Axis(fig[1, 1], xlabel=L"T_2\;\mathrm{(ms)}", ylabel="Amplitude", xscale=log10, title="Recovered distribution")
-    x_true === nothing || lines!(ax1, 1000t2, x_true, color=(:gray, 0.7), linewidth=3, label="truth")
-    lines!(ax1, 1000t2, x_selected, color=:dodgerblue, linewidth=3, label="selected")
+    Label(fig[0, :], "$(method) selection with $penalty_name"; fontsize = 22)
+    ax1 = Axis(fig[1, 1]; xlabel = L"T_2\;\mathrm{(ms)}", ylabel = "Amplitude", xscale = log10, title = "Recovered distribution")
+    x_true === nothing || lines!(ax1, 1000t2, x_true; color = (:gray, 0.7), linewidth = 3, label = "truth")
+    lines!(ax1, 1000t2, x_selected; color = :dodgerblue, linewidth = 3, label = "selected")
     axislegend(ax1)
 
-    ax2 = Axis(fig[1, 2], xlabel="Echo time (ms)", ylabel="Signal", title="Data and selected fit")
-    scatter!(ax2, 1000TE .* (1:length(b)), b, color=:black, label="data")
-    lines!(ax2, 1000TE .* (1:length(b)), A * x_selected, color=:dodgerblue, linewidth=3, label="fit")
+    ax2 = Axis(fig[1, 2]; xlabel = "Echo time (ms)", ylabel = "Signal", title = "Data and selected fit")
+    scatter!(ax2, 1000TE .* (1:length(b)), b; color = :black, label = "data")
+    lines!(ax2, 1000TE .* (1:length(b)), A * x_selected; color = :dodgerblue, linewidth = 3, label = "fit")
     axislegend(ax2)
 
     lcurve_y_label = penalty == "l2" ? L"\log\Vert x\Vert_2^2" : L"2\log\Vert x\Vert_1"
-    ax3 = Axis(fig[2, 1], xlabel=L"\log\Vert Ax-b\Vert_2^2", ylabel=lcurve_y_label, title="L-curve ($penalty_name)")
-    lines!(ax3, logR, logN, color=log10.(μs), colormap=:viridis, linewidth=3)
-    scatter!(ax3, [log(selected_R)], [2log(selected_N)], color=:red, markersize=16)
+    ax3 = Axis(fig[2, 1]; xlabel = L"\log\Vert Ax-b\Vert_2^2", ylabel = lcurve_y_label, title = "L-curve ($penalty_name)")
+    lines!(ax3, logR, logN; color = log10.(μs), colormap = :viridis, linewidth = 3)
+    scatter!(ax3, [log(selected_R)], [2log(selected_N)]; color = :red, markersize = 16)
 
-    ax4 = Axis(fig[2, 2], xlabel=L"\mu", ylabel=diagnostic_label, xscale=log10, title="$(method) selection diagnostic ($penalty_name)")
-    lines!(ax4, diagnostic_μs, diagnostic, linewidth=3)
-    hlines!(ax4, [target], color=:gray, linestyle=:dash)
-    vlines!(ax4, [μ_selected], color=:red, linewidth=2)
+    ax4 = Axis(fig[2, 2]; xlabel = L"\mu", ylabel = diagnostic_label, xscale = log10, title = "$(method) selection diagnostic ($penalty_name)")
+    lines!(ax4, diagnostic_μs, diagnostic; linewidth = 3)
+    hlines!(ax4, [target]; color = :gray, linestyle = :dash)
+    vlines!(ax4, [μ_selected]; color = :red, linewidth = 2)
     fig
 end
 

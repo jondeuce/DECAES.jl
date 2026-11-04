@@ -303,9 +303,10 @@ end
     image = DECAES.mock_image(o)
     maps₁, dist₁ = T2mapSEcorr(copy(image), o)
 
-    maps₂ = DECAES.T2Maps(o)
+    global_buffer = DECAES.global_buffer_maker(o)
+    maps₂ = DECAES.T2Maps(o, global_buffer)
     DECAES.load_B1map!(maps₂, maps₁["alpha"])
-    maps₂, dist₂ = DECAES.T2mapSEcorr!(maps₂, DECAES.T2Distributions(o), copy(image), o)
+    maps₂, dist₂ = DECAES.T2mapSEcorr!(maps₂, DECAES.T2Distributions(o), copy(image), o, global_buffer)
 
     @test maps₂ isa DECAES.T2Maps
     @test dist₂ isa DECAES.T2Distributions

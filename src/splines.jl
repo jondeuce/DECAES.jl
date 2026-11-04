@@ -25,7 +25,7 @@ Base.cumsum(p::Poly) = Poly(integral_coeffs(coeffs(p))) # ∫₀ˣ p(x) = Σᵢ 
 roots(p::Poly) = roots(coeffs(p))
 Base.extrema(p::Poly) = roots(p')
 
-deriv_coeffs(c::AbstractVector{T}) where {T} = T[i * c[i+1] for i in 1:length(c)-1]
+deriv_coeffs(c::AbstractVector{T}) where {T} = T[i * c[i+1] for i in 1:(length(c)-1)]
 deriv_coeffs(c::SVector{N, T}) where {N, T} = SVector{N - 1, typeof(one(T) * 1)}(ntuple(i -> i * c[i+1], Val(N - 1)))
 deriv_coeffs(c::SVector{0, T}) where {T} = c
 deriv_coeffs(c::Tuple) = Tuple(deriv_coeffs(SVector(c)))
@@ -36,7 +36,7 @@ integral_coeffs(c::Tuple) = Tuple(integral_coeffs(SVector(c)))
 
 function roots(c::AbstractVector{T}) where {T <: AbstractFloat}
     deg = length(c) - 1
-    @assert 0 <= deg <= 3 "Degree of polynomial must be 0, 1, 2, or 3"
+    0 <= deg <= 3 || throw(DomainError(deg, "Degree of polynomial must be 0, 1, 2, or 3"))
     return deg == 0 ? T[] :
            deg == 1 ? T[root_real_linear(@inbounds((c[1], c[2])))] :
            deg == 2 ? T[roots_real_quadratic(@inbounds((c[1], c[2], c[3])))...] :
@@ -316,8 +316,8 @@ const BoundaryConditions = Union{Symbol, NTuple{2, Symbol}}
 
 @inline function boundary_conditions(bc::BoundaryConditions)
     bcl, bcr = bc isa Symbol ? (bc, bc) : bc
-    @assert bcl ∈ (:notaknot, :natural, :zeroslope) "boundary condition must be one of :notaknot, :natural, or :zeroslope, got :$bcl"
-    @assert bcr ∈ (:notaknot, :natural, :zeroslope) "boundary condition must be one of :notaknot, :natural, or :zeroslope, got :$bcr"
+    bcl ∈ (:notaknot, :natural, :zeroslope) || throw(ArgumentError("boundary condition must be one of :notaknot, :natural, or :zeroslope, got :$bcl"))
+    bcr ∈ (:notaknot, :natural, :zeroslope) || throw(ArgumentError("boundary condition must be one of :notaknot, :natural, or :zeroslope, got :$bcr"))
     return (bcl, bcr)
 end
 
@@ -345,9 +345,9 @@ end
 function interpolate!(spl::CubicSpline{T}, xs::AbstractVector, us::AbstractVector, bc::BoundaryConditions = :notaknot) where {T}
     n = length(xs)
     bcl, bcr = boundary_conditions(bc)
-    @assert length(us) == n "xs and us must have the same length, got $(length(xs)) and $(length(us))"
-    @assert 1 <= n <= length(spl.x) "spline holds at most $(length(spl.x)) knots, got $n"
-    @assert all(i -> isfinite(T(xs[i])), 1:n) && (n == 1 || all(i -> T(xs[i]) < T(xs[i+1]), 1:n-1)) "spline knots must be finite and strictly increasing"
+    length(us) == n || throw(DimensionMismatch("xs and us must have the same length, got $(length(xs)) and $(length(us))"))
+    1 <= n <= length(spl.x) || throw(ArgumentError("spline holds between 1 and $(length(spl.x)) knots, got $n"))
+    all(i -> isfinite(T(xs[i])), 1:n) && (n == 1 || all(i -> T(xs[i]) < T(xs[i+1]), 1:(n-1))) || throw(ArgumentError("spline knots must be finite and strictly increasing"))
 
     (; x, u, m, dl, d, du) = spl
     spl.npts[] = n
@@ -373,7 +373,7 @@ function interpolate!(spl::CubicSpline{T}, xs::AbstractVector, us::AbstractVecto
         return spl
     end
 
-    @inbounds for i in 2:n-1
+    @inbounds for i in 2:(n-1)
         dl[i], d[i], du[i] = h(i), 2 * (h(i - 1) + h(i)), h(i - 1)
         m[i] = 3 * (h(i) * δ(i - 1) + h(i - 1) * δ(i))
     end
@@ -406,7 +406,7 @@ function interpolate!(spl::CubicSpline{T}, xs::AbstractVector, us::AbstractVecto
         du[i] /= p
         m[i] = (m[i] - dl[i] * m[i-1]) / p
     end
-    @inbounds for i in n-1:-1:1
+    @inbounds for i in (n-1):-1:1
         m[i] -= du[i] * m[i+1]
     end
 

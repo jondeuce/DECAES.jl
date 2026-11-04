@@ -82,7 +82,7 @@ function solve!(
         z[i] = b[i] - A[i, n] * xj
     end
 
-    @inbounds for j in 1:n-1
+    @inbounds for j in 1:(n-1)
         wj = zero(T)
         @simd for i in 1:m
             wj += A[i, j] * z[i]
@@ -189,7 +189,7 @@ function solve!(
         z[i] = b0[i] - A0[i, n] * xj
     end
 
-    @inbounds for j in 1:n-1
+    @inbounds for j in 1:(n-1)
         wj = zero(T)
         @simd for i in 1:m
             wj += A0[i, j] * z[i]
@@ -347,7 +347,7 @@ function Base.copyto!(y::AbstractVector{T}, v::PaddedVector{T}) where {T}
     @inbounds @simd for i in 1:m
         y[i] = b[i]
     end
-    @inbounds @simd for i in m+1:m+pad
+    @inbounds @simd for i in (m+1):(m+pad)
         y[i] = zero(T)
     end
     return y
@@ -371,7 +371,7 @@ function Base.copyto!(B::AbstractMatrix{T}, P::TikhonovPaddedMatrix{T}) where {T
         @simd for i in 1:m
             B[i, j] = A[i, j]
         end
-        @simd for i in m+1:m+n
+        @simd for i in (m+1):(m+n)
             B[i, j] = zero(T)
         end
     end
@@ -563,7 +563,7 @@ end
 
 function solve!(work::NNLSTikhonovRegProblemCache{T}, μ::T) where {T}
     # Find index of cached workspace with μi nearest to μ
-    @assert μ > 0 "Regularization parameter μ must be positive, got μ = $μ"
+    μ > 0 || throw(DomainError(μ, "Regularization parameter μ must be positive"))
 
     emptycache = true
     imax, Δlogμmax = 0, T(Inf)
@@ -866,7 +866,7 @@ end
 lsqnonneg_mdp_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = nothing) = NNLSMDPRegProblem(A, b, nnls_prob_seed)
 
 function lsqnonneg_mdp!(work::NNLSMDPRegProblem{T}, δ::T) where {T}
-    @assert δ > 0 "Residual norm δ must be a positive value, but got δ = $δ"
+    δ > 0 || throw(DomainError(δ, "Residual norm δ must be positive"))
 
     # Non-regularized solution, warm-started from `work.nnls_prob_seed` when present
     solve_unreg!(work.nnls_prob, work.nnls_prob_seed)
@@ -1142,7 +1142,7 @@ function lcurve_sweep!(f::LCurveCornerCachedFunction{T}, L::T, U::T, max_log_slo
     prev = (T(Inf), 0)
     for _ in 1:max_candidates
         best = (T(0), 0) # only intervals that turn positively are worth proposing
-        for i in 1:nsweep-1
+        for i in 1:(nsweep-1)
             xᵢ = L + (i - 1) * δ
             cand = (tangent_angle(f(xᵢ + δ), xᵢ + δ) - tangent_angle(f(xᵢ), xᵢ), -i)
             cand < prev && cand > best && (best = cand)
@@ -1160,7 +1160,7 @@ function lcurve_sweep!(f::LCurveCornerCachedFunction{T}, L::T, U::T, max_log_slo
     prev = (T(Inf), 0)
     for _ in 1:max_candidates
         best = (T(-Inf), 0)
-        for i in 2:nsweep-1
+        for i in 2:(nsweep-1)
             xᵢ = L + (i - 1) * δ
             p = f(xᵢ)
             (p.κ >= f(xᵢ - δ).κ && p.κ > f(xᵢ + δ).κ && is_admissible(p, xᵢ, max_log_slope)) || continue
@@ -1889,7 +1889,7 @@ lsqnonneg_chi2_lasso_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed =
 
 function lsqnonneg_chi2_lasso!(work::NNLSChi2LassoRegProblem{T}, chi2_target::Real) where {T}
     (; lasso_work) = work
-    @assert chi2_target >= 1 "chi2_target must be at least 1, but chi2_target = $chi2_target."
+    chi2_target >= 1 || throw(DomainError(chi2_target, "chi2_target must be at least 1"))
     χ²_target = T(chi2_target)
 
     (; μmax, R₀, b²) = lasso_baseline!(work)
@@ -2007,7 +2007,7 @@ lsqnonneg_mdp_lasso_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed = 
 
 function lsqnonneg_mdp_lasso!(work::NNLSMDPLassoRegProblem{T}, δ::Real) where {T}
     (; lasso_work) = work
-    @assert δ > 0 "Residual norm δ must be a positive value, but got δ = $δ"
+    δ > 0 || throw(DomainError(δ, "Residual norm δ must be positive"))
     δ² = T(δ)^2
 
     (; μmax, R₀, b²) = lasso_baseline!(work)
@@ -2091,7 +2091,7 @@ lsqnonneg_lcurve_lasso_work(A::AbstractMatrix, b::AbstractVector, nnls_prob_seed
 
 function lsqnonneg_lcurve_lasso!(work::NNLSLCurveLassoRegProblem{T}; max_slope = LCURVE_SLOPE_MAX_DEFAULT, maxiters::Int = 64 * work.n + 64) where {T}
     (; lasso_work) = work
-    @assert max_slope > 0 "max_slope must be positive; got $max_slope"
+    max_slope > 0 || throw(DomainError(max_slope, "max_slope must be positive"))
 
     (; μmax, R₀, N₀, b²) = lasso_baseline!(work)
     res²_min = R₀

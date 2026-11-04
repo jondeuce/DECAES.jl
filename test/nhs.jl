@@ -595,8 +595,8 @@ using StaticArrays
 
             nodes    = [min_bound, max_bound, (rand_node() for i in 3:max_size)...]
             values   = rand(T, max_size)
-            d_nodes  = [rand_node() for _ in 1:n*max_size]
-            d_dirs   = [rand_dir() for _ in 1:n*max_size]
+            d_nodes  = [rand_node() for _ in 1:(n*max_size)]
+            d_dirs   = [rand_dir() for _ in 1:(n*max_size)]
             d_values = rand(T, n * max_size)
             return (; min_bound, max_bound, nodes, values, d_nodes, d_dirs, d_values)
         end
@@ -660,7 +660,7 @@ using StaticArrays
                     J = Int[]
                     for j in randperm(n₁)
                         push!(J, j)
-                        nhs._gram!(view(A′, J, J), nodes[J[end]], nodes[J[1:end-1]], kernel)
+                        nhs._gram!(view(A′, J, J), nodes[J[end]], nodes[J[1:(end-1)]], kernel)
                         @test Hermitian(A′[J, J], :U) ≈ A[J, J] # `A′[J,J]` is upper triangular, `A` is Hermitian
                     end
                 end
@@ -679,11 +679,11 @@ using StaticArrays
                         if j <= n₁
                             push!(J₁, j)
                             insert!(J, length(J₁), j)
-                            nhs._gram!(view(A′, J, J), nodes[J₁[end]], nodes[J₁[1:end-1]], d_nodes[J₂], d_dirs[J₂], kernel)
+                            nhs._gram!(view(A′, J, J), nodes[J₁[end]], nodes[J₁[1:(end-1)]], d_nodes[J₂], d_dirs[J₂], kernel)
                         else
                             push!(J₂, j - n₁)
                             push!(J, j)
-                            nhs._gram!(view(A′, J, J), d_nodes[J₂[end]], d_dirs[J₂[end]], nodes[J₁], d_nodes[J₂[1:end-1]], d_dirs[J₂[1:end-1]], kernel)
+                            nhs._gram!(view(A′, J, J), d_nodes[J₂[end]], d_dirs[J₂[end]], nodes[J₁], d_nodes[J₂[1:(end-1)]], d_dirs[J₂[1:(end-1)]], kernel)
                         end
                         @test Hermitian(A′[J, J], :U) ≈ A[J, J] # `A′[J,J]` is upper triangular, `A` is Hermitian
                     end
@@ -707,7 +707,7 @@ using StaticArrays
                 for i in 1:max_size
                     # Update `ElasticNormalSpline`
                     nodes′, values′ = nodes[1:i], values[1:i]
-                    d_nodes′, d_dirs′, d_values′ = d_nodes[1:n*i], d_dirs[1:n*i], d_values[1:n*i]
+                    d_nodes′, d_dirs′, d_values′ = d_nodes[1:(n*i)], d_dirs[1:(n*i)], d_values[1:(n*i)]
 
                     # Insert regular node
                     insert!(espl_H0, nodes′[i], values′[i])

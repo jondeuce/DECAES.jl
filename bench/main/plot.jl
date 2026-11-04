@@ -48,7 +48,7 @@ function plot_results(df; compare_version = "master")
 
         # Times relative to the fastest `compare_version` run
         grel = deepcopy(g)
-        grel.time .= minimum(grel[grel.version.==compare_version, :time]) ./ grel.time
+        grel.time .= minimum(grel[grel.version .== compare_version, :time]) ./ grel.time
 
         pspeedup = @df grel scatter(
             :version, :time, group = :julia,

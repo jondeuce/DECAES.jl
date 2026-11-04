@@ -355,7 +355,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
         # Transition between phase states
         Ωⱼ, Ωⱼ₊₁ = MPSV[1], MPSV[2]
         MPSV[1] = V[Ωⱼ[2], Ωⱼ₊₁[2], Ωⱼ[3]] # (F⁺₁, F⁺₁*, Z₁)⁺ = (F⁺₁*, F⁺₂*, Z₁)
-        for j in 2:ETL-1
+        for j in 2:(ETL-1)
             Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV[j+1]
             MPSV[j] = V[Ωⱼ₋₁[1], Ωⱼ₊₁[2], Ωⱼ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
         end
@@ -403,7 +403,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_Basic_Cplx{T}, θ
         # Transition between phase states
         Ωⱼ, Ωⱼ₊₁ = MPSV[1], MPSV[2]
         MPSV[1] = V[Ωⱼ[2], Ωⱼ₊₁[2], Ωⱼ[3]] # (F⁺₁, F⁺₁*, Z₁)⁺ = (F⁺₁*, F⁺₂*, Z₁)
-        for j in 2:ETL-1
+        for j in 2:(ETL-1)
             Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV[j+1]
             MPSV[j] = V[Ωⱼ₋₁[1], Ωⱼ₊₁[2], Ωⱼ[3]] # (Fᵢ, Fᵢ*, Zᵢ)⁺ = (Fᵢ₋₁, Fᵢ₊₁*, Zᵢ)
         end
@@ -469,7 +469,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm{T}, θ::EPGO
         MPSV[3] = V[0, 0, 0]
     end
 
-    @inbounds for n in 2:ETL-1
+    @inbounds for n in 2:(ETL-1)
         # j = 1, initialize and update `dc`
         Ωⱼ, Ωⱼ₊₁ = MPSV[1], MPSV[2]
         Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
@@ -638,7 +638,7 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector{T
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in 2:ETL-1
+    @inbounds for n in 2:(ETL-1)
         # j = 1, initialize and update `dc`
         Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2]
         Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
@@ -717,12 +717,12 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_S
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in 2:ETL÷2
+    @inbounds for n in 2:(ETL÷2)
         Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
         Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         dc[n] = abs(Ω₁′[1])
         MPSV₁[1] = Ω₁′
-        @simd for j in 2:n-1
+        @simd for j in 2:(n-1)
             Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
             MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
@@ -731,12 +731,12 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVector_S
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in ETL÷2+1:ETL-1
+    @inbounds for n in (ETL÷2+1):(ETL-1)
         Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
         Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         dc[n] = abs(Ω₁′[1])
         MPSV₁[1] = Ω₁′
-        @simd for j in 2:ETL-n
+        @simd for j in 2:(ETL-n)
             Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
             MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
@@ -814,7 +814,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in 3:ETL÷2
+    @inbounds for n in 3:(ETL÷2)
         Ω₁, Ω₂, Ω₃ = MPSV₂[1], MPSV₂[2], MPSV₂[3] # j = 1, initialize and update `dc`
         FΩ₁, F⁻Ω₁, ZΩ₁ = F⁺ ⋅ Ω₁, F⁻ ⋅ Ω₁, Z ⋅ Ω₁
         FΩ₂, F⁻Ω₂, ZΩ₂ = F⁺ ⋅ Ω₂, F⁻ ⋅ Ω₂, Z ⋅ Ω₂
@@ -823,7 +823,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         MPSV₁[1] = V[F⁻Ω₁, F⁻Ω₂, ZΩ₁]
         MPSV₁[2] = V[FΩ₁, F⁻Ω₃, ZΩ₂]
 
-        for j in 3:n-1
+        for j in 3:(n-1)
             FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
             Ω₃ = MPSV₂[j+1]
             FΩ₃, F⁻Ω₃, ZΩ₃ = F⁺ ⋅ Ω₃, F⁻ ⋅ Ω₃, Z ⋅ Ω₃
@@ -837,7 +837,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in ETL÷2+1:ETL-1
+    @inbounds for n in (ETL÷2+1):(ETL-1)
         Ω₁, Ω₂, Ω₃ = MPSV₂[1], MPSV₂[2], MPSV₂[3] # j = 1, initialize and update `dc`
         FΩ₁, F⁻Ω₁, ZΩ₁ = F⁺ ⋅ Ω₁, F⁻ ⋅ Ω₁, Z ⋅ Ω₁
         FΩ₂, F⁻Ω₂, ZΩ₂ = F⁺ ⋅ Ω₂, F⁻ ⋅ Ω₂, Z ⋅ Ω₂
@@ -846,7 +846,7 @@ function epg_decay_curve!(dc::AbstractVector, work::EPGWork_ReIm_DualVector_Spli
         MPSV₁[1] = V[F⁻Ω₁, F⁻Ω₂, ZΩ₁]
         MPSV₁[2] = V[FΩ₁, F⁻Ω₃, ZΩ₂]
 
-        for j in 3:ETL-n
+        for j in 3:(ETL-n)
             FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
             Ω₃ = MPSV₂[j+1]
             FΩ₃, F⁻Ω₃, ZΩ₃ = F⁺ ⋅ Ω₃, F⁻ ⋅ Ω₃, Z ⋅ Ω₃
@@ -896,7 +896,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVec
         dc[1] = Ω₁[1]
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
 
-        for n in 2:ETL÷2
+        for n in 2:(ETL÷2)
             F⁺, F⁻, Z = MPSV₂[1]
             x, y = F⁺ + F⁻, F⁺ - F⁻
             x′, y′ = a * x, b * y
@@ -911,7 +911,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVec
             dc[n] = F⁻Ω₂
             FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
 
-            @simd ivdep for j in 2:n-1
+            @simd ivdep for j in 2:(n-1)
                 F⁺, F⁻, Z = MPSV₂[j+1]
                 x, y = F⁺ + F⁻, F⁺ - F⁻
                 x′, y′ = a * x, b * y
@@ -924,7 +924,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVec
             MPSV₁, MPSV₂ = MPSV₂, MPSV₁
         end
 
-        for n in ETL÷2+1:ETL-1
+        for n in (ETL÷2+1):(ETL-1)
             F⁺, F⁻, Z = MPSV₂[1]
             x, y = F⁺ + F⁻, F⁺ - F⁻
             x′, y′ = a * x, b * y
@@ -939,7 +939,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualVec
             dc[n] = F⁻Ω₂
             FΩ₁, FΩ₂, ZΩ₂ = FΩ₂, FΩ₃, ZΩ₃
 
-            @simd ivdep for j in 2:ETL-n
+            @simd ivdep for j in 2:(ETL-n)
                 F⁺, F⁻, Z = MPSV₂[j+1]
                 x, y = F⁺ + F⁻, F⁺ - F⁻
                 x′, y′ = a * x, b * y
@@ -995,7 +995,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualFla
     ETL = length(dc)
 
     (; MPSV₁, MPSV₂) = work
-    @assert length(MPSV₁) == length(MPSV₂) == 3 * ETL "Dimension mismatch"
+    length(MPSV₁) == length(MPSV₂) == 3 * ETL || throw(DimensionMismatch("workspace holds $(length(MPSV₁) ÷ 3) echoes, but the decay curve has $ETL"))
 
     α = θ.α
     TE, T2, T1 = echotime(θ), T2time(θ), T1time(θ)
@@ -1013,7 +1013,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualFla
         MPSV₁[2], MPSV₁[2+Δy], MPSV₁[2+Δz] = a + b, zero(T), zero(T)
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
 
-        for n in 2:ETL÷2
+        for n in 2:(ETL÷2)
             F⁺, F⁻, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
             x, y = F⁺ + F⁻, F⁺ - F⁻
             x′, y′ = a * x, b * y
@@ -1021,7 +1021,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualFla
             MPSV₁[2] = muladd(c, Z, x′ + y′)
             MPSV₁[1+Δz] = muladd(c′, y, d * Z)
 
-            @simd ivdep for j in 2:n-1
+            @simd ivdep for j in 2:(n-1)
                 F⁺, F⁻, Z = MPSV₂[j], MPSV₂[j+Δy], MPSV₂[j+Δz]
                 x, y = F⁺ + F⁻, F⁺ - F⁻
                 x′, y′ = a * x, b * y
@@ -1044,7 +1044,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualFla
             MPSV₁, MPSV₂ = MPSV₂, MPSV₁
         end
 
-        for n in ETL÷2+1:ETL-1
+        for n in (ETL÷2+1):(ETL-1)
             F⁺, F⁻, Z = MPSV₂[1], MPSV₂[1+Δy], MPSV₂[1+Δz]
             x, y = F⁺ + F⁻, F⁺ - F⁻
             x′, y′ = a * x, b * y
@@ -1052,7 +1052,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualFla
             MPSV₁[2] = muladd(c, Z, x′ + y′)
             MPSV₁[1+Δz] = muladd(c′, y, d * Z)
 
-            @simd ivdep for j in 2:ETL-n+1
+            @simd ivdep for j in 2:(ETL-n+1)
                 F⁺, F⁻, Z = MPSV₂[j], MPSV₂[j+Δy], MPSV₂[j+Δz]
                 x, y = F⁺ + F⁻, F⁺ - F⁻
                 x′, y′ = a * x, b * y
@@ -1108,8 +1108,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTup
 
     (; MPSV₁, MPSV₂) = work
     (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = MPSV₁, MPSV₂
-    @assert length(MPSVx₁) == length(MPSVy₁) == length(MPSVz₁) == ETL "Dimension mismatch"
-    @assert length(MPSVx₂) == length(MPSVy₂) == length(MPSVz₂) == ETL "Dimension mismatch"
+    length(MPSVx₁) == length(MPSVy₁) == length(MPSVz₁) == length(MPSVx₂) == length(MPSVy₂) == length(MPSVz₂) == ETL || throw(DimensionMismatch("workspace holds $(length(MPSVx₁)) echoes, but the decay curve has $ETL"))
 
     α = θ.α
     TE, T2, T1 = echotime(θ), T2time(θ), T1time(θ)
@@ -1126,7 +1125,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTup
         MPSVx₁[2], MPSVy₁[2], MPSVz₁[2] = a + b, zero(T), zero(T)
         (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = (MPSVx₂, MPSVy₂, MPSVz₂), (MPSVx₁, MPSVy₁, MPSVz₁)
 
-        for n in 2:ETL÷2
+        for n in 2:(ETL÷2)
             F⁺, F⁻, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
             x, y = F⁺ + F⁻, F⁺ - F⁻
             x′, y′ = a * x, b * y
@@ -1134,7 +1133,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTup
             MPSVx₁[2] = muladd(c, Z, x′ + y′)
             MPSVz₁[1] = muladd(c′, y, d * Z)
 
-            @simd ivdep for j in 2:n-1
+            @simd ivdep for j in 2:(n-1)
                 F⁺, F⁻, Z = MPSVx₂[j], MPSVy₂[j], MPSVz₂[j]
                 x, y = F⁺ + F⁻, F⁺ - F⁻
                 x′, y′ = a * x, b * y
@@ -1157,7 +1156,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTup
             (MPSVx₁, MPSVy₁, MPSVz₁), (MPSVx₂, MPSVy₂, MPSVz₂) = (MPSVx₂, MPSVy₂, MPSVz₂), (MPSVx₁, MPSVy₁, MPSVz₁)
         end
 
-        for n in ETL÷2+1:ETL-1
+        for n in (ETL÷2+1):(ETL-1)
             F⁺, F⁻, Z = MPSVx₂[1], MPSVy₂[1], MPSVz₂[1]
             x, y = F⁺ + F⁻, F⁺ - F⁻
             x′, y′ = a * x, b * y
@@ -1165,7 +1164,7 @@ function epg_impulse_response!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualTup
             MPSVx₁[2] = muladd(c, Z, x′ + y′)
             MPSVz₁[1] = muladd(c′, y, d * Z)
 
-            @simd ivdep for j in 2:ETL-n+1
+            @simd ivdep for j in 2:(ETL-n+1)
                 F⁺, F⁻, Z = MPSVx₂[j], MPSVy₂[j], MPSVz₂[j]
                 x, y = F⁺ + F⁻, F⁺ - F⁻
                 x′, y′ = a * x, b * y
@@ -1259,7 +1258,7 @@ function epg_impulse_response_batched!(work::EPGWork_ReIm_Batched_Split_Dynamic{
         end
         (X₁, Y₁, Z₁), (X₂, Y₂, Z₂) = (X₂, Y₂, Z₂), (X₁, Y₁, Z₁)
 
-        for n in 2:ETL÷2
+        for n in 2:(ETL÷2)
             @simd ivdep for l in 1:W
                 F⁺, F⁻, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
                 x, y = F⁺ + F⁻, F⁺ - F⁻
@@ -1271,7 +1270,7 @@ function epg_impulse_response_batched!(work::EPGWork_ReIm_Batched_Split_Dynamic{
                 Z₁[l, 1] = muladd(c′[l], y, d[l] * Z)
             end
 
-            for j in 2:n-1
+            for j in 2:(n-1)
                 @simd ivdep for l in 1:W
                     F⁺, F⁻, Z = X₂[l, j], Y₂[l, j], Z₂[l, j]
                     x, y = F⁺ + F⁻, F⁺ - F⁻
@@ -1297,7 +1296,7 @@ function epg_impulse_response_batched!(work::EPGWork_ReIm_Batched_Split_Dynamic{
             (X₁, Y₁, Z₁), (X₂, Y₂, Z₂) = (X₂, Y₂, Z₂), (X₁, Y₁, Z₁)
         end
 
-        for n in ETL÷2+1:ETL-1
+        for n in (ETL÷2+1):(ETL-1)
             @simd ivdep for l in 1:W
                 F⁺, F⁻, Z = X₂[l, 1], Y₂[l, 1], Z₂[l, 1]
                 x, y = F⁺ + F⁻, F⁺ - F⁻
@@ -1309,7 +1308,7 @@ function epg_impulse_response_batched!(work::EPGWork_ReIm_Batched_Split_Dynamic{
                 Z₁[l, 1] = muladd(c′[l], y, d[l] * Z)
             end
 
-            for j in 2:ETL-n+1
+            for j in 2:(ETL-n+1)
                 @simd ivdep for l in 1:W
                     F⁺, F⁻, Z = X₂[l, j], Y₂[l, j], Z₂[l, j]
                     x, y = F⁺ + F⁻, F⁺ - F⁻
@@ -1416,12 +1415,12 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in 2:ETL÷2
+    @inbounds for n in 2:(ETL÷2)
         Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
         Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         dc[n] = abs(Ω₁′[1])
         MPSV₁[1] = Ω₁′
-        @simd for j in 2:n-1
+        @simd for j in 2:(n-1)
             Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
             MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
@@ -1430,12 +1429,12 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualMVector_
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in ETL÷2+1:ETL-1
+    @inbounds for n in (ETL÷2+1):(ETL-1)
         Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
         Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         dc[n] = abs(Ω₁′[1])
         MPSV₁[1] = Ω₁′
-        @simd for j in 2:ETL-n
+        @simd for j in 2:(ETL-n)
             Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
             MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ]
         end
@@ -1581,12 +1580,12 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVe
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in 2:ETL÷2
+    @inbounds for n in 2:(ETL÷2)
         Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
         Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ, 0]
         dc[n] = abs(Ω₁′[1])
         MPSV₁[1] = Ω₁′
-        @simd for j in 2:n-1
+        @simd for j in 2:(n-1)
             Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
             MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ, 0]
         end
@@ -1595,12 +1594,12 @@ function epg_decay_curve!(dc::AbstractVector{T}, work::EPGWork_ReIm_DualPaddedVe
         MPSV₁, MPSV₂ = MPSV₂, MPSV₁
     end
 
-    @inbounds for n in ETL÷2+1:ETL-1
+    @inbounds for n in (ETL÷2+1):(ETL-1)
         Ωⱼ, Ωⱼ₊₁ = MPSV₂[1], MPSV₂[2] # j = 1, initialize and update `dc`
         Ω₁′ = V[F⁻⋅Ωⱼ, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ, 0]
         dc[n] = abs(Ω₁′[1])
         MPSV₁[1] = Ω₁′
-        @simd for j in 2:ETL-n
+        @simd for j in 2:(ETL-n)
             Ωⱼ₋₁, Ωⱼ, Ωⱼ₊₁ = Ωⱼ, Ωⱼ₊₁, MPSV₂[j+1]
             MPSV₁[j] = V[F⁺⋅Ωⱼ₋₁, F⁻⋅Ωⱼ₊₁, Z⋅Ωⱼ, 0]
         end
@@ -1818,7 +1817,7 @@ function epg_decay_basis!(decay_basis::Matrix{T}, decay_basis_work::EPGCosineSer
             end
 
             p += L
-            for r in 1:min(4, ETL - i0)
+            for r in 1:min(4, ETL-i0)
                 decay_basis[o1+i0+r] = abs(s * v1[r])
                 decay_basis[o2+i0+r] = abs(s * v2[r])
                 decay_basis[o3+i0+r] = abs(s * v3[r])

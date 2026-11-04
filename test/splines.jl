@@ -15,13 +15,13 @@ function test_poly()
         return sort!(rs; by = r -> (abs(imag(r)) > √eps(), real(r))) # sorted real roots, followed by complex roots
     end
 
-    @testset "degree d = $d, coeffs[$i] = 0" for d in 0:5, i in 0:d+1
+    @testset "degree d = $d, coeffs[$i] = 0" for d in 0:5, i in 0:(d+1)
         coeffs = randn(d + 1)
         i > 0 && (coeffs[i] = 0.0) # zero out i'th coefficient to test degenerate polynomials
         for p in [DECAES.Poly(coeffs), DECAES.Poly(coeffs...)]
             @test DECAES.coeffs(p) == coeffs
             @test DECAES.coeffs(p') == Float64[i * coeffs[i+1] for i in 1:d]
-            @test DECAES.coeffs(cumsum(p)) == [i == 0 ? 0.0 : coeffs[i] / i for i in 0:d+1]
+            @test DECAES.coeffs(cumsum(p)) == [i == 0 ? 0.0 : coeffs[i] / i for i in 0:(d+1)]
             @test DECAES.coeffs(cumsum(p)') ≈ DECAES.coeffs(p) # derivative of integral is identity
             @test DECAES.coeffs(cumsum(p')) ≈ [0.0; DECAES.coeffs(p)[2:end]] # integral of derivative is identity, up to a constant, which we fix to zero
 
@@ -112,7 +112,7 @@ function test_cubic_splines()
 
     @testset "bc = $bc, npts = $npts" for bc in (:notaknot, :natural, :zeroslope, (:notaknot, :zeroslope), (:zeroslope, :notaknot), (:natural, :zeroslope), (:notaknot, :natural)), npts in 2:8
         x = collect(range(-0.5, 2.0; length = npts))
-        npts > 2 && (x[2:end-1] .+= (0.4 * step(range(-0.5, 2.0; length = npts))) .* (rand(npts - 2) .- 0.5)) # unequal spacing
+        npts > 2 && (x[2:(end-1)] .+= (0.4 * step(range(-0.5, 2.0; length = npts))) .* (rand(npts - 2) .- 0.5)) # unequal spacing
         y = randn(npts)
         spl = DECAES.cubic_spline(x, y; bc)
 
@@ -124,8 +124,8 @@ function test_cubic_splines()
         δ(i) = (y[i+1] - y[i]) / h(i)
         curvature_right(i) = 2 * (3 * δ(i) - 2 * spl.m[i] - spl.m[i+1]) / h(i)
         curvature_left(i) = 2 * (spl.m[i-1] + 2 * spl.m[i] - 3 * δ(i - 1)) / h(i - 1)
-        scale = maximum(abs, y) / minimum(h(i) for i in 1:npts-1)^2
-        for i in 2:npts-1
+        scale = maximum(abs, y) / minimum(h(i) for i in 1:(npts-1))^2
+        for i in 2:(npts-1)
             @test curvature_left(i) ≈ curvature_right(i) rtol = 1e-8 atol = 1e-8 * scale
         end
         bcl, bcr = DECAES.boundary_conditions(bc)
@@ -149,12 +149,12 @@ function test_cubic_splines()
         x̂ = DECAES.spline_root(x, y, v; bc)
         @test x[1] <= x̂ <= x[end]
         @test spl(x̂) ≈ v
-        @test all(!isapprox(spl(t), v; rtol = 1e-14, atol = 1e-14) for t in range(x[1], x̂; length = 64)[1:end-1] if t < x̂ - 1e-8)
+        @test all(!isapprox(spl(t), v; rtol = 1e-14, atol = 1e-14) for t in range(x[1], x̂; length = 64)[1:(end-1)] if t < x̂ - 1e-8)
     end
 
-    @test_throws AssertionError DECAES.cubic_spline([0.0, 0.0], [1.0, 2.0])
-    @test_throws AssertionError DECAES.cubic_spline([1.0, 0.0], [1.0, 2.0])
-    @test_throws AssertionError DECAES.cubic_spline([0.0, Inf], [1.0, 2.0])
+    @test_throws ArgumentError DECAES.cubic_spline([0.0, 0.0], [1.0, 2.0])
+    @test_throws ArgumentError DECAES.cubic_spline([1.0, 0.0], [1.0, 2.0])
+    @test_throws ArgumentError DECAES.cubic_spline([0.0, Inf], [1.0, 2.0])
 end
 
 function test_cubic_spline_surrogate()

@@ -36,7 +36,7 @@ end
 @inline function SplitCartesianIndices(sz::NTuple{N, Int}, ::Val{M}) where {N, M}
     @assert 0 <= M <= N
     sz1 = sz[1:M]
-    sz2 = sz[M+1:N]
+    sz2 = sz[(M+1):N]
     return CartesianIndices(sz1), CartesianIndices(sz2)
 end
 @inline SplitCartesianIndices(x::AbstractArray{<:Any, N}, ::Val{M}) where {N, M} = SplitCartesianIndices(size(x), Val(M))
@@ -53,7 +53,7 @@ end
 
 function insertsorted!(x, val, len = length(x))
     len = min(len, length(x))
-    @inbounds for i in 1:len-1
+    @inbounds for i in 1:(len-1)
         x[i], val = minmax(x[i], val)
     end
     @inbounds x[len] = val
@@ -226,14 +226,17 @@ function GriddedSpectrumInterpolator(As::AbstractArray{T, 3}, ∇As::AbstractArr
     @assert size(∇As, 1) == M && size(∇As, 2) == N && size(∇As, 3) >= 1 && size(∇As, 4) == ngrid
     γ², dγ², Q = zeros(T, k, ngrid), zeros(T, k, ngrid), zeros(T, k, k, ngrid)
 
-    @views for i in 1:ngrid
-        F = svd(As[:, :, i])
-        Uᵀ∇AV = F.U' * ∇As[:, :, 1, i] * F.V # k×k; its diagonal is uᵢᵀ(∂A/∂α)vᵢ
-        for l in 1:k
-            γ²[l, i] = F.S[l]^2
-            dγ²[l, i] = 2 * F.S[l] * Uᵀ∇AV[l, l]
+    tforeach(1:ngrid; blocksize = 1) do i
+        @views begin
+            F = svd(As[:, :, i]; alg = LinearAlgebra.QRIteration()) # OpenBLAS's `gesdd` (default, divide-and-conquer) is slower under concurrent calls, while `gesvd` (QR iteration) has the same serial cost and also scales
+            Uᵀ∇AV = F.U' * ∇As[:, :, 1, i] * F.V # k×k; its diagonal is uᵢᵀ(∂A/∂α)vᵢ
+            for l in 1:k
+                γ²[l, i] = F.S[l]^2
+                dγ²[l, i] = 2 * F.S[l] * Uᵀ∇AV[l, l]
+            end
+            Q[:, :, i] .= M >= N ? F.V : F.U # the thin factor on the short side is the square one
         end
-        Q[:, :, i] .= M >= N ? F.V : F.U # the thin factor on the short side is the square one
+        return nothing
     end
 
     return GriddedSpectrumInterpolator(collect(αs), γ², dγ², Q)
@@ -267,7 +270,7 @@ function deflated_eigvals!(γ²::Vector{T}, spectrum_work::SVDValsWorkspace{T}, 
     @inbounds for l in 1:p
         γ²[l] = σ[l]^2
     end
-    @inbounds for l in p+1:k
+    @inbounds for l in (p+1):k
         γ²[l] = zero(T)
     end
 
@@ -347,7 +350,7 @@ end
 function Base.popfirst!(c::GrowableCache)
     n = c.length[]
     @inbounds x, v = c.keys[1], c.values[1]
-    @inbounds for i in 1:n-1
+    @inbounds for i in 1:(n-1)
         c.keys[i], c.values[i] = c.keys[i+1], c.values[i+1]
     end
     c.length[] = n - 1
@@ -441,7 +444,7 @@ function pretty_time(t)
 end
 
 struct DECAESProgress
-    progress_meter::Progress
+    progress_meter::Progress{IOBuffer}
     io_buffer::IOBuffer
 end
 
@@ -558,7 +561,7 @@ default_blocksize() = 64
 #   See: https://juliafolds.github.io/data-parallelism/tutorials/concurrency-patterns/#worker_pool
 
 function workerpool(work!, allocate, inputs::Channel; ninputs::Int, ntasks::Int = Threads.nthreads(), verbose::Bool = false)
-    function consumer(callback = () -> nothing)
+    function consumer(callback)
         allocate() do resource
             for input in inputs
                 work!(input, resource)
@@ -569,10 +572,10 @@ function workerpool(work!, allocate, inputs::Channel; ninputs::Int, ntasks::Int 
 
     if !verbose
         if ntasks == 1
-            consumer()
+            consumer(Returns(nothing))
         else
             @sync for i in 1:ntasks
-                Threads.@spawn consumer()
+                Threads.@spawn consumer(Returns(nothing))
             end
         end
     else
@@ -601,8 +604,8 @@ function workerpool(work!, allocate, inputs, args...; kwargs...)
 end
 
 function split_indices(; length::Int, minchunksize::Union{Int, Nothing} = nothing, maxpartitions::Union{Int, Nothing} = nothing)
-    @assert minchunksize === nothing || minchunksize::Int > 0 "Basesize must be a positive integer, got minchunksize = $minchunksize"
-    @assert maxpartitions === nothing || maxpartitions::Int > 0 "Maximum partitions must be a positive integer, got maxpartitions = $maxpartitions"
+    minchunksize === nothing || minchunksize > 0 || throw(DomainError(minchunksize, "Minimum chunk size must be a positive integer"))
+    maxpartitions === nothing || maxpartitions > 0 || throw(DomainError(maxpartitions, "Maximum partitions must be a positive integer"))
     return split_indices(length, something(minchunksize, 1)::Int, something(maxpartitions, length)::Int)
 end
 

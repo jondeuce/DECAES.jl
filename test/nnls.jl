@@ -345,7 +345,7 @@ end
 function nnls_brute(A, b; rtol = 1e-12)
     n = size(A, 2)
     res★, supports = Inf, Vector{Int}[]
-    for mask in 0:(1<<n)-1
+    for mask in 0:((1<<n)-1)
         S = [j for j in 1:n if mask & (1 << (j - 1)) != 0]
         AS = A[:, S]
         rank(AS) < length(S) && continue
@@ -1132,7 +1132,7 @@ end
 function lasso_brute(A, b, μ)
     n = size(A, 2)
     f★, x★ = Inf, zeros(n)
-    for mask in 0:(1<<n)-1
+    for mask in 0:((1<<n)-1)
         S = [j for j in 1:n if mask & (1 << (j - 1)) != 0]
         AS = A[:, S]
         rank(AS) < length(S) && continue
@@ -1328,7 +1328,7 @@ end
     @test maximum(x) <= 1e-12 * maximum(x₀) # a warm-started active set can carry the threshold column at a roundoff-scale coefficient; see `lsqnonneg_chi2_lasso_tests`
     @test chi2 ≈ sum(abs2, b) / res_min^2
 
-    @test_throws AssertionError DECAES.lsqnonneg_mdp_lasso(A, b, 0.0)
+    @test_throws DomainError DECAES.lsqnonneg_mdp_lasso(A, b, 0.0)
 end
 
 # Orthogonal columns separate the ℓ¹ problem into xⱼ = max(0, (cⱼ - μ/2)/nⱼ) with cⱼ = Aⱼᵀb and nⱼ = ‖Aⱼ‖².

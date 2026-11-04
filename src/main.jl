@@ -354,7 +354,8 @@ function run_main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
     # Compute T2 distribution from input 4D multi-echo image
     if opts[:T2map]
         t2map_opts = t2map_options(image, opts)
-        t2map_maps = T2Maps(t2map_opts)
+        t2map_global_buffer = global_buffer_maker(t2map_opts)
+        t2map_maps = T2Maps(t2map_opts, t2map_global_buffer)
         t2map_dist = T2Distributions(t2map_opts)
 
         # Load B1 map
@@ -362,7 +363,7 @@ function run_main(file_info::Dict{Symbol, Any}, opts::Dict{Symbol, Any})
             @showtime("Loading B1 map from file: $(file_info[:B1mapfile])", try_load_B1mapfile!(t2map_maps, file_info[:B1mapfile]))
         end
 
-        @showtime("Running T2mapSEcorr on file: $(file_info[:inputfile])", T2mapSEcorr!(t2map_maps, t2map_dist, image, t2map_opts))
+        @showtime("Running T2mapSEcorr on file: $(file_info[:inputfile])", T2mapSEcorr!(t2map_maps, t2map_dist, image, t2map_opts, t2map_global_buffer))
         maps, dist = convert(Dict{String, Any}, t2map_maps), parent(t2map_dist)
 
         # Save T2-distribution
@@ -448,10 +449,10 @@ function clean_cli_args!(opts)
     end
 
     if opts[:Reg] == "chi2"
-        @assert length(opts[:RegParams]) == 1 "Must set chi2 factor via --RegParams when --Reg=\"chi2\""
+        length(opts[:RegParams]) == 1 || throw(ArgumentError("Must set chi2 factor via --RegParams when --Reg=\"chi2\""))
         opts[:Chi2Factor] = only(opts[:RegParams])
     elseif opts[:Reg] == "mdp"
-        @assert length(opts[:RegParams]) == 1 "Must set noise level via --RegParams when --Reg=\"mdp\""
+        length(opts[:RegParams]) == 1 || throw(ArgumentError("Must set noise level via --RegParams when --Reg=\"mdp\""))
         opts[:NoiseLevel] = only(opts[:RegParams])
     end
 
@@ -486,7 +487,7 @@ end
 function get_file_infos(opts::Dict{Symbol, Any})
     # Read in input files
     input = opts[:input]
-    @assert !isempty(input) "At least one input file is required"
+    !isempty(input) || throw(ArgumentError("At least one input file is required"))
     inputfiles = String[path for path in input if is_allowed_suffix(path)]
 
     if isempty(inputfiles)
@@ -527,7 +528,7 @@ function get_file_infos(opts::Dict{Symbol, Any})
     B1mapfiles = if isempty(B1map)
         fill(nothing, length(inputfiles)) # no B1map passed
     elseif length(B1map) == length(inputfiles)
-        @assert opts[:SetFlipAngle] === nothing "Cannot set a fixed flip angle using --SetFlipAngle when passing B1 maps using --B1map"
+        opts[:SetFlipAngle] === nothing || throw(ArgumentError("Cannot set a fixed flip angle using --SetFlipAngle when passing B1 maps using --B1map"))
         String.(B1map) # one B1map passed for each input file
     else
         error("Number of B1 map files passed ($(length(B1map))) does not equal the number of input image files passed ($(length(inputfiles)))")
@@ -660,7 +661,7 @@ function load_image(filename, ::Val{N}) where {N}
     data = ensure_ndims(filename, data, Val(N))
 
     # Use a consistent floating-point type throughout the pipeline
-    sz = ntuple(i -> size(data, i), N)
+    sz = ntuple(Base.Fix1(size, data), N)
     image = copyto!(Array{Float64, N}(undef, sz), data)
 
     return image
@@ -746,7 +747,7 @@ is_allowed_suffix(filename) = maybe_get_suffix(filename) !== nothing
 function chop_allowed_suffix(filename::AbstractString)
     ext = maybe_get_suffix(filename)
     if ext !== nothing
-        return filename[1:end-length(ext)]
+        return filename[1:(end-length(ext))]
     else
         error("Currently only $ALLOWED_FILE_SUFFIXES_STRING file types are supported")
     end
