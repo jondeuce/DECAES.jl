@@ -192,7 +192,7 @@ Compute EPG decay curve + corresponding T2 distribution:
 
 # ╔═╡ 02d229c2-e2c0-4a36-bc6a-163778be85b9
 function epg_decay_curve(ETL, α, TE, T21, T22, T1, β, MWF, SNR)
-    x = (0:ETL-1) ./ (ETL - 1)
+    x = (0:(ETL-1)) ./ (ETL - 1)
     y = MWF .* DECAES.EPGdecaycurve(ETL, α, TE, T21, T1, β) .+
         (1 - MWF) .* DECAES.EPGdecaycurve(ETL, α, TE, T22, T1, β)
     y .*= 0.995 / maximum(y)
