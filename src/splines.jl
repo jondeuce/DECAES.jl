@@ -906,33 +906,34 @@ function loss!(prob::NNLSDiscreteSurrogateSearch{D, T}, I::CartesianIndex{D}) wh
     (; As, b, nnls_work, seen_pts, seen_idx, seen_nsetp, seen_stamp, voxel) = prob
     lin = LinearIndices(size(prob.u))[I]
 
-    # Choose the warm-start seed in order of preference. First this grid point's active set from the immediately-previous voxel, which shares its decay basis and has a nearby signal.
-    # Otherwise the nearest grid point already evaluated this voxel, since nearby parameters have nearly identical decay bases and hence nearly identical active sets, and even a far seed beats a cold solve. Otherwise solve cold.
-    seedlin = 0
+    # Warm-start either by
+    # 1) the nearest grid point already evaluated this voxel, which shares the signal and has a nearby decay basis and hence a nearby active set, or
+    # 2) if available, for the first solve of this voxel use this grid point's active set from the previously solved voxel.
+    # Otherwise, solve cold.
+    seed_lin = 0
     @inbounds begin
-        prevstamp = seen_stamp[lin]
-        if prevstamp > 0 && prevstamp == voxel[] - 1
-            seedlin = lin
-        else
-            bestd = typemax(Int)
-            for J in seen_pts
-                d = 0
-                for k in 1:D
-                    d += abs(J[k] - I[k])
-                end
-                if d < bestd
-                    seedlin, bestd = LinearIndices(size(prob.u))[J], d
-                end
+        best_d = typemax(Int)
+        for J in seen_pts
+            d = 0
+            for k in 1:D
+                d += abs(J[k] - I[k])
+            end
+            if d < best_d
+                seed_lin, best_d = LinearIndices(size(prob.u))[J], d
             end
         end
+        if seed_lin == 0
+            prev_stamp = seen_stamp[lin]
+            prev_stamp > 0 && prev_stamp == voxel[] - 1 && (seed_lin = lin)
+        end
     end
-    np0 = seedlin == 0 ? 0 : @inbounds(seen_nsetp[seedlin])
+    np0 = seed_lin == 0 ? 0 : @inbounds(seen_nsetp[seed_lin])
 
     # Precomputed-Gram fast path, reading the seed out of seen_idx before it is overwritten below. The exact QR solve takes over on toggle-off or a conditioning or iteration guard failure.
-    solved = SURROGATE_USE_FAST_GRAM[] && @views loss_gram!(prob, I, lin, seen_idx[:, max(seedlin, 1)], np0)
+    solved = SURROGATE_USE_FAST_GRAM[] && @views loss_gram!(prob, I, lin, seen_idx[:, max(seed_lin, 1)], np0)
     @inbounds if !solved
         if np0 > 0
-            @views solve!(nnls_work, As[:, :, I], b, seen_idx[:, seedlin], np0)
+            @views solve!(nnls_work, As[:, :, I], b, seen_idx[:, seed_lin], np0)
         else
             @views solve!(nnls_work, As[:, :, I], b)
         end

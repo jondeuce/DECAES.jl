@@ -2028,7 +2028,7 @@ end
 # This is the Lawson-Hanson iteration in Gram (normal-equations) form, cf. FNNLS (Bro & de Jong 1997):
 #   - entering candidates pass a bordering pre-check: with L'L = G_P and u = L'⁻¹G_{P,j}, the Schur complement d = Gⱼⱼ − ‖u‖² must exceed ϵ·Gⱼⱼ for numerical independence, the proposed new coefficient being wⱼ/d > 0. Accepting extends the Cholesky factor in place with u, so adds never refactorize;
 #   - infeasible solves run the classic secondary-loop interpolation toward the last feasible iterate, so the objective strictly decreases and add→drop cycling cannot occur;
-#   - candidates that fail the pre-check or come out infeasible immediately after entry stay rejected for the remainder of the solve, their attainable improvement being at the dual tolerance level. This mirrors the QR-based solver's `w[pos] = 0` handling.
+#   - candidates that fail the pre-check or come out infeasible immediately after entry stay rejected for the remainder of the solve; unresolved dual violations on these columns trigger the QR fallback.
 # Returns `true` with the solution in xp[1:np] on P[1:np], or `false` when a conditioning or iteration guard trips, on which the caller falls back to the QR-based solver.
 function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where {T}
     (; c, P, inP, rejected, np, GP, L, dinv, xp, xc, u, w) = gp
@@ -2240,7 +2240,12 @@ function solve!(gp::NNLSPrecomputedGram{T}, G::AbstractMatrix{T}, m::Int) where 
                     wmax, jmax = wj, j
                 end
             end
-            jmax == 0 && return true # KKT satisfied, up to rejected tolerance-level candidates
+            if jmax == 0
+                for j in 1:n
+                    !inP[j] && w[j] > wtol && return false # a rejected column can still violate KKT
+                end
+                return true
+            end
             p >= min(m, n) && return false # cannot grow the active set further; fall back
 
             # Bordering pre-check + in-place factor extension: u = L'⁻¹G_{P,j}, d = Gⱼⱼ − ‖u‖²

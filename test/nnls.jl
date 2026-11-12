@@ -485,6 +485,20 @@ end
     end
 end
 
+# If the precomputed-Gram solver rejects a column for a small Schur complement d = Gⱼⱼ − ‖L'⁻¹G_{P,j}‖² but that column still violates dual feasibility, the solve must indicate failure so that the caller falls back to QR.
+# With A = [1 1; 0 δ] and δ² = 10eps below the guard 10n·eps, the active set {1} is optimal for b = (1, 0); for b = (1, 1) its dual on the rejected column 2 is δ, above the dual tolerance.
+@testset "Adversarial NNLS precomputed Gram ($T)" for T in (Float32, Float64)
+    δ = sqrt(10 * eps(T))
+    A = T[1 1; 0 δ]
+    G = A' * A
+    gp = NNLS.NNLSPrecomputedGram(T, 2)
+    for (b, should_succeed) in ((T[1, 0], true), (T[1, 1], false))
+        NNLS.load!(gp, A, b)
+        NNLS.set_active!(gp, G, [1], 1)
+        @test NNLS.solve!(gp, G, 2) == should_succeed
+    end
+end
+
 # Mock L-curve (ξ(t), η(t)) = (e^t, e^{-t}), whose exact geometry is v² = e^{2t} + e^{-2t}, κ = 2/v³ and ω = κv = 2/v².
 # The active-set signature is constant, so the search sees one analytic branch, and `sig₀` below is chosen distinct from it so the unregularized endpoint is never reached.
 # This is an arbitrary planar curve, not a Tikhonov path, so `tangent_angle` does not read its tangent; it exercises the golden-state mechanics only. See `build_tikhonov_corner_cached_fun` for the rotation-based sweep.

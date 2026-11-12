@@ -276,26 +276,19 @@ end
 
 struct EPGBasisSetFunctor{
     T,
-    ETL,
     opt_vars,
     Tθ <: EPGParameterization{T},
     W <: AbstractEPGWorkspace{T},
-    F <: EPGFunctor{T, ETL, opt_vars},
-    J <: EPGJacobianFunctor{T, ETL, opt_vars},
 }
     θ::Tθ
-    opt_vars::Val{opt_vars} #TODO: SymbolVector{opt_vars}?
+    opt_vars::Val{opt_vars}
     T2_times::Vector{T}
     epg_work::W
-    epg_functor!::F
-    epg_jac_functor!::J
 end
 
 function EPGBasisSetFunctor(o::T2mapOptions{T}, θ::EPGParameterization{T}, opt_vars::Val) where {T}
     epg_work = EPGdecaybasis_work(θ)
-    epg_functor! = EPGFunctor(θ, opt_vars)
-    epg_jac_functor! = EPGJacobianFunctor(θ, opt_vars)
-    return EPGBasisSetFunctor(θ, opt_vars, T2_component_times(o), epg_work, epg_functor!, epg_jac_functor!)
+    return EPGBasisSetFunctor(θ, opt_vars, T2_component_times(o), epg_work)
 end
 
 #### EPG basis set
@@ -323,12 +316,6 @@ function epg_decay_basis(θ::EPGParameterization{T}, T2_times::AbstractVector) w
 end
 
 #### Jacobian of EPG basis set
-
-function ∇epg_decay_basis!(f::EPGBasisSetFunctor{T}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, θ::EPGParameterization{T}) where {T}
-    return ∇epg_decay_basis!(∇decay_basis, decay_basis, f.epg_jac_functor!, θ, f.T2_times)
-end
-∇epg_decay_basis!(f::EPGBasisSetFunctor{T}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}, opt_vars::Val) where {D, T} = ∇epg_decay_basis!(f, ∇decay_basis, decay_basis, restructure(f.θ, x, opt_vars))
-∇epg_decay_basis!(f::EPGBasisSetFunctor{T}, ∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, x::SVector{D, T}) where {D, T} = ∇epg_decay_basis!(f, ∇decay_basis, decay_basis, restructure(f.θ, x, f.opt_vars))
 
 function ∇epg_decay_basis!(∇decay_basis::AbstractArray{T, 3}, decay_basis::AbstractMatrix{T}, decay_curve_jac!::EPGJacobianFunctor{T}, θ::EPGParameterization{T}, T2_times::AbstractVector) where {T}
     # Compute the NNLS basis over T2 space
@@ -361,7 +348,7 @@ function epg_grid_model(o::T2mapOptions{T}, θ::EPGParameterization{T}) where {T
     As, ∇As, Gs = zeros(T, o.nTE, o.nT2, length(αs)), zeros(T, o.nTE, o.nT2, 1, length(αs)), zeros(T, o.nT2, o.nT2, length(αs))
     @views for (i, α) in enumerate(αs)
         A = As[:, :, i] # bound once so that `mul!` sees `A' === A` and takes the symmetric rank-k path, making the Gram exactly symmetric
-        ∇epg_decay_basis!(basis_set, ∇As[:, :, :, i], A, restructure(θ, (; α)))
+        epg_decay_basis_∂α!(A, ∇As[:, :, 1, i], nothing, basis_set.epg_work, restructure(θ, (; α)), basis_set.T2_times)
         mul!(Gs[:, :, i], A', A)
     end
     return (; As, ∇As, Gs)
@@ -383,19 +370,22 @@ function epg_grid_model(o::T2mapOptions{T}, θ::EPGConstantFlipAngleOptions{T}, 
     return (; As, ∇As, Gs)
 end
 
-# Scratch for the α-polish: the NNLS problem at the polish point, plus the columns and accumulators the envelope derivatives are assembled from one support column at a time.
+# Compute the columns `cols` of A(α), A'(α), and A''(α); see `epg_decay_basis_∂α!`
+function epg_decay_basis_∂α!(A, ∂A, ∂²A, f::EPGBasisSetFunctor{T}, α::T, cols::AbstractVector{Int}) where {T}
+    return epg_decay_basis_∂α!(A, ∂A, ∂²A, f.epg_work, restructure(f.θ, (; α)), f.T2_times, cols)
+end
+
 struct AlphaPolishWorkspace{T, P}
     prob::P
-    Acol::Vector{T} # ETL, value column, discarded
-    ∂Acol::Vector{T} # ETL, α-derivative column
-    ∂²Acol::Vector{T} # ETL, α-second-derivative column
+    ∂A::Matrix{T} # ETL × nT2, each column holding the α-derivative of the corresponding support column
+    ∂²A::Matrix{T} # ETL × nT2, the same for the second α-derivative
     ∂Ax::Vector{T} # ETL, Σ_j x_j ∂A[:, j]
     ∂²Ax::Vector{T} # ETL, Σ_j x_j ∂²A[:, j]
     q::Vector{T} # nT2, one entry per passive column; see `polish_grad_hess`
 end
 function AlphaPolishWorkspace(decay_basis::Matrix{T}, decay_data::Vector{T}) where {T}
     ETL, nT2 = size(decay_basis)
-    return AlphaPolishWorkspace(NNLSProblem(decay_basis, decay_data), (zeros(T, ETL) for _ in 1:5)..., zeros(T, nT2))
+    return AlphaPolishWorkspace(NNLSProblem(decay_basis, decay_data), zeros(T, ETL, nT2), zeros(T, ETL, nT2), zeros(T, ETL), zeros(T, ETL), zeros(T, nT2))
 end
 
 # =========================================================
@@ -501,46 +491,37 @@ polish_basis!(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T) where {
 #   f′ = −2·rᵀ∂Ax,   f″ = 2‖∂Ax‖² − 2·rᵀ∂²Ax − 2·qᵀG⁻¹q,   q = A_Pᵀ(∂Ax) − ∂Aᵀr.
 # The final term is what distinguishes the profiled curvature from that of a frozen x, and it is available for the cost of one triangular solve: the NNLS solve already left the factor G = UᵀU, so qᵀG⁻¹q = ‖U⁻ᵀq‖².
 # Valid where the passive set and the response signs are constant, which is why the returned angle is certified against true losses rather than trusted.
-# Returns `f″ = NaN` when second derivatives are unavailable, which the caller reads as "no Newton candidate".
-function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, cosine::EPGCosineSeriesBasis{T}, α::T, x, r, idx) where {T}
+function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, decay_basis_work, α::T, x, r, idx) where {T}
     (; decay_basis, α_polish_work) = work
-    (; Acol, ∂Acol, ∂²Acol, ∂Ax, ∂²Ax, q) = α_polish_work # `Acol` is discarded; the value column is already in `decay_basis`
+    (; ∂A, ∂²A, ∂Ax, ∂²Ax, q) = α_polish_work
     (; nnls_work) = α_polish_work.prob
+    p = length(idx)
+    ∂A_P, ∂²A_P = view(∂A, :, 1:p), view(∂²A, :, 1:p)
+    epg_decay_basis_∂α!(nothing, ∂A_P, ∂²A_P, decay_basis_work, α, idx)
+
     fill!(∂Ax, zero(T))
     fill!(∂²Ax, zero(T))
     g = zero(T)
-    @inbounds for (t, j) in enumerate(idx)
-        epg_decay_basis_∂α_col!(Acol, ∂Acol, ∂²Acol, cosine, α, j)
+    @inbounds for (col, j) in enumerate(idx)
         xⱼ, dⱼ = x[j], zero(T)
         @simd for i in eachindex(∂Ax)
-            ∂ᵢ = ∂Acol[i]
+            ∂ᵢ, ∂²ᵢ = ∂A_P[i, col], ∂²A_P[i, col]
             ∂Ax[i] = muladd(xⱼ, ∂ᵢ, ∂Ax[i])
-            ∂²Ax[i] = muladd(xⱼ, ∂²Acol[i], ∂²Ax[i])
+            ∂²Ax[i] = muladd(xⱼ, ∂²ᵢ, ∂²Ax[i])
             dⱼ = muladd(∂ᵢ, r[i], dⱼ)
         end
-        q[t] = -dⱼ # the A_Pᵀ(∂Ax) half needs the whole ∂Ax, so it is added in the second pass below
+        q[col] = -dⱼ # the A_Pᵀ(∂Ax) half needs the whole ∂Ax, so it is added in the second pass below
         g = muladd(xⱼ, dⱼ, g)
     end
-    p = length(idx) # A_Pᵀ(∂Ax) needs ∂Ax whole, so it cannot fuse into the pass above
-    @inbounds @views for (t, j) in enumerate(idx)
-        q[t] += dot(decay_basis[:, j], ∂Ax)
+
+    @inbounds @views for (col, j) in enumerate(idx) # A_Pᵀ(∂Ax) needs ∂Ax whole, so it cannot fuse into the pass above
+        q[col] += dot(decay_basis[:, j], ∂Ax)
     end
+
     qₚ = @views q[1:p] # the solve is in place, and `q` is not read again
     NNLS.solve_triangular_system!(qₚ, NNLS.choleskyfactor(nnls_work, Val(:U)), p, Val(true))
-    return -2 * g, 2 * (dot(∂Ax, ∂Ax) - dot(r, ∂²Ax) - dot(qₚ, qₚ))
-end
 
-function polish_grad_hess(work::FlipAngleOptimizationWorkspace{T}, ::Nothing, α::T, x, r, idx) where {T}
-    (; decay_basis_set, α_polish_work) = work
-    (; Acol) = α_polish_work
-    θα = restructure(decay_basis_set.θ, (; α))
-    g = zero(T)
-    @inbounds for j in idx
-        ∂Acol = decay_basis_set.epg_jac_functor!(Acol, restructure(θα, (; T2 = decay_basis_set.T2_times[j]))) # ∂Acol aliases the functor's own ETL × 1 Jacobian buffer
-        g = muladd(x[j], dot(∂Acol, r), g)
-    end
-    #TODO Supply ∂²A here so general β also gets a Newton candidate. Nested AD over the EPG recurrence would work but a hand-written α-derivative would be far cheaper.
-    return -2 * g, T(NaN)
+    return -2 * g, 2 * (dot(∂Ax, ∂Ax) - dot(r, ∂²Ax) - dot(qₚ, qₚ))
 end
 
 # Polish evaluation: build the basis A(α), solve NNLS warm-started from the search's final active set, and return the true loss ‖A(α)x − b‖². That active set is the support at the last grid node the search solved, not at its continuous proposal.
@@ -560,7 +541,8 @@ function polish_loss_grad!(work::FlipAngleOptimizationWorkspace{T}, α₀::T) wh
     # The solve left r = b − A_P x_P current, so the support is already known; scanning all n columns for positivity would rediscover it.
     (; nnls_work) = work.α_polish_work.prob
     x, r = NNLS.solution(nnls_work), NNLS.residual(nnls_work)
-    g₀, f″₀ = polish_grad_hess(work, work.decay_basis_work, α₀, x, r, NNLS.components(nnls_work))
+    g₀, f″₀ = polish_grad_hess(work, something(work.decay_basis_work, work.decay_basis_set), α₀, x, r, NNLS.components(nnls_work))
+
     return f₀, g₀, f″₀
 end
 

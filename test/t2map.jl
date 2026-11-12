@@ -96,7 +96,7 @@ function test_alpha_polish_guard()
     @test wp.decay_basis ≈ DECAES.epg_decay_basis(DECAES.restructure(DECAES.default_epg_parameters(o), (; α = α̂)), DECAES.T2_component_times(o))
 end
 
-# At RefConAngle ≠ 180 the cosine series does not apply, so the polish builds A(α) by the EPG recurrence and takes derivative columns from the AD Jacobian on the support only.
+# At RefConAngle ≠ 180 the cosine series does not apply, so the polish builds A(α) by the EPG recurrence and takes derivative columns from its analytic α-tangents on the support only.
 # That backend is a direct evaluation of the same model, so it must agree with central differences of the true loss and satisfy the same certificate.
 function test_alpha_polish_general_refcon()
     for β in (120.0, 150.0, 175.0)
@@ -108,7 +108,7 @@ function test_alpha_polish_general_refcon()
             return sum(abs2, A * DECAES.lsqnonneg(A, b) - b)
         end
 
-        # Differencing only, so the tolerance measures the AD gradient rather than the step size
+        # Differencing only, so the tolerance measures the analytic gradient rather than the step size
         o_D64 = DECAES.mock_t2map_opts(Double64; MatrixSize = (1, 1, 1), nTE = 48, nT2 = 40, nRefAngles = 16, nRefAnglesMin = 5, RefConAngle = β, Silent = true)
         θ_D64, T2s_D64 = DECAES.default_epg_parameters(o_D64), DECAES.T2_component_times(o_D64)
         function loss_true64(α, b)
@@ -134,13 +134,20 @@ function test_alpha_polish_general_refcon()
             @test π/2 < α̂ <= π
             @test loss_true(α̂, b) <= (1 + 1e-10) * best_seen_loss(w) + 1e-14
 
-            # The AD envelope derivative matches central differences of the true loss, evaluated away from α̂ where f′ does not vanish
+            # The envelope derivatives match central differences of the true loss and of its exact gradient, evaluated away from α̂ where f′ does not vanish
             α = α̂ + deg2rad(rand((-1, 1)) * rand(1:5))
             if deg2rad(100) < α < deg2rad(175)
-                f, g, _ = DECAES.polish_loss_grad!(w, α)
-                @test f ≈ loss_true(α, b) rtol = 1e-6
+                f, g, f″ = DECAES.polish_loss_grad!(w, α)
+                @test f ≈ loss_true(α, b) rtol = 1e-13
                 h, b_D64 = Double64(1e-12), Double64.(b)
-                @test g ≈ (loss_true64(α + h, b_D64) - loss_true64(α - h, b_D64)) / 2h rtol = 1e-8
+                @test g ≈ (loss_true64(α + h, b_D64) - loss_true64(α - h, b_D64)) / 2h rtol = 1e-10
+
+                w⁺, w⁻ = (DECAES.FlipAngleOptimizationWorkspace(o_D64, zeros(Double64, o.nTE, o.nT2), copy(b_D64)) for _ in 1:2)
+                DECAES.optimize_flip_angle!(w⁺, o_D64)
+                DECAES.optimize_flip_angle!(w⁻, o_D64)
+                _, g⁺ = DECAES.polish_loss_grad!(w⁺, Double64(α) + h)
+                _, g⁻ = DECAES.polish_loss_grad!(w⁻, Double64(α) - h)
+                @test f″ ≈ (g⁺ - g⁻) / 2h rtol = 1e-9
             end
         end
     end
@@ -210,8 +217,12 @@ end
 
         @test w.decay_basis ≈ DECAES.epg_decay_basis(DECAES.restructure(θ, (; α = w.α[])), T2t)
 
+        # Two backward-stable solutions agree only up to the least-squares condition number κ + κ²‖r‖/(‖A_P‖‖x‖)
         x = DECAES.lsqnonneg(w.decay_basis, b)
-        @test DECAES.NNLS.solution(nnls_work) ≈ x rtol = 1e-10
+        AP = w.decay_basis[:, findall(>(0), x)]
+        κ_AP = cond(AP)
+        κ_LS = κ_AP + κ_AP^2 * norm(b - w.decay_basis * x) / (opnorm(AP) * norm(x))
+        @test norm(DECAES.NNLS.solution(nnls_work) - x) <= 10 * eps() * (κ_LS * norm(x))
         @test DECAES.NNLS.residual(nnls_work) ≈ b - w.decay_basis * x rtol = 1e-10 atol = 1e-14
         @test DECAES.NNLS.residualnorm(nnls_work) ≈ norm(b - w.decay_basis * x) rtol = 1e-10
         @test sort(DECAES.NNLS.components(nnls_work)) == findall(>(0), x)
