@@ -577,8 +577,8 @@ function save_outputs(file_info, opts, header, suffix, description, name::String
 end
 
 function save_nifti_outputs(basefile, maps, header)
-    for name in sort!(collect(keys(maps)))
-        save_nifti("$basefile.$name.nii.gz", maps[name], header)
+    @sync for (name, data) in maps
+        Threads.@spawn save_nifti("$basefile.$name.nii.gz", data, header)
     end
     return nothing
 end
@@ -588,7 +588,30 @@ function save_nifti(savefile, data, header)
     inherit = header !== nothing && ndims(data) >= 3 && ntuple(i -> size(data, i), 3) == ntuple(i -> Int(header.dim[i+1]), 3)
     vol = inherit ? NIfTI.NIVolume(deepcopy(header), data) : NIfTI.NIVolume(data)
     reset_nifti_output_header!(vol.header)
-    return NIfTI.niwrite(savefile, vol)
+    return write_nifti(savefile, vol)
+end
+
+# `NIfTI.niwrite`, with gzip compression on all threads
+function write_nifti(path, vol::NIfTI.NIVolume; gzip_chunk_size = 1024^2)
+    if !endswith(path, ".gz")
+        return NIfTI.niwrite(path, vol)
+    end
+
+    io = IOBuffer(; sizehint = sizeof(vol.raw) + 1024)
+    write(io, vol) # write uncompressed volume to `io`
+
+    bytes = take!(io)
+    chunks = collect(Iterators.partition(eachindex(bytes), gzip_chunk_size))
+    members = Vector{Vector{UInt8}}(undef, length(chunks))
+    Threads.@threads for i in eachindex(chunks, members)
+        members[i] = transcode(GzipCompressor, bytes[chunks[i]]) # compress in parallel (see: GZIP file format RFC 1952, §2.2)
+    end
+
+    open(path, "w") do io
+        return foreach(member -> write(io, member), members) # write out compressed chunks serially
+    end
+
+    return nothing
 end
 
 function nifti_output_header(inputfile)
@@ -626,6 +649,8 @@ An array with fewer than `ndims` dimensions is reshaped with additional trailing
 an array with more than `ndims` dimensions is truncated to the first volume along its trailing dimensions.
 """
 function load_image(filename, ::Val{N}) where {N}
+    scl_slope, scl_inter = 0.0, 0.0 # optional rescaling factors; zero slope indicates no rescaling
+
     if maybe_get_suffix(filename) == ".mat"
         # Load first `N`-dimensional array which is found, or throw an error if none are found
         data = MAT.matread(filename)
@@ -640,14 +665,9 @@ function load_image(filename, ::Val{N}) where {N}
         data = data[array_keys[1]]
 
     elseif maybe_get_suffix(filename) ∈ (".nii", ".nii.gz")
-        # Check slope field; if scl_slope == 0, data is not scaled and raw data should be returned:
-        #   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
         nii = NIfTI.niread(filename)
-        scl_slope, scl_inter = nii.header.scl_slope, nii.header.scl_inter
-        if scl_slope == 0
-            scl_slope, scl_inter = one(scl_slope), zero(scl_inter)
-        end
-        data = nii.raw .* scl_slope .+ scl_inter
+        data = nii.raw
+        scl_slope, scl_inter = Float64(nii.header.scl_slope), Float64(nii.header.scl_inter)
 
     elseif maybe_get_suffix(filename) ∈ (".par", ".xml", ".rec")
         rec = ParXRec.load(filename)
@@ -662,11 +682,17 @@ function load_image(filename, ::Val{N}) where {N}
 
     # Use a consistent floating-point type throughout the pipeline
     sz = ntuple(Base.Fix1(size, data), N)
-    image = copyto!(Array{Float64, N}(undef, sz), data)
+    image = Array{Float64, N}(undef, sz)
+    rescale!(image, data, (scl_slope, scl_inter))
 
     return image
 end
 load_image(filename; ndims::Int = 4) = load_image(filename, Val(ndims))
+
+# If scl_slope == 0, data is not scaled and raw data should be returned:
+#   See e.g. https://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/scl_slopeinter.html
+rescale!(image, data, (scl_slope, scl_inter)::NTuple{2, Float64}) = tmap!(Base.Fix2(rescale, (scl_slope, scl_inter)), image, data)
+@inline rescale(x, (scl_slope, scl_inter)::NTuple{2, Float64}) = scl_slope == 0 ? Float64(x) : x * scl_slope + scl_inter
 
 function ensure_ndims(filename, data::AbstractArray{T, D}, ::Val{N}) where {T, D, N}
     if D < N
@@ -691,9 +717,16 @@ function try_load_B1mapfile!(maps::T2Maps, B1mapfile::String)
     return nothing
 end
 
+function apply_mask!(image::Array{<:Any, 4}, mask::AbstractArray{<:Any, 3})
+    Threads.@threads for j in axes(image, 4)
+        @views image[:, :, :, j] .*= mask
+    end
+    return image
+end
+
 function try_apply_maskfile!(image::Array{<:Any, 4}, maskfile::String)
     try
-        image .*= load_image(maskfile, Val(3))
+        apply_mask!(image, load_image(maskfile, Val(3)))
     catch e
         @warn "Error while loading mask file: $maskfile"
         @warn sprint(showerror, e, catch_backtrace())
@@ -703,7 +736,7 @@ end
 
 function try_apply_bet!(image::Array{<:Any, 4}, betpath::String, betargs::Vector{String})
     try
-        image .*= make_bet_mask(image, betpath, betargs)
+        apply_mask!(image, make_bet_mask(image, betpath, betargs))
     catch e
         @warn "Error while making mask using BET"
         @warn sprint(showerror, e, catch_backtrace())

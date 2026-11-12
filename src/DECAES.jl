@@ -13,6 +13,7 @@ using Statistics: Statistics, std
 
 # External libraries
 using ArgParse: ArgParse, ArgParseSettings, add_arg_group!, add_arg_table!, parse_args
+using CodecZlib: CodecZlib, GzipCompressor
 using DocStringExtensions: DocStringExtensions, @doc, FIELDS, SIGNATURES, TYPEDFIELDS, TYPEDSIGNATURES
 using ForwardDiff: ForwardDiff, DiffResults, Dual
 using LoggingExtras: LoggingExtras, FileLogger, LevelOverrideLogger, TeeLogger, TransformerLogger

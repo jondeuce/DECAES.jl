@@ -403,4 +403,34 @@ end
     @test_throws Exception DECAES.verify_cli_args!(Dict{Symbol, Any}(:T2map => true, :T2part => false, :OutputFormat => "hdf5"))
 end
 
+@testset "NIfTI I/O" begin
+    gunzip(file) = transcode(DECAES.CodecZlib.GzipDecompressor, read(file))
+
+    mktempdir() do path
+        # Test volumes smaller than one gzip member, and volumes spanning several members
+        for vol in (
+            DECAES.NIfTI.NIVolume(randn(Float32, 3, 4, 5); voxel_size = (1.5f0, 2.5f0, 3.5f0), intent_name = "small"),
+            DECAES.NIfTI.NIVolume(round.(randn(64, 64, 9, 11); digits = 2); voxel_size = (1.5f0, 2.5f0, 3.5f0), time_step = 1200.0f0),
+        )
+            reffile, parfile = joinpath.(path, ("ref.nii.gz", "par.nii.gz"))
+            DECAES.NIfTI.niwrite(reffile, vol)
+            DECAES.write_nifti(parfile, vol)
+            @test isequal(gunzip(parfile), gunzip(reffile))
+            @test isequal(DECAES.NIfTI.niread(parfile).raw, vol.raw)
+        end
+
+        # Loaded images are exactly `scl_slope * x + scl_inter` computed in Float64, with `scl_slope == 0` denoting unscaled data
+        for T in (UInt8, Int16, Float32, Float64), (scl_slope, scl_inter) in ((0.0f0, 5.0f0), (1.0f0, 0.0f0), (2.5f0, -3.25f0), (0.1f0, 0.7f0))
+            raw = T <: AbstractFloat ? randn(T, 5, 4, 3, 7) : rand(T, 5, 4, 3, 7)
+            T <: AbstractFloat && (raw[1:5] .= (NaN, Inf, -Inf, 0.0, -0.0))
+            niifile = joinpath(path, "scaled.nii.gz")
+            DECAES.NIfTI.niwrite(niifile, DECAES.NIfTI.NIVolume(raw; scl_slope, scl_inter))
+            ref = scl_slope == 0 ? Float64.(raw) : Float64.(raw) .* Float64(scl_slope) .+ Float64(scl_inter)
+            image = DECAES.load_image(niifile)
+            @test image isa Array{Float64, 4}
+            @test isequal(image, ref) # distinguishes signed zeros
+        end
+    end
+end
+
 nothing
